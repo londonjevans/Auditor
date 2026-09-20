@@ -1,0 +1,682 @@
+{
+  "$comment": "Runtime validation retains every selected source/class pair, candidate, unsupported attempt and exact compiler/source hash. This artifact is not execution authority.",
+  "$defs": {
+    "CompilerSourceBuildBinding": {
+      "additionalProperties": false,
+      "description": "A transformed source's exact compiler build and source-unit identity.",
+      "properties": {
+        "build_info_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Build Info Sha256",
+          "type": "string"
+        },
+        "source_id": {
+          "minimum": 0,
+          "title": "Source Id",
+          "type": "integer"
+        },
+        "transformation": {
+          "$ref": "#/$defs/CompilerSourceTransformation"
+        }
+      },
+      "required": [
+        "build_info_sha256",
+        "source_id",
+        "transformation"
+      ],
+      "title": "CompilerSourceBuildBinding",
+      "type": "object"
+    },
+    "CompilerSourceTransformation": {
+      "additionalProperties": false,
+      "description": "Hash-bound description; the complete original/compiler bytes must reproduce it.",
+      "properties": {
+        "algorithm": {
+          "const": "CRLF_TO_LF_V1",
+          "default": "CRLF_TO_LF_V1",
+          "title": "Algorithm",
+          "type": "string"
+        },
+        "boundary_map_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Boundary Map Sha256",
+          "type": "string"
+        },
+        "compiler_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Compiler Sha256",
+          "type": "string"
+        },
+        "compiler_size_bytes": {
+          "maximum": 100000000,
+          "minimum": 0,
+          "title": "Compiler Size Bytes",
+          "type": "integer"
+        },
+        "original_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Original Sha256",
+          "type": "string"
+        },
+        "original_size_bytes": {
+          "exclusiveMinimum": 0,
+          "maximum": 100000000,
+          "title": "Original Size Bytes",
+          "type": "integer"
+        },
+        "removed_crlf_count": {
+          "exclusiveMinimum": 0,
+          "maximum": 1000000,
+          "title": "Removed Crlf Count",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "original_sha256",
+        "compiler_sha256",
+        "original_size_bytes",
+        "compiler_size_bytes",
+        "removed_crlf_count",
+        "boundary_map_sha256"
+      ],
+      "title": "CompilerSourceTransformation",
+      "type": "object"
+    },
+    "DiscoveredPortfolioMutation": {
+      "additionalProperties": false,
+      "properties": {
+        "ast_node_ids": {
+          "items": {
+            "type": "integer"
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "title": "Ast Node Ids",
+          "type": "array"
+        },
+        "build_info_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Build Info Sha256",
+          "type": "string"
+        },
+        "declaration_ast_ids": {
+          "items": {
+            "type": "integer"
+          },
+          "maxItems": 100,
+          "title": "Declaration Ast Ids",
+          "type": "array"
+        },
+        "end_byte_exclusive": {
+          "exclusiveMinimum": 0,
+          "title": "End Byte Exclusive",
+          "type": "integer"
+        },
+        "source_id": {
+          "minimum": 0,
+          "title": "Source Id",
+          "type": "integer"
+        },
+        "specification": {
+          "$ref": "#/$defs/PortfolioSourceMutationSpec"
+        },
+        "start_byte": {
+          "minimum": 0,
+          "title": "Start Byte",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "specification",
+        "build_info_sha256",
+        "source_id",
+        "ast_node_ids",
+        "declaration_ast_ids",
+        "start_byte",
+        "end_byte_exclusive"
+      ],
+      "title": "DiscoveredPortfolioMutation",
+      "type": "object"
+    },
+    "FoundryInventorySourceBinding": {
+      "additionalProperties": false,
+      "description": "Original-source identity and explicit per-build nonidentity compiler mappings.",
+      "properties": {
+        "compiler_source_bindings": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/CompilerSourceBuildBinding"
+          },
+          "maxItems": 1000,
+          "title": "Compiler Source Bindings",
+          "type": "array"
+        },
+        "path": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "size_bytes": {
+          "minimum": 0,
+          "title": "Size Bytes",
+          "type": "integer"
+        },
+        "source_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "source_sha256",
+        "size_bytes"
+      ],
+      "title": "FoundryInventorySourceBinding",
+      "type": "object"
+    },
+    "PortfolioDiscoveryLimits": {
+      "additionalProperties": false,
+      "properties": {
+        "maximum_candidates": {
+          "default": 10000,
+          "maximum": 100000,
+          "minimum": 1,
+          "title": "Maximum Candidates",
+          "type": "integer"
+        },
+        "maximum_unsupported": {
+          "default": 10000,
+          "maximum": 100000,
+          "minimum": 1,
+          "title": "Maximum Unsupported",
+          "type": "integer"
+        }
+      },
+      "title": "PortfolioDiscoveryLimits",
+      "type": "object"
+    },
+    "PortfolioSourceClassCoverage": {
+      "additionalProperties": false,
+      "properties": {
+        "candidate_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Candidate Ids",
+          "type": "array"
+        },
+        "kind": {
+          "$ref": "#/$defs/SecurityMutationClass"
+        },
+        "limitation": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Limitation"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "unsupported_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Unsupported Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "path",
+        "kind",
+        "candidate_ids",
+        "unsupported_ids"
+      ],
+      "title": "PortfolioSourceClassCoverage",
+      "type": "object"
+    },
+    "PortfolioSourceMutationSpec": {
+      "additionalProperties": false,
+      "description": "One exact source span; arbitrary replacement source is never accepted.",
+      "properties": {
+        "expected_file_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Expected File Sha256",
+          "type": "string"
+        },
+        "expected_lines": {
+          "items": {
+            "maxLength": 20000,
+            "type": "string"
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "title": "Expected Lines",
+          "type": "array"
+        },
+        "id": {
+          "pattern": "^mut-[a-z0-9][a-z0-9-]{0,75}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/SecurityMutationClass"
+        },
+        "line": {
+          "maximum": 10000000,
+          "minimum": 1,
+          "title": "Line",
+          "type": "integer"
+        },
+        "original_token": {
+          "anyOf": [
+            {
+              "maxLength": 80,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Original Token"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "replacement_token": {
+          "anyOf": [
+            {
+              "maxLength": 80,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Replacement Token"
+        },
+        "schema_version": {
+          "const": "2.0",
+          "default": "2.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "path",
+        "line",
+        "expected_file_sha256",
+        "expected_lines"
+      ],
+      "title": "PortfolioSourceMutationSpec",
+      "type": "object"
+    },
+    "SecurityMutationClass": {
+      "description": "The eleven explicit requirements, distinct from legacy generic operators.",
+      "enum": [
+        "removed_authorization",
+        "removed_nonce_update",
+        "changed_rounding_direction",
+        "removed_stale_price_validation",
+        "external_call_before_state_update",
+        "removed_initializer_protection",
+        "weakened_timelock",
+        "changed_storage_slot",
+        "removed_pause_enforcement",
+        "unchecked_return_handling",
+        "incorrect_decimal_scale"
+      ],
+      "title": "SecurityMutationClass",
+      "type": "string"
+    },
+    "UnsupportedPortfolioMutation": {
+      "additionalProperties": false,
+      "properties": {
+        "ast_node_id": {
+          "minimum": 0,
+          "title": "Ast Node Id",
+          "type": "integer"
+        },
+        "build_info_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Build Info Sha256",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/SecurityMutationClass"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "reason": {
+          "enum": [
+            "SEMANTIC_CONTEXT_NOT_ESTABLISHED",
+            "UNSUPPORTED_SOURCE_SHAPE"
+          ],
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "path",
+        "build_info_sha256",
+        "ast_node_id",
+        "reason"
+      ],
+      "title": "UnsupportedPortfolioMutation",
+      "type": "object"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/portfolio_mutation_discovery.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A complete selected-source/class denominator, never a qualification artifact.",
+  "properties": {
+    "artifact_kind": {
+      "const": "portfolio_mutation_discovery",
+      "default": "portfolio_mutation_discovery",
+      "title": "Artifact Kind",
+      "type": "string"
+    },
+    "build_info_sha256s": {
+      "items": {
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "maxItems": 1000,
+      "minItems": 1,
+      "title": "Build Info Sha256S",
+      "type": "array"
+    },
+    "candidates": {
+      "items": {
+        "$ref": "#/$defs/DiscoveredPortfolioMutation"
+      },
+      "maxItems": 100000,
+      "title": "Candidates",
+      "type": "array"
+    },
+    "compiler_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Compiler Sha256",
+      "type": "string"
+    },
+    "compiler_version": {
+      "maxLength": 1000,
+      "minLength": 1,
+      "title": "Compiler Version",
+      "type": "string"
+    },
+    "discovery_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Discovery Sha256",
+      "type": "string"
+    },
+    "execution_validated": {
+      "const": false,
+      "default": false,
+      "title": "Execution Validated",
+      "type": "boolean"
+    },
+    "limitations": {
+      "const": [
+        "Supplied compiler/source consistency is not independent compiler-execution custody.",
+        "Structural candidates are not proven property applicability or exhaustive semantic coverage.",
+        "Unsupported syntax and absent classes remain gaps; no mutation execution is credited."
+      ],
+      "default": [
+        "Supplied compiler/source consistency is not independent compiler-execution custody.",
+        "Structural candidates are not proven property applicability or exhaustive semantic coverage.",
+        "Unsupported syntax and absent classes remain gaps; no mutation execution is credited."
+      ],
+      "items": {
+        "type": "string"
+      },
+      "title": "Limitations",
+      "type": "array"
+    },
+    "limits": {
+      "$ref": "#/$defs/PortfolioDiscoveryLimits"
+    },
+    "project_root": {
+      "title": "Project Root",
+      "type": "string"
+    },
+    "property_applicability_established": {
+      "const": false,
+      "default": false,
+      "title": "Property Applicability Established",
+      "type": "boolean"
+    },
+    "qualification_eligible": {
+      "const": false,
+      "default": false,
+      "title": "Qualification Eligible",
+      "type": "boolean"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_classes": {
+      "allOf": [
+        {
+          "contains": {
+            "properties": {
+              "kind": {
+                "const": "changed_rounding_direction"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "kind": {
+                "const": "changed_storage_slot"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "kind": {
+                "const": "external_call_before_state_update"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "kind": {
+                "const": "incorrect_decimal_scale"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "kind": {
+                "const": "removed_authorization"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "kind": {
+                "const": "removed_initializer_protection"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "kind": {
+                "const": "removed_nonce_update"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "kind": {
+                "const": "removed_pause_enforcement"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "kind": {
+                "const": "removed_stale_price_validation"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "kind": {
+                "const": "unchecked_return_handling"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "kind": {
+                "const": "weakened_timelock"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "minContains": 1
+        }
+      ],
+      "items": {
+        "$ref": "#/$defs/PortfolioSourceClassCoverage"
+      },
+      "maxItems": 1100000,
+      "minItems": 11,
+      "title": "Source Classes",
+      "type": "array"
+    },
+    "sources": {
+      "items": {
+        "$ref": "#/$defs/FoundryInventorySourceBinding"
+      },
+      "maxItems": 100000,
+      "minItems": 1,
+      "title": "Sources",
+      "type": "array"
+    },
+    "target_paths": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 100000,
+      "minItems": 1,
+      "title": "Target Paths",
+      "type": "array"
+    },
+    "unsupported": {
+      "items": {
+        "$ref": "#/$defs/UnsupportedPortfolioMutation"
+      },
+      "maxItems": 100000,
+      "title": "Unsupported",
+      "type": "array"
+    }
+  },
+  "required": [
+    "project_root",
+    "compiler_version",
+    "compiler_sha256",
+    "build_info_sha256s",
+    "sources",
+    "target_paths",
+    "candidates",
+    "unsupported",
+    "source_classes",
+    "limits",
+    "discovery_sha256"
+  ],
+  "title": "PortfolioMutationDiscovery",
+  "type": "object"
+}

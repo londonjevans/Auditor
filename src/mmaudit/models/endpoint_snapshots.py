@@ -56,8 +56,8 @@ from mmaudit.models.route_constraints import (
     RoutePredicateRequirementError,
     evaluate_route_predicates,
     normalize_exact_route_pricing,
-    project_provider_price_cap,
     project_route_emitted_request_parameters,
+    project_route_profile_provider_caps,
     require_route_predicates,
 )
 
@@ -1025,13 +1025,10 @@ def _evaluate_route_predicate_evidence(
         price_cap_failure = "pricing schedule unavailable"
     else:
         try:
-            configured_cap = project_provider_price_cap(
+            configured_cap = project_route_profile_provider_caps(
+                context.route_predicate_profile,
                 exact_pricing,
                 schedule=pricing_schedule,
-                algorithm=context.route_predicate_profile.price_cap_algorithm,
-                price_component_unit_envelopes=(
-                    context.route_predicate_profile.price_component_unit_envelopes or ()
-                ),
             )
         except RouteConstraintError as exc:
             configured_cap = None
@@ -1140,11 +1137,10 @@ def _validate_embedded_route_predicate_evidence(
         expected_cap = None
     else:
         try:
-            expected_cap = project_provider_price_cap(
+            expected_cap = project_route_profile_provider_caps(
+                profile,
                 exact_pricing,
                 schedule=pricing_schedule,
-                algorithm=profile.price_cap_algorithm,
-                price_component_unit_envelopes=(profile.price_component_unit_envelopes or ()),
             )
         except RouteConstraintError as exc:
             raise ValueError(

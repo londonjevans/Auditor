@@ -102,7 +102,7 @@ def test_runtime_and_public_schema_agree_on_conclusive_reference_requirement(ver
 
 @pytest.mark.parametrize(
     "identity",
-    ["file-0000:01", "file-0065:01", "file-9999:01", "file-0001:00", "file-0001:17", "file-01:01"],
+    ["file-0000:01", "file-0257:01", "file-9999:01", "file-0001:00", "file-0001:17", "file-01:01"],
 )
 def test_manifest_response_rejects_wrong_or_out_of_bound_claim_namespace(identity):
     response = manifest_judgment_response()
@@ -144,7 +144,9 @@ def test_legacy_candidates_and_responses_remain_separate_exact_contracts():
         )
 
 
-@pytest.mark.parametrize("identity", ["file-0001:01", "file-0064:16"])
+@pytest.mark.parametrize(
+    "identity", ["file-0001:01", "file-0064:16", "file-0065:01", "file-0256:16"]
+)
 def test_manifest_response_accepts_the_exact_first_and_last_bounded_claim_ids(identity):
     response = manifest_judgment_response()
     response["decisions"][0]["claim_id"] = identity
@@ -165,7 +167,7 @@ def test_whole_run_deadline_is_frozen_exact_and_bounded(value):
     [
         ("run_id", ""),
         ("candidate_sha256", "not-a-hash"),
-        ("shard_id", "file-0065"),
+        ("shard_id", "file-0257"),
         ("shard_id", True),
     ],
 )

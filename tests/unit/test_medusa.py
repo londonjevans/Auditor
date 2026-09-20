@@ -73,6 +73,33 @@ def test_medusa_translation_reuses_shared_property_and_compiles(
     assert not (root / "out").exists()
 
 
+def test_medusa_selects_every_generated_boolean_property_not_only_assertions(
+    tmp_path: Path,
+    config_factory,
+) -> None:
+    root = tmp_path / "repo"
+    shutil.copytree(FIXTURE, root)
+    _, index, _, corpus = _inputs(root, config_factory())
+    translation = translate_medusa_corpus(corpus, index, timeout_seconds=12)
+    testing = json.loads(translation.configuration)["fuzzing"]["testing"]
+
+    assert testing["propertyTesting"] == {"enabled": True, "testPrefixes": ["echidna_"]}
+    prefixes = tuple(testing["propertyTesting"]["testPrefixes"])
+    functions = {
+        line.split("function ", 1)[1].split("(", 1)[0]
+        for line in translation.source.splitlines()
+        if "function " in line
+    }
+    selected = {name for name in functions if name.startswith(prefixes)}
+    assert selected == set(translation.property_map)
+    assert selected
+    assert all(
+        f"function {name}() public view returns (bool)" in translation.source for name in selected
+    )
+    assert testing["testAllContracts"] is False
+    assert testing["stopOnNoTests"] is True
+
+
 def test_mocked_medusa_run_enforces_pins_and_normalizes_independent_outcome(
     tmp_path: Path,
     config_factory,

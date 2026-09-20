@@ -1,0 +1,182 @@
+{
+  "$defs": {
+    "ManifestFileBinding": {
+      "additionalProperties": false,
+      "description": "Hash and size for one normalized source or run-artifact path.",
+      "properties": {
+        "path": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "size": {
+          "minimum": 0,
+          "title": "Size",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "path",
+        "sha256",
+        "size"
+      ],
+      "title": "ManifestFileBinding",
+      "type": "object"
+    },
+    "PolicyProposalStatus": {
+      "enum": [
+        "PROPOSED_NOT_ADOPTED",
+        "NATIVE_POLICY_DERIVATION_REFUSED"
+      ],
+      "type": "string"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/registered_calibration_measurement.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Exact completion data; a self-hash is not authentication or policy adoption.",
+  "properties": {
+    "completed_event_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Completed Event Sha256",
+      "type": "string"
+    },
+    "external_population_seal_required": {
+      "const": true,
+      "default": true,
+      "title": "External Population Seal Required",
+      "type": "boolean"
+    },
+    "final_ledger_snapshot_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Final Ledger Snapshot Sha256",
+      "type": "string"
+    },
+    "ledger_identity_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Ledger Identity Sha256",
+      "type": "string"
+    },
+    "measurement_file": {
+      "$ref": "#/$defs/ManifestFileBinding"
+    },
+    "measurement_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Measurement Sha256",
+      "type": "string"
+    },
+    "model_qualification_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Model Qualification Authorized",
+      "type": "boolean"
+    },
+    "policy_adoption_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Policy Adoption Authorized",
+      "type": "boolean"
+    },
+    "policy_file": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ManifestFileBinding"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "policy_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Policy Sha256"
+    },
+    "proposal_status": {
+      "$ref": "#/$defs/PolicyProposalStatus"
+    },
+    "provider_call_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Provider Call Authorized",
+      "type": "boolean"
+    },
+    "receipt_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Receipt Sha256",
+      "type": "string"
+    },
+    "registration_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Registration Sha256",
+      "type": "string"
+    },
+    "release_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Release Authorized",
+      "type": "boolean"
+    },
+    "retained_event_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Retained Event Sha256",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "selected_model_ids": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 64,
+      "minItems": 1,
+      "title": "Selected Model Ids",
+      "type": "array"
+    },
+    "selection_plan_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Selection Plan Sha256",
+      "type": "string"
+    },
+    "serialized_authority": {
+      "const": false,
+      "default": false,
+      "title": "Serialized Authority",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "registration_sha256",
+    "retained_event_sha256",
+    "completed_event_sha256",
+    "selection_plan_sha256",
+    "selected_model_ids",
+    "ledger_identity_sha256",
+    "final_ledger_snapshot_sha256",
+    "measurement_file",
+    "measurement_sha256",
+    "policy_file",
+    "policy_sha256",
+    "proposal_status",
+    "receipt_sha256"
+  ],
+  "title": "RegisteredCalibrationMeasurementReceipt",
+  "type": "object"
+}

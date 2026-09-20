@@ -1,0 +1,9 @@
+[profile.default]
+src = "src"
+test = "test"
+solc_version = "0.8.30"
+auto_detect_solc = false
+offline = true
+ffi = false
+fs_permissions = []
+chain_id = 31337

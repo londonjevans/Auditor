@@ -15,9 +15,16 @@ from mmaudit.benchmark.development_corpus import (
     _ratio,
 )
 from mmaudit.models.development_audit import _AuditArtifact
-from mmaudit.models.development_corpus import DevelopmentCorpusShardObservation
+from mmaudit.models.development_corpus import (
+    DEVELOPMENT_CORPUS_SHARD_PATTERN,
+    MAX_DEVELOPMENT_CORPUS_CLAIMS,
+    MAX_DEVELOPMENT_CORPUS_FILES,
+    DevelopmentCorpusShardObservation,
+)
 from mmaudit.models.development_corpus_resume import (
+    MAX_DEVELOPMENT_CORPUS_RESUME_ACCOUNTED_REQUESTS,
     MAX_DEVELOPMENT_CORPUS_RESUME_BYTES,
+    MAX_DEVELOPMENT_CORPUS_RESUME_REQUESTS,
     DevelopmentCorpusResumeHistory,
     DevelopmentCorpusResumeSummary,
 )
@@ -30,7 +37,7 @@ from mmaudit.repository.redaction import detect_secrets
 MAX_DEVELOPMENT_CORPUS_RESUME_SCORE_BYTES = 96_000_000
 _SHA = r"^[0-9a-f]{64}$"
 _REQUEST = r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$"
-_SHARD = r"^file-00(?:0[1-9]|[1-5][0-9]|6[0-4])$"
+_SHARD = DEVELOPMENT_CORPUS_SHARD_PATTERN
 
 
 class DevelopmentCorpusResumeClaimMeasurement(DevelopmentCorpusClaimMeasurement):
@@ -49,7 +56,7 @@ class DevelopmentCorpusResumeRequestMeasurement(_DevelopmentModel):
     shard_id: str = Field(pattern=_SHARD)
     request_id: str = Field(pattern=_REQUEST)
     observation_status: Literal["OBSERVED", "INCOMPLETE", "MISSING"]
-    accounting_index: int | None = Field(ge=0, le=63)
+    accounting_index: int | None = Field(ge=0, le=MAX_DEVELOPMENT_CORPUS_FILES - 1)
     accounting_status: CostEntryStatus | None
     actual_cost_state: Literal["REPORTED", "RELEASED_NO_CHARGE", "UNKNOWN", "MISSING_ACCOUNTING"]
     elapsed_seconds: float | None = Field(ge=0, allow_inf_nan=False)
@@ -208,11 +215,21 @@ class DevelopmentCorpusResumeBenchmarkScore(_AuditArtifact):
     cumulative_quality: DevelopmentCorpusClaimSummary
     cumulative_summary: DevelopmentCorpusResumeSummary
     cumulative_shard_completion: DevelopmentCorpusMeasurementRatio
-    claims: tuple[DevelopmentCorpusResumeClaimMeasurement, ...] = Field(max_length=1024)
-    requests: tuple[DevelopmentCorpusResumeRequestMeasurement, ...] = Field(max_length=576)
-    missing_accounting_request_ids: tuple[str, ...] = Field(max_length=576)
-    unknown_actual_cost_request_ids: tuple[str, ...] = Field(max_length=72)
-    missing_shard_runtime_request_ids: tuple[str, ...] = Field(max_length=576)
+    claims: tuple[DevelopmentCorpusResumeClaimMeasurement, ...] = Field(
+        max_length=MAX_DEVELOPMENT_CORPUS_CLAIMS
+    )
+    requests: tuple[DevelopmentCorpusResumeRequestMeasurement, ...] = Field(
+        max_length=MAX_DEVELOPMENT_CORPUS_RESUME_REQUESTS
+    )
+    missing_accounting_request_ids: tuple[str, ...] = Field(
+        max_length=MAX_DEVELOPMENT_CORPUS_RESUME_REQUESTS
+    )
+    unknown_actual_cost_request_ids: tuple[str, ...] = Field(
+        max_length=MAX_DEVELOPMENT_CORPUS_RESUME_ACCOUNTED_REQUESTS
+    )
+    missing_shard_runtime_request_ids: tuple[str, ...] = Field(
+        max_length=MAX_DEVELOPMENT_CORPUS_RESUME_REQUESTS
+    )
     score_sha256: str = Field(pattern=_SHA)
 
     @model_validator(mode="after")

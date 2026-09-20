@@ -6,6 +6,7 @@ import hashlib
 import math
 import re
 from collections import Counter
+from collections.abc import Iterator
 from dataclasses import dataclass
 
 
@@ -22,7 +23,22 @@ class SecretMatch:
     fingerprint: str
 
 
-_PATTERNS: tuple[tuple[str, re.Pattern[str], str], ...] = (
+_ASSIGNMENT_NAMES = (
+    "apikey",
+    "api_key",
+    "api-key",
+    "accesstoken",
+    "access_token",
+    "access-token",
+    "secret",
+    "password",
+    "passwd",
+)
+
+# Each marker is necessary, never sufficient, for its unchanged regex to match.
+# Keep the marker beside its rule; the lookup below is keyed by the exact regex,
+# not the display kind, so an unknown/replaced pattern always gets a full scan.
+_RULES: tuple[tuple[str, re.Pattern[str], str, tuple[str, ...]], ...] = (
     (
         "private_key",
         re.compile(
@@ -31,18 +47,25 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str], str], ...] = (
             re.DOTALL,
         ),
         "high",
+        ("-----BEGIN ",),
     ),
-    ("openrouter_key", re.compile(r"\bsk-or-v1-[A-Za-z0-9_-]{20,}\b"), "high"),
-    ("github_token", re.compile(r"\bgh(?:p|o|u|s|r)_[A-Za-z0-9]{30,}\b"), "high"),
-    ("gitlab_token", re.compile(r"\bglpat-[A-Za-z0-9_-]{20,}\b"), "high"),
-    ("slack_token", re.compile(r"\bxox(?:b|p|a|r|s)-[A-Za-z0-9-]{20,}\b"), "high"),
-    ("google_api_key", re.compile(r"\bAIza[A-Za-z0-9_-]{30,}\b"), "high"),
-    ("stripe_live_key", re.compile(r"\bsk_live_[A-Za-z0-9]{20,}\b"), "high"),
-    ("aws_access_key", re.compile(r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b"), "high"),
+    (
+        "openrouter_key",
+        re.compile(r"\bsk-or-v1-[A-Za-z0-9_-]{20,}\b"),
+        "high",
+        ("sk-or-v1-",),
+    ),
+    ("github_token", re.compile(r"\bgh(?:p|o|u|s|r)_[A-Za-z0-9]{30,}\b"), "high", ("gh",)),
+    ("gitlab_token", re.compile(r"\bglpat-[A-Za-z0-9_-]{20,}\b"), "high", ("glpat-",)),
+    ("slack_token", re.compile(r"\bxox(?:b|p|a|r|s)-[A-Za-z0-9-]{20,}\b"), "high", ("xox",)),
+    ("google_api_key", re.compile(r"\bAIza[A-Za-z0-9_-]{30,}\b"), "high", ("AIza",)),
+    ("stripe_live_key", re.compile(r"\bsk_live_[A-Za-z0-9]{20,}\b"), "high", ("sk_live_",)),
+    ("aws_access_key", re.compile(r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b"), "high", ("AKIA", "ASIA")),
     (
         "jwt",
         re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{8,}\b"),
         "high",
+        ("eyJ",),
     ),
     (
         "credential_assignment",
@@ -54,6 +77,7 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str], str], ...] = (
             """
         ),
         "conditional",
+        _ASSIGNMENT_NAMES,
     ),
     (
         "credential_assignment_unquoted",
@@ -65,6 +89,7 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str], str], ...] = (
             """
         ),
         "conditional",
+        _ASSIGNMENT_NAMES,
     ),
     (
         "credentialed_service_url",
@@ -74,8 +99,59 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str], str], ...] = (
             re.IGNORECASE,
         ),
         "high",
+        ("postgres", "mysql", "mongodb", "redis"),
     ),
 )
+_PATTERNS: tuple[tuple[str, re.Pattern[str], str], ...] = tuple(
+    (kind, pattern, confidence) for kind, pattern, confidence, _ in _RULES
+)
+_LITERAL_HINTS = {pattern: literals for _, pattern, _, literals in _RULES}
+_ASSIGNMENT_PATTERNS = frozenset(
+    pattern
+    for kind, pattern, _, _ in _RULES
+    if kind in {"credential_assignment", "credential_assignment_unquoted"}
+)
+
+
+def _has_assignment_delimiter(ascii_lowered: str) -> bool:
+    """Check only a necessary ASCII name/whitespace/delimiter prefix, not a value."""
+
+    for name in _ASSIGNMENT_NAMES:
+        start = ascii_lowered.find(name)
+        while start >= 0:
+            end = start + len(name)
+            while end < len(ascii_lowered) and ascii_lowered[end].isspace():
+                end += 1
+            if end < len(ascii_lowered) and ascii_lowered[end] in ":=":
+                return True
+            start = ascii_lowered.find(name, start + 1)
+    return False
+
+
+def _candidate_patterns(text: str) -> Iterator[tuple[str, re.Pattern[str], str]]:
+    """Skip only proven-impossible rules; preserve Unicode and unknown-rule scans."""
+
+    if type(text) is not str:
+        # A str subclass can override containment/lower/isascii, but not the
+        # regex engine's native string observation. Do not trust its shortcuts.
+        yield from _PATTERNS
+        return
+    # Unicode IGNORECASE accepts more than lower(): e.g. dotted/dotless I,
+    # long S and Kelvin sign. Preserve the original regex scan for that input.
+    lowered = text.lower() if text.isascii() else None
+    assignment_possible: bool | None = None
+    for kind, pattern, confidence in _PATTERNS:
+        literals = _LITERAL_HINTS.get(pattern)
+        material = lowered if pattern.flags & re.IGNORECASE else text
+        if literals is not None and material is not None:
+            if pattern in _ASSIGNMENT_PATTERNS:
+                if assignment_possible is None:
+                    assignment_possible = _has_assignment_delimiter(material)
+                if not assignment_possible:
+                    continue
+            elif not any(literal in material for literal in literals):
+                continue
+        yield kind, pattern, confidence
 
 
 def _entropy(value: str) -> float:
@@ -88,7 +164,7 @@ def _entropy(value: str) -> float:
 def detect_secrets(text: str) -> list[SecretMatch]:
     matches: list[SecretMatch] = []
     occupied: list[tuple[int, int]] = []
-    for kind, pattern, confidence in _PATTERNS:
+    for kind, pattern, confidence in _candidate_patterns(text):
         for found in pattern.finditer(text):
             start, end = found.span()
             if any(start < other_end and end > other_start for other_start, other_end in occupied):

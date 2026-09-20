@@ -1,0 +1,92 @@
+{
+  "$defs": {
+    "DevelopmentCorpusTreeDirectory": {
+      "additionalProperties": false,
+      "description": "Exact child-name/type digest; no non-source file contents are read or retained.",
+      "properties": {
+        "entries_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Entries Sha256",
+          "type": "string"
+        },
+        "entry_count": {
+          "maximum": 4096,
+          "minimum": 0,
+          "title": "Entry Count",
+          "type": "integer"
+        },
+        "path": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "entry_count",
+        "entries_sha256"
+      ],
+      "title": "DevelopmentCorpusTreeDirectory",
+      "type": "object"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/development_corpus_tree_evidence.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "An enumeration receipt, never proof of the filesystem from a self-hash alone.",
+  "properties": {
+    "directories": {
+      "items": {
+        "$ref": "#/$defs/DevelopmentCorpusTreeDirectory"
+      },
+      "maxItems": 512,
+      "minItems": 1,
+      "title": "Directories",
+      "type": "array"
+    },
+    "non_source_file_count": {
+      "maximum": 4096,
+      "minimum": 0,
+      "title": "Non Source File Count",
+      "type": "integer"
+    },
+    "policy": {
+      "const": "ALL_RECURSIVE_SOLIDITY_NO_EXCLUSIONS_V1",
+      "default": "ALL_RECURSIVE_SOLIDITY_NO_EXCLUSIONS_V1",
+      "title": "Policy",
+      "type": "string"
+    },
+    "root_replay_required": {
+      "const": true,
+      "default": true,
+      "title": "Root Replay Required",
+      "type": "boolean"
+    },
+    "solidity_file_count": {
+      "exclusiveMinimum": 0,
+      "maximum": 256,
+      "title": "Solidity File Count",
+      "type": "integer"
+    },
+    "source_inventory_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Source Inventory Sha256",
+      "type": "string"
+    },
+    "tree_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Tree Sha256",
+      "type": "string"
+    }
+  },
+  "required": [
+    "source_inventory_sha256",
+    "solidity_file_count",
+    "non_source_file_count",
+    "directories",
+    "tree_sha256"
+  ],
+  "title": "DevelopmentCorpusTreeEvidence",
+  "type": "object"
+}

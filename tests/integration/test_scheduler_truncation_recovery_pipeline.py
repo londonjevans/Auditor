@@ -10,7 +10,7 @@ from typing import Any, cast
 import pytest
 
 import mmaudit.orchestration.pipeline as pipeline_module
-from mmaudit.constants import ExitCode
+from mmaudit.constants import SPECIALIST_INVESTIGATOR_ROLES, ExitCode
 from mmaudit.models.actor_model import ActorModelInputEvidence
 from mmaudit.models.openrouter import OpenRouterPrivacyError
 from mmaudit.models.schemas import (
@@ -39,6 +39,7 @@ def _one_whole_protocol_config(
     *,
     whole_protocol_count: int = 1,
     specialist: bool = False,
+    specialist_role: str = "access_control",
     max_requests_per_agent: int = 4,
 ) -> Any:
     sections: dict[str, Any] = {
@@ -46,11 +47,12 @@ def _one_whole_protocol_config(
         "execution": {"max_requests_per_agent": max_requests_per_agent},
     }
     if specialist:
+        assert specialist_role in SPECIALIST_INVESTIGATOR_ROLES
         sections["profile"] = "deep"
         sections["models"] = {
             "allow_non_independent_models": True,
             "specialists": {
-                "access_control": {
+                specialist_role: {
                     "primary": "bravo/borealis-secure",
                     "fallbacks": [],
                 }

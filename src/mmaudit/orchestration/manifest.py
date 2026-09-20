@@ -160,6 +160,7 @@ from mmaudit.models.token_planning import PromptAllocationCategory, RequestToken
 from mmaudit.models.truncation_closure import (
     TruncationRecoveredRecursiveSurfaceReviewArtifact,
     TruncationRecoveredSurfaceReviewArtifact,
+    TruncationRecoveryBridgeAttemptEvidence,
     TruncationSurfaceOriginKind,
 )
 from mmaudit.models.truncation_recovery_journal import (
@@ -170,9 +171,15 @@ from mmaudit.models.truncation_recovery_journal import (
     SchedulerTruncationRecoveryFamilyRoot,
     SchedulerTruncationRecoveryTerminalStatus,
 )
+from mmaudit.models.truncation_tree import (
+    TruncationRecoveredTreeArtifact,
+    validate_full_tree_promotion,
+)
 from mmaudit.models.usage import (
     has_exact_nonfallback_model_identity,
+    is_accountable_usage_record,
     is_creditable_usage_record,
+    is_recovery_accountable_usage_record,
     is_structurally_accountable_usage_record,
     is_structurally_creditable_usage_record,
     is_structurally_recovery_accountable_usage_record,
@@ -250,7 +257,10 @@ from mmaudit.reporting.status import effective_report_status, report_status_meta
 from mmaudit.repository.ignore import normalize_relative_path
 from mmaudit.repository.secrets import is_sensitive_workspace_name, is_sensitive_workspace_path
 from mmaudit.scanners.base import ScannerWorkspaceTextRecord, observe_scanner_workspace_texts
-from mmaudit.scanners.normalization import validate_real_scanner_normalization_replay
+from mmaudit.scanners.normalization import (
+    validate_real_foundry_normalization_replay,
+    validate_real_scanner_normalization_replay,
+)
 from mmaudit.scanners.projection import project_scanner_finding
 from mmaudit.solidity.formal import compare_dynamic_engine_outcomes
 from mmaudit.solidity.invariants import validate_protocol_profile_replay
@@ -449,6 +459,16 @@ def build_model_review_artifact_inventory(
     )
 
 
+class _FullTreePromotedModelReviewArtifact(StrictModel):
+    """Explicit full-tree comparison envelope; never a serialized live capability."""
+
+    promotion_entry_sha256: str = Field(pattern=_SHA256_PATTERN)
+    recovered_output_artifact_sha256: str = Field(pattern=_SHA256_PATTERN)
+    recursive_tree: Literal[True]
+    full_tree: Literal[True]
+    artifact: TruncationRecoveredTreeArtifact
+
+
 class _DirectPromotedModelReviewArtifact(StrictModel):
     """One direct aggregate artifact paired with its durable promotion identity."""
 
@@ -467,14 +487,16 @@ class _RecursivePromotedModelReviewArtifact(StrictModel):
 
 
 type _PromotedModelReviewArtifact = (
-    _DirectPromotedModelReviewArtifact | _RecursivePromotedModelReviewArtifact
+    _DirectPromotedModelReviewArtifact
+    | _RecursivePromotedModelReviewArtifact
+    | _FullTreePromotedModelReviewArtifact
 )
 
 
 class _PromotedModelReviewArtifactInventory(StrictModel):
     """Canonical bounded envelope for aggregate promoted surface evidence."""
 
-    schema_version: Literal["1.0", "1.1"]
+    schema_version: Literal["1.0", "1.1", "1.2"]
     promotions: tuple[_PromotedModelReviewArtifact, ...] = Field(max_length=10_000)
 
     @model_validator(mode="after")
@@ -495,7 +517,12 @@ class _PromotedModelReviewArtifactInventory(StrictModel):
         contains_recursive = any(
             isinstance(item, _RecursivePromotedModelReviewArtifact) for item in self.promotions
         )
-        if (self.schema_version == "1.1") != contains_recursive:
+        contains_full_tree = any(
+            isinstance(item, _FullTreePromotedModelReviewArtifact) for item in self.promotions
+        )
+        if self.schema_version != (
+            "1.2" if contains_full_tree else "1.1" if contains_recursive else "1.0"
+        ):
             raise ValueError("promoted model-review inventory schema does not match its trees")
         return self
 
@@ -524,7 +551,11 @@ def _promoted_model_review_leaf_usage_inventory(
     rows: list[tuple[str, str, str]] = []
     for promotion in inventory.promotions:
         expected_leaf_count = (
-            3 if isinstance(promotion, _RecursivePromotedModelReviewArtifact) else 2
+            len(promotion.artifact.children)
+            if isinstance(promotion, _FullTreePromotedModelReviewArtifact)
+            else 3
+            if isinstance(promotion, _RecursivePromotedModelReviewArtifact)
+            else 2
         )
         if len(promotion.artifact.children) != expected_leaf_count:
             raise ValueError(
@@ -614,12 +645,16 @@ def _live_promoted_model_review_leaf_usage_inventory(
     for recursive_projection in recursive_projections:
         children = recursive_projection.artifact.children
         usages = recursive_projection.leaf_usage_records
-        if type(usages) is not tuple or len(usages) != 3 or len(children) != 3:
-            raise ValueError("recursive promoted recovery must expose exactly three child leaves")
+        if (
+            type(usages) is not tuple
+            or len(usages) != len(children)
+            or not 3 <= len(children) <= 32
+        ):
+            raise ValueError("recursive promoted recovery must expose every original child leaf")
         excluded_request_ids.update(
             {
                 recursive_projection.parent_usage_record.request_id,
-                recursive_projection.bridge_usage_record.request_id,
+                *(usage.request_id for usage in recursive_projection.bridge_usage_records),
             }
         )
         for usage, child in zip(usages, children, strict=True):
@@ -729,12 +764,22 @@ class _RetainedModelSurfaceReviewAuthority:
 
 
 @dataclass(frozen=True)
+class _RetainedPromotedBridgeAuthority:
+    evidence: TruncationRecoveryBridgeAttemptEvidence
+    context: ContextPackage | None
+    parent_context: ContextPackage | None
+    activation: SchedulerTruncationRecoveryChildActivation
+
+
+@dataclass(frozen=True)
 class _RetainedPromotedModelReviewAuthority:
     """One aggregate promotion joined to its parent and exact promoted leaves."""
 
     promotion: SchedulerTruncationRecoveryFamilyPromotion
     artifact: (
-        TruncationRecoveredSurfaceReviewArtifact | TruncationRecoveredRecursiveSurfaceReviewArtifact
+        TruncationRecoveredSurfaceReviewArtifact
+        | TruncationRecoveredRecursiveSurfaceReviewArtifact
+        | TruncationRecoveredTreeArtifact
     )
     parent_usage: UsageRecord
     requests: tuple[ModelSurfaceReviewRequest, ...]
@@ -751,6 +796,8 @@ class _RetainedPromotedModelReviewAuthority:
     bridge_pre_dispatch_rendered_context_sha256: str | None = None
     bridge_pre_dispatch_provider_prompt_sha256: str | None = None
     bridge_pre_dispatch_response_schema_sha256: str | None = None
+    full_tree_bridges: tuple[_RetainedPromotedBridgeAuthority, ...] = ()
+    child_parent_contexts: tuple[tuple[str, ContextPackage | None], ...] = ()
 
 
 class ManifestFileBinding(StrictModel):
@@ -2436,7 +2483,18 @@ def _validate_scanner_stream_artifact_custody(
                         and run.execution_evidence is ExecutionEvidenceKind.REAL
                         and run.status is ScannerStatus.SUCCESS
                     ):
-                        if run.scanner not in _CURRENT_SCANNER_REPLAY_AUTHORITY:
+                        foundry_suite = (
+                            run.scanner == "foundry_fork"
+                            and run.repository_suite_selection is not None
+                            and bool(run.findings)
+                        )
+                        # This boundary grants finding fingerprints only. Empty
+                        # Foundry streams keep their prior nonauthorizing custody
+                        # behavior; execution/coverage gates are separate.
+                        if (
+                            run.scanner not in _CURRENT_SCANNER_REPLAY_AUTHORITY
+                            and not foundry_suite
+                        ):
                             if run.findings:
                                 raise ValueError(
                                     f"REAL scanner {run.scanner!r} findings have no current "
@@ -2456,11 +2514,19 @@ def _validate_scanner_stream_artifact_custody(
                             parent_descriptor=owner_descriptor,
                             component="workspace",
                         ):
-                            replayed = validate_real_scanner_normalization_replay(
-                                run=run,
-                                repository_root=workspace_path,
-                                retained_stdout=retained_bytes,
-                            )
+                            if foundry_suite:
+                                replayed = validate_real_foundry_normalization_replay(
+                                    run=run,
+                                    repository_root=workspace_path,
+                                    artifact_root=owner_path,
+                                    retained_manifest=retained_bytes,
+                                )
+                            else:
+                                replayed = validate_real_scanner_normalization_replay(
+                                    run=run,
+                                    repository_root=workspace_path,
+                                    retained_stdout=retained_bytes,
+                                )
                             replay_authorized_fingerprints.update(
                                 finding.fingerprint for finding in replayed
                             )
@@ -2968,11 +3034,7 @@ def _retained_model_surface_review_authorities(
     for entry in recovery_entries:
         if not isinstance(entry, SchedulerTruncationRecoveryFamilyPromotion):
             continue
-        leaf_sha256s = (
-            entry.promoted_leaf_result_sha256s
-            if entry.promoted_leaf_result_sha256s is not None
-            else entry.direct_child_result_sha256s
-        )
+        leaf_sha256s = entry.successful_result_sha256s
         if promoted_child_result_sha256s.intersection(leaf_sha256s):
             raise ValueError("scheduler recovery promotions repeat a child result identity")
         promoted_child_result_sha256s.update(leaf_sha256s)
@@ -3278,8 +3340,13 @@ def _retained_promoted_model_review_authorities(
         promotion = promotion_by_sha256[promotion_sha256]
         private_promotion = inventory_by_sha256[promotion_sha256]
         artifact = private_promotion.artifact
-        recursive = promotion.promoted_leaf_result_sha256s is not None
-        if recursive != isinstance(private_promotion, _RecursivePromotedModelReviewArtifact):
+        recursive = promotion.schema_version != "1.0"
+        if (promotion.schema_version == "1.2") != isinstance(
+            private_promotion, _FullTreePromotedModelReviewArtifact
+        ) or recursive != isinstance(
+            private_promotion,
+            (_RecursivePromotedModelReviewArtifact, _FullTreePromotedModelReviewArtifact),
+        ):
             raise ValueError("promoted model-review tree kind differs from scheduler custody")
 
         family = family_by_id.get(promotion.family_id)
@@ -3332,12 +3399,7 @@ def _retained_promoted_model_review_authorities(
         ):
             raise ValueError("promoted model-review parent lacks exact REAL model custody")
 
-        leaf_result_sha256s: tuple[str, ...]
-        if recursive:
-            assert promotion.promoted_leaf_result_sha256s is not None
-            leaf_result_sha256s = promotion.promoted_leaf_result_sha256s
-        else:
-            leaf_result_sha256s = promotion.direct_child_result_sha256s
+        leaf_result_sha256s = promotion.successful_result_sha256s
         leaf_authorities: list[_RetainedModelSurfaceReviewAuthority] = []
         for child, result_sha256 in zip(
             artifact.children,
@@ -3447,6 +3509,63 @@ def _retained_promoted_model_review_authorities(
             ) or not _usage_has_configured_approved_model_custody(config, bridge_usage):
                 raise ValueError("promoted model-review bridge lacks exact REAL model custody")
 
+        full_bridges: list[_RetainedPromotedBridgeAuthority] = []
+        child_parent_contexts: list[tuple[str, ContextPackage | None]] = []
+        if isinstance(artifact, TruncationRecoveredTreeArtifact):
+            full_tree = validate_full_tree_promotion(
+                entries=entries, promotion=promotion, parent_attempt=parent_attempt
+            )
+            context_inventory = contexts_by_request_id or {}
+            child_families = {
+                child.child_task_id: item
+                for item in full_tree.families
+                for child in item.recovery_plan.children
+            }
+            for full_child in full_tree.children:
+                child_parent_contexts.append(
+                    (
+                        full_child.child_logical_request_id,
+                        context_inventory.get(
+                            child_families[
+                                full_child.child_task_id
+                            ].recovery_plan.parent.parent_logical_request_id
+                        ),
+                    )
+                )
+            for bridge, result_hash in zip(
+                artifact.bridges, promotion.bridge_result_sha256s, strict=True
+            ):
+                result = child_result_by_sha256[result_hash]
+                reservation = result.runtime_request_limit_reservation
+                if (
+                    result.runtime_usage_record != bridge.usage_record
+                    or result.runtime_usage_record_sha256 != bridge.usage_record_sha256
+                    or result.runtime_truncated_envelope_evidence != bridge.envelope
+                    or result.truncation_projection != bridge.projection
+                    or result.provider_attempt_evidence_sha256
+                    != bridge.provider_attempt_evidence_sha256
+                    or result.child_plan_sha256 != bridge.child_plan.child_plan_sha256
+                    or result.runtime_activation is None
+                    or reservation is None
+                    or reservation.request_limit_scope != bridge.request_limit_scope
+                    or reservation.request_limit_count_before != bridge.request_limit_count_before
+                    or not _promoted_bridge_usage_is_accountable(
+                        bridge.usage_record,
+                        request_limit_scope=bridge.request_limit_scope,
+                        request_limit_count_before=bridge.request_limit_count_before,
+                        require_certification=require_certification,
+                    )
+                    or not _usage_has_configured_approved_model_custody(config, bridge.usage_record)
+                ):
+                    raise ValueError("full-tree promoted model review lost original bridge custody")
+                full_bridges.append(
+                    _RetainedPromotedBridgeAuthority(
+                        bridge,
+                        context_inventory.get(bridge.usage_record.request_id),
+                        dict(child_parent_contexts)[bridge.usage_record.request_id],
+                        result.runtime_activation,
+                    )
+                )
         parent_task = (snapshot.tasks_by_task_id or {}).get(promotion.parent_task_id)
         parent_activation = (snapshot.activations_by_task_id or {}).get(promotion.parent_task_id)
         retained.append(
@@ -3461,6 +3580,8 @@ def _retained_promoted_model_review_authorities(
                     if contexts_by_request_id is not None
                     else None
                 ),
+                full_tree_bridges=tuple(full_bridges),
+                child_parent_contexts=tuple(child_parent_contexts),
                 bridge_usage=bridge_usage,
                 bridge_context=(
                     contexts_by_request_id.get(bridge_usage.request_id)
@@ -3660,10 +3781,20 @@ def _retained_promoted_model_review_context_failures(
         strict=True,
     ):
         retain_analysis_context(leaf.context, "leaf")
-        if parent_context is not None:
+        immediate_parent_context = (
+            dict(authority.child_parent_contexts).get(child.usage_record.request_id)
+            if isinstance(authority.artifact, TruncationRecoveredTreeArtifact)
+            else parent_context
+        )
+        if (
+            isinstance(authority.artifact, TruncationRecoveredTreeArtifact)
+            and immediate_parent_context is None
+        ):
+            failures.append("full-tree leaf lacks its immediate original parent context")
+        if immediate_parent_context is not None:
             try:
                 expected_leaf_context = build_truncation_recovery_child_context(
-                    parent_context=parent_context,
+                    parent_context=immediate_parent_context,
                     child=child.child_plan,
                 )
             except ValueError:
@@ -3735,6 +3866,55 @@ def _retained_promoted_model_review_context_failures(
             )
     elif authority.bridge_context is not None:
         failures.append("direct promoted model review unexpectedly retained a bridge context")
+    if isinstance(authority.artifact, TruncationRecoveredTreeArtifact):
+        if (
+            tuple(item.evidence for item in authority.full_tree_bridges)
+            != authority.artifact.bridges
+        ):
+            failures.append("full-tree bridge context inventory is incomplete")
+        for item in authority.full_tree_bridges:
+            evidence = item.evidence
+            usage = evidence.usage_record
+            context = item.context
+            retain_analysis_context(context, "bridge")
+            if (
+                item.activation.user_prompt_sha256 != usage.user_prompt_sha256
+                or item.activation.provider_prompt_sha256 != usage.prompt_sha256
+                or item.activation.response_schema_sha256 != usage.schema_sha256
+            ):
+                failures.append("full-tree bridge differs from original pre-dispatch activation")
+            if item.parent_context is None:
+                failures.append("full-tree bridge lacks its immediate original parent context")
+            else:
+                try:
+                    expected = build_truncation_recovery_child_context(
+                        parent_context=item.parent_context, child=evidence.child_plan
+                    )
+                except ValueError:
+                    failures.append("full-tree bridge context failed original child-plan replay")
+                else:
+                    if context != expected:
+                        failures.append("full-tree bridge context differs from original child plan")
+            if context is not None:
+                requests = tuple(context.requested_model_surfaces)
+                failures.extend(
+                    model_surface_retained_context_custody_failures(
+                        context=context,
+                        usage=usage,
+                        requests=requests,
+                        request_id=usage.request_id,
+                        review_role=usage.role,
+                        context_role=context.role,
+                        rendered_context_sha256=usage.user_prompt_sha256 or "",
+                        requested_surface_manifest_sha256=ModelSurfaceReviewArtifact.calculate_requested_surface_manifest_sha256(
+                            requests
+                        ),
+                        index=index,
+                        graphs=graphs,
+                    )
+                )
+    elif authority.full_tree_bridges or authority.child_parent_contexts:
+        failures.append("legacy promoted model review unexpectedly carries full-tree contexts")
     return tuple(dict.fromkeys(failures))
 
 
@@ -3891,9 +4071,39 @@ def _validate_model_review_artifact_inventory_against_scheduler(
         else:
             assert promoted_match is not None
             promoted_authority, raw_record = promoted_match
-            artifact_request_id = promoted_authority.parent_usage.request_id
+            retained_origins = tuple(
+                origin
+                for origin in promoted_authority.artifact.origins
+                if origin.surface_id == raw_record.surface_id
+                and origin.origin_kind is TruncationSurfaceOriginKind.PARENT_PROVISIONAL
+            )
+            if len(retained_origins) != 1:
+                raise ValueError("promoted model-review record lacks one exact retained origin")
+            origin_request_id = retained_origins[0].request_id
+            if origin_request_id == promoted_authority.parent_usage.request_id:
+                usage = promoted_authority.parent_usage
+                retained_context = promoted_authority.parent_context
+            elif any(
+                item.evidence.usage_record.request_id == origin_request_id
+                for item in promoted_authority.full_tree_bridges
+            ):
+                bridge_authority = next(
+                    item
+                    for item in promoted_authority.full_tree_bridges
+                    if item.evidence.usage_record.request_id == origin_request_id
+                )
+                usage = bridge_authority.evidence.usage_record
+                retained_context = bridge_authority.context
+            elif (
+                promoted_authority.bridge_usage is not None
+                and origin_request_id == promoted_authority.bridge_usage.request_id
+            ):
+                usage = promoted_authority.bridge_usage
+                retained_context = promoted_authority.bridge_context
+            else:
+                raise ValueError("promoted model-review origin lacks exact root or bridge custody")
+            artifact_request_id = usage.request_id
             artifact_review_role = promoted_authority.artifact.invariant_binding.review_role
-            usage = promoted_authority.parent_usage
             context_custody_failures = _retained_promoted_model_review_context_failures(
                 promoted_authority,
                 index=index,
@@ -3907,7 +4117,7 @@ def _validate_model_review_artifact_inventory_against_scheduler(
                 semantic_custody_failures = (
                     "credited promoted model-review record lacked its exact retained request",
                 )
-            elif promoted_authority.parent_context is None:
+            elif retained_context is None:
                 semantic_custody_failures = (
                     "credited promoted model-review record lacked its exact retained context",
                 )
@@ -3921,7 +4131,7 @@ def _validate_model_review_artifact_inventory_against_scheduler(
                         graphs=graphs,
                     ),
                     *model_surface_review_excerpt_validation_failures(
-                        context=promoted_authority.parent_context,
+                        context=retained_context,
                         request=promoted_request,
                         record=raw_record,
                     ),
@@ -5236,6 +5446,21 @@ def _validate_solidity_graph_report_coverage(
         raise ValueError("Solidity report graph analysis state differs from graph evidence")
 
 
+def _load_scheduler_artifact(root: Path) -> SchedulerArtifact:
+    """Load bounded saved comparison evidence without issuing live scheduler custody."""
+
+    payload = _read_json_artifact(root, "scheduler-state.json")
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
+    # JSON arrays encode strict tuples; do not relax the models' Python-mode checks.
+    return SchedulerArtifact.model_validate_json(encoded)
+
+
 def validate_scheduler_artifact(
     run_dir: Path,
     report: AuditReport,
@@ -5288,7 +5513,7 @@ def validate_scheduler_artifact(
     if binding_payload is None:
         raise ValueError("scheduler artifact lacks its final-report binding")
 
-    artifact = SchedulerArtifact.model_validate(_read_json_artifact(root, "scheduler-state.json"))
+    artifact = _load_scheduler_artifact(root)
     binding = SchedulerReportBinding.model_validate(binding_payload)
     binding.require_exact(artifact)
     if (
@@ -5906,6 +6131,57 @@ def _scheduler_accepted_candidate_authority(
         accepted_hashes = hash_authority[pass_kind]
         accepted_candidates = candidate_authority[pass_kind]
         for result in pass_result.task_results:
+            if (
+                pass_kind is SchedulerPassKind.BLIND_SHARD_REVIEW
+                and result.terminal_status is SchedulerTerminalStatus.TRUNCATED
+            ):
+                from mmaudit.orchestration.scheduler import SchedulerJournal
+
+                if not isinstance(snapshot.journal, SchedulerJournal):
+                    raise ValueError("recovered candidates require original journal custody")
+                bindings = tuple(
+                    item
+                    for item in pass_result.recovery_promotion_bindings
+                    if item.parent_task_id == result.task_id
+                )
+                recovered = snapshot.journal.recovered_candidate_review_output_for_task(
+                    result.task_id
+                )
+                if recovered is None:
+                    if bindings:
+                        raise ValueError("recovered candidates lack their private promotion")
+                    continue
+                if (
+                    recovered.pass_plan_id != pass_result.plan.pass_plan_id
+                    or recovered.campaign_id != pass_result.plan.manifest.campaign_id
+                    or recovered.parent_task_id != result.task_id
+                    or recovered.original_truncated_result_sha256 != result.result_sha256
+                    or len(bindings) != 1
+                    or bindings[0].original_truncated_result_sha256 != result.result_sha256
+                    or bindings[0].recovered_output_artifact_sha256
+                    != recovered.output_artifact_sha256
+                ):
+                    raise ValueError("recovered candidates differ from original blind task result")
+                if any(
+                    evidence.type == "scanner"
+                    and evidence.fingerprint not in trusted_scanner_fingerprints
+                    for candidate in recovered.recovered_batch.findings
+                    for evidence in candidate.evidence
+                ):
+                    raise ValueError("recovered candidates lack retained trusted scanner custody")
+                # The owner-held reader replays every original frame/batch and host stamp.
+                # This restores comparison data only, not ordinary truncation review credit.
+                for candidate in recovered.recovered_batch.findings:
+                    candidate_id = candidate.candidate_id
+                    if candidate_id in accepted_hashes:
+                        raise ValueError(
+                            "scheduler accepted candidate authority repeats an identity"
+                        )
+                    accepted_hashes[candidate_id] = recovered.accepted_candidate_payload_sha256s[
+                        candidate_id
+                    ]
+                    accepted_candidates[candidate_id] = candidate
+                continue
             if result.terminal_status is not SchedulerTerminalStatus.SUCCEEDED:
                 continue
             output = _successful_scheduler_task_output(
@@ -6503,7 +6779,7 @@ def _scheduler_judge_vote(
     decision: JudgeDecision | None,
     snapshot: _SchedulerReportAuthoritySnapshot,
 ) -> ModelVote | None:
-    """Reconstruct the exact public judge vote from its retained completion."""
+    """Compare a retained judge vote without recreating live execution authority."""
 
     if decision is None:
         return None
@@ -6522,7 +6798,7 @@ def _scheduler_judge_vote(
         task_id=judge_tasks[0].task_id,
     )
     completion = output.model_completion_evidence
-    if completion is None or not is_creditable_usage_record(completion.usage_record):
+    if completion is None or not is_structurally_creditable_usage_record(completion.usage_record):
         return None
     usage = completion.usage_record
     return ModelVote(
@@ -9193,6 +9469,27 @@ def _model_bindings(
                 )
             qualification_sha256 = reasoning.request_plan.qualification_binding_sha256
             if qualification_sha256 is not None:
+                if usage.validation_status is ModelRequestValidationStatus.TRUNCATED:
+                    bindings.append(
+                        _truncated_reasoning_attempt_binding(
+                            usage=usage,
+                            reasoning_policy=reasoning_policy,
+                            validation=qualification_validation,
+                            qualification=opaque_qualification,
+                            verification=sealed_verification_bindings is not None,
+                            recovery_request_limit_scope=(
+                                recovery_coordinates[0]
+                                if recovery_coordinates is not None
+                                else None
+                            ),
+                            recovery_request_limit_count_before=(
+                                recovery_coordinates[1]
+                                if recovery_coordinates is not None
+                                else None
+                            ),
+                        )
+                    )
+                    continue
                 qualified_reasoning = (
                     _require_serialized_reasoning_qualification_for_verification(
                         usage=usage,
@@ -9393,30 +9690,15 @@ def _require_serialized_reasoning_qualification_for_verification(
     recovery_request_limit_scope: str | None = None,
     recovery_request_limit_count_before: int | None = None,
 ) -> QualifiedReasoningRoleBinding:
-    """Check sealed request evidence without creating or granting runtime authority."""
+    """Require successful sealed response evidence in addition to exact route custody."""
 
-    if validation is None or not validation.valid:
-        raise ValueError(
-            "qualified reasoning verification requires valid serialized qualification evidence"
-        )
-
-    from mmaudit.models.reasoning import (
-        ReasoningExecutionEvidence,
-        ReasoningPolicyError,
-        resolve_reasoning_request_role,
+    route = _require_serialized_reasoning_route_for_verification(
+        usage=usage,
+        reasoning_policy=reasoning_policy,
+        validation=validation,
+        recovery_request_limit_scope=recovery_request_limit_scope,
+        recovery_request_limit_count_before=recovery_request_limit_count_before,
     )
-    from mmaudit.models.usage import (
-        is_structurally_creditable_usage_record,
-        is_structurally_recovery_creditable_usage_record,
-    )
-
-    reasoning = usage.reasoning_evidence
-    try:
-        resolution = resolve_reasoning_request_role(usage.role)
-    except ReasoningPolicyError as exc:
-        raise ValueError("qualified reasoning request role cannot be resolved") from exc
-    if (recovery_request_limit_scope is None) != (recovery_request_limit_count_before is None):
-        raise ValueError("qualified reasoning recovery coordinates are incomplete")
     usage_is_creditable = (
         is_structurally_recovery_creditable_usage_record(
             usage,
@@ -9428,16 +9710,46 @@ def _require_serialized_reasoning_qualification_for_verification(
         if recovery_request_limit_scope is not None
         and recovery_request_limit_count_before is not None
         else is_structurally_creditable_usage_record(
-            usage,
-            require_real=True,
-            require_certification=True,
+            usage, require_real=True, require_certification=True
         )
     )
+    if not usage_is_creditable:
+        raise ValueError("qualified reasoning request is not creditable sealed real evidence")
+    return route
+
+
+def _require_serialized_reasoning_route_for_verification(
+    *,
+    usage: UsageRecord,
+    reasoning_policy: ReasoningPolicyArtifact,
+    validation: ProductionQualificationValidation | None,
+    recovery_request_limit_scope: str | None = None,
+    recovery_request_limit_count_before: int | None = None,
+) -> QualifiedReasoningRoleBinding:
+    """Check sealed route references without granting response or runtime credit."""
+
+    if validation is None or not validation.valid:
+        raise ValueError(
+            "qualified reasoning verification requires valid serialized qualification evidence"
+        )
+
+    from mmaudit.models.reasoning import (
+        ReasoningExecutionEvidence,
+        ReasoningPolicyError,
+        resolve_reasoning_request_role,
+    )
+
+    reasoning = usage.reasoning_evidence
+    try:
+        resolution = resolve_reasoning_request_role(usage.role)
+    except ReasoningPolicyError as exc:
+        raise ValueError("qualified reasoning request role cannot be resolved") from exc
+    if (recovery_request_limit_scope is None) != (recovery_request_limit_count_before is None):
+        raise ValueError("qualified reasoning recovery coordinates are incomplete")
     if (
         type(reasoning) is not ReasoningExecutionEvidence
         or reasoning.request_plan.resolution != resolution
         or reasoning.request_plan.binding_state != "qualification_bound"
-        or not usage_is_creditable
     ):
         raise ValueError("qualified reasoning request is not creditable sealed real evidence")
     plan = reasoning.request_plan
@@ -9553,7 +9865,42 @@ def _require_opaque_reasoning_qualification(
     recovery_request_limit_scope: str | None = None,
     recovery_request_limit_count_before: int | None = None,
 ) -> QualifiedReasoningRoleBinding:
-    """Require one exact request-to-role-to-parent join before granting manifest credit."""
+    """Require successful live response evidence in addition to exact route custody."""
+
+    from mmaudit.models.qualification import usage_matches_verified_reasoning_qualification
+
+    route = _require_opaque_reasoning_route(
+        usage=usage,
+        reasoning_policy=reasoning_policy,
+        validation=validation,
+        qualification=qualification,
+        recovery_request_limit_scope=recovery_request_limit_scope,
+        recovery_request_limit_count_before=recovery_request_limit_count_before,
+    )
+    assert qualification is not None
+    if not usage_matches_verified_reasoning_qualification(
+        record=usage,
+        production_qualification=qualification,
+        now=(usage.started_at or usage.timestamp).astimezone(UTC).replace(microsecond=0),
+        recovery_request_limit_scope=recovery_request_limit_scope,
+        recovery_request_limit_count_before=recovery_request_limit_count_before,
+    ):
+        raise ValueError(
+            "qualified reasoning execution lacks creditable real opaque-authority evidence"
+        )
+    return route
+
+
+def _require_opaque_reasoning_route(
+    *,
+    usage: UsageRecord,
+    reasoning_policy: ReasoningPolicyArtifact,
+    validation: ProductionQualificationValidation | None,
+    qualification: VerifiedProductionQualification | None,
+    recovery_request_limit_scope: str | None = None,
+    recovery_request_limit_count_before: int | None = None,
+) -> QualifiedReasoningRoleBinding:
+    """Require exact request-to-role-to-parent routing, without granting response credit."""
 
     if validation is None or not validation.valid:
         raise ValueError(
@@ -9564,7 +9911,7 @@ def _require_opaque_reasoning_qualification(
             "qualified reasoning manifest credit requires opaque production qualification authority"
         )
 
-    from mmaudit.models.qualification import usage_matches_verified_reasoning_qualification
+    from mmaudit.models.qualification import usage_matches_verified_reasoning_qualification_route
 
     plan = usage.reasoning_evidence.request_plan if usage.reasoning_evidence is not None else None
     if plan is None or plan.binding_state != "qualification_bound":
@@ -9580,7 +9927,7 @@ def _require_opaque_reasoning_qualification(
     )
     if request_time < qualification.verified_at or request_time >= qualified_model.expires_at:
         raise ValueError("qualified reasoning request occurred outside its authority window")
-    if not usage_matches_verified_reasoning_qualification(
+    if not usage_matches_verified_reasoning_qualification_route(
         record=usage,
         production_qualification=qualification,
         now=normalized_request_time,
@@ -9588,7 +9935,7 @@ def _require_opaque_reasoning_qualification(
         recovery_request_limit_count_before=recovery_request_limit_count_before,
     ):
         raise ValueError(
-            "qualified reasoning execution lacks creditable real opaque-authority evidence"
+            "qualified reasoning execution lacks exact opaque-authority route evidence"
         )
     serialized_models = tuple(
         model
@@ -9681,6 +10028,78 @@ def _require_opaque_reasoning_qualification(
             "qualified reasoning execution routing differs from opaque production authority"
         )
     return authority_route
+
+
+def _truncated_reasoning_attempt_binding(
+    *,
+    usage: UsageRecord,
+    reasoning_policy: ReasoningPolicyArtifact,
+    validation: ProductionQualificationValidation | None,
+    qualification: VerifiedProductionQualification | None,
+    verification: bool,
+    recovery_request_limit_scope: str | None = None,
+    recovery_request_limit_count_before: int | None = None,
+) -> ManifestHashBinding:
+    """Bind a charged truncated attempt without a qualified-response binding."""
+
+    if (recovery_request_limit_scope is None) != (recovery_request_limit_count_before is None):
+        raise ValueError("truncated reasoning recovery coordinates are incomplete")
+    if recovery_request_limit_scope is not None and recovery_request_limit_count_before is not None:
+        accountable = (
+            is_structurally_recovery_accountable_usage_record
+            if verification
+            else is_recovery_accountable_usage_record
+        )(
+            usage,
+            request_limit_scope=recovery_request_limit_scope,
+            request_limit_count_before=recovery_request_limit_count_before,
+            require_real=True,
+        )
+    else:
+        accountable = (
+            is_structurally_accountable_usage_record
+            if verification
+            else is_accountable_usage_record
+        )(usage, require_real=True)
+    if (
+        usage.validation_status is not ModelRequestValidationStatus.TRUNCATED
+        or usage.status != "rejected_truncated_response"
+        or usage.validated_response_sha256 is not None
+        or not accountable
+        or not has_exact_nonfallback_model_identity(usage)
+        or usage.routing.get("certification_request") is not True
+    ):
+        raise ValueError("truncated reasoning attempt lacks exact accountable evidence")
+    route = (
+        _require_serialized_reasoning_route_for_verification(
+            usage=usage,
+            reasoning_policy=reasoning_policy,
+            validation=validation,
+            recovery_request_limit_scope=recovery_request_limit_scope,
+            recovery_request_limit_count_before=recovery_request_limit_count_before,
+        )
+        if verification
+        else _require_opaque_reasoning_route(
+            usage=usage,
+            reasoning_policy=reasoning_policy,
+            validation=validation,
+            qualification=qualification,
+            recovery_request_limit_scope=recovery_request_limit_scope,
+            recovery_request_limit_count_before=recovery_request_limit_count_before,
+        )
+    )
+    return ManifestHashBinding(
+        identifier=f"reasoning/truncated-attempt/{usage.request_id}",
+        sha256=route.binding_sha256,
+        details={
+            "role": _detail(usage.role),
+            "state": "uncredited_truncated_attempt",
+            "scope": "attempt_accounting_only",
+            "response_credit": "false",
+            "qualified_role": route.qualified_role,
+            "configured_policy_role": route.configured_policy_role,
+        },
+    )
 
 
 def _qualification_bindings(

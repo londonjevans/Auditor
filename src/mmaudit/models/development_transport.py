@@ -29,6 +29,7 @@ from mmaudit.models.development_corpus import (
     DevelopmentCorpusShardObservation,
     PreparedDevelopmentCorpusShard,
     prepare_development_corpus_shard,
+    require_development_corpus_source_custody,
     validate_development_corpus_response,
 )
 from mmaudit.models.development_corpus_judgment import (
@@ -108,6 +109,24 @@ type _PreparedSource = (
 
 class DevelopmentTransportError(ValueError):
     """Controlled non-operational error; never embeds HTTP, source, or credential data."""
+
+
+def _require_source_custody(prepared: _PreparedSource) -> None:
+    """Tree-backed calls replay the selected root without serializing local custody or paths."""
+
+    try:
+        if type(prepared) is PreparedDevelopmentCorpusShard:
+            require_development_corpus_source_custody(
+                prepared.manifest, prepared.source_files, prepared.source_custody
+            )
+        elif type(prepared) is PreparedDevelopmentCorpusJudgmentShard:
+            require_development_corpus_source_custody(
+                prepared.candidate.plan.manifest, prepared.source_files, prepared.source_custody
+            )
+    except Exception:
+        raise DevelopmentTransportError(
+            "development source custody unavailable or changed"
+        ) from None
 
 
 def development_request_timeout_seconds(policy: DevelopmentCostPolicy) -> float:
@@ -611,6 +630,7 @@ async def _review_development_source(
             primary_filename=prepared.source_filename,
             run_id=prepared.run_id,
             maximum_completion_tokens=prepared.estimate.maximum_completion_tokens,
+            source_custody=prepared.source_custody,
         )
     elif type(prepared) is PreparedDevelopmentCorpusJudgmentShard:
         if attempt != 1:
@@ -623,6 +643,7 @@ async def _review_development_source(
             shard_id=prepared.shard_id,
             run_id=prepared.run_id,
             maximum_completion_tokens=prepared.estimate.maximum_completion_tokens,
+            source_custody=prepared.source_custody,
         )
     else:
         assert type(prepared) is PreparedDevelopmentJudgmentShard
@@ -759,6 +780,7 @@ async def _review_development_source(
                 raise DevelopmentTransportError(
                     "development dispatch bytes differ from their reservation"
                 )
+            _require_source_custody(prepared)
             async with asyncio.timeout(request_timeout):
                 # Set before the first transport await: errors/cancellation can mean paid usage.
                 dispatched = True
@@ -856,6 +878,8 @@ async def _review_development_source(
                         if Diagnostic.TRANSPORT_ERROR not in diagnostics:
                             diagnostics.append(Diagnostic.TRANSPORT_ERROR)
                 api_key = ""
+    # Accounting above is final even when the original root drifted during transport/cleanup.
+    _require_source_custody(prepared)
     entry = next(
         item
         for item in ledger.snapshot().entries

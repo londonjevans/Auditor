@@ -14,21 +14,22 @@ import sys
 import threading
 import weakref
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal, localcontext
 from itertools import islice
 from typing import Any, Literal, Never, SupportsIndex, cast
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
 import mmaudit.benchmark.cross_lineage_adjudication as _adjudication_module
 import mmaudit.benchmark.model_portfolio as _model_portfolio_module
 import mmaudit.benchmark.models as _benchmark_models_module
+import mmaudit.models.authenticated_runner_ledger as _ledger_authority_module
 import mmaudit.models.generation_evidence as _generation_evidence_module
 import mmaudit.models.ground_truth_authority as _ground_truth_module
 import mmaudit.models.public_lineage_authority as _public_lineage_module
 import mmaudit.models.usage as _usage_module
-import mmaudit.orchestration.cost_ledger as _cost_ledger_module
+import mmaudit.orchestration.authenticated_calibration_accounting as _calibration_accounting_module
 import mmaudit.orchestration.manifest as _manifest_module
 from mmaudit.benchmark.cross_lineage_adjudication import (
     CrossLineageAdjudicationCaseResult,
@@ -41,13 +42,85 @@ from mmaudit.benchmark.model_portfolio import (
     ModelBenchmarkPortfolio,
     TrustedCandidateBenchmarkCampaignVerification,
     revoke_trusted_candidate_benchmark_campaign_verification,
+    transfer_trusted_candidate_benchmark_campaign_verification,
 )
 from mmaudit.benchmark.models import ModelBenchmarkReport, ModelBenchmarkSuite
+from mmaudit.models.authenticated_runner_ledger import (
+    _DECIMAL_PATTERN as _DECIMAL_PATTERN,
+)
+from mmaudit.models.authenticated_runner_ledger import (
+    _MAX_INTERVAL_REQUEST_IDS as _MAX_INTERVAL_REQUEST_IDS,
+)
+from mmaudit.models.authenticated_runner_ledger import (
+    _REQUEST_ID_PATTERN as _REQUEST_ID_PATTERN,
+)
+from mmaudit.models.authenticated_runner_ledger import (
+    _RUNNER_LEDGER_CAP_USD as _RUNNER_LEDGER_CAP_USD,
+)
+from mmaudit.models.authenticated_runner_ledger import (
+    _SHA256_PATTERN as _SHA256_PATTERN,
+)
+from mmaudit.models.authenticated_runner_ledger import (
+    AuthenticatedCrossLineageLedgerEntryEvidence as AuthenticatedCrossLineageLedgerEntryEvidence,
+)
+from mmaudit.models.authenticated_runner_ledger import (
+    AuthenticatedCrossLineageLedgerIntervalEvidence as AuthenticatedCrossLineageLedgerIntervalEvidence,
+)
+from mmaudit.models.authenticated_runner_ledger import (
+    AuthenticatedCrossLineageRunnerError as AuthenticatedCrossLineageRunnerError,
+)
+from mmaudit.models.authenticated_runner_ledger import (
+    ClosedCrossLineageLedgerInterval as ClosedCrossLineageLedgerInterval,
+)
+from mmaudit.models.authenticated_runner_ledger import (
+    OpenCrossLineageLedgerInterval as OpenCrossLineageLedgerInterval,
+)
+from mmaudit.models.authenticated_runner_ledger import (
+    _canonical_sha256 as _canonical_sha256,
+)
+from mmaudit.models.authenticated_runner_ledger import (
+    _claim_closed_cross_lineage_ledger_interval as _claim_closed_cross_lineage_ledger_interval,
+)
+from mmaudit.models.authenticated_runner_ledger import (
+    _ClosedLedgerIntervalView as _ClosedLedgerIntervalView,
+)
+from mmaudit.models.authenticated_runner_ledger import (
+    _decimal_text as _decimal_text,
+)
+from mmaudit.models.authenticated_runner_ledger import (
+    _entry_material as _entry_material,
+)
+from mmaudit.models.authenticated_runner_ledger import (
+    _entry_sha256 as _entry_sha256,
+)
+from mmaudit.models.authenticated_runner_ledger import (
+    _parse_decimal as _parse_decimal,
+)
+from mmaudit.models.authenticated_runner_ledger import (
+    _require_closed_cross_lineage_ledger_interval as _require_closed_cross_lineage_ledger_interval,
+)
+from mmaudit.models.authenticated_runner_ledger import (
+    _require_pristine_cross_lineage_ledger_runtime as _require_pristine_cross_lineage_ledger_runtime,
+)
+from mmaudit.models.authenticated_runner_ledger import (
+    _snapshot_sha256 as _snapshot_sha256,
+)
+from mmaudit.models.authenticated_runner_ledger import (
+    _StrictFrozenEvidence as _StrictFrozenEvidence,
+)
+from mmaudit.models.authenticated_runner_ledger import (
+    begin_cross_lineage_ledger_interval as begin_cross_lineage_ledger_interval,
+)
+from mmaudit.models.authenticated_runner_ledger import (
+    close_cross_lineage_ledger_interval as close_cross_lineage_ledger_interval,
+)
 from mmaudit.models.generation_evidence import (
+    GenerationVerificationRequest,
     OpenRouterGenerationEvidence,
     TrustedGenerationVerification,
     _has_authrunner_generation_origin,
     revoke_trusted_generation_verification,
+    transfer_trusted_generation_verification,
 )
 from mmaudit.models.ground_truth_authority import (
     FROZEN_GROUND_TRUTH_OBJECTIVE_SHA256,
@@ -62,159 +135,25 @@ from mmaudit.models.public_lineage_authority import (
     require_independent_public_model_lineage,
 )
 from mmaudit.models.qualification import CandidateModel
-from mmaudit.models.schemas import ExecutionEvidenceKind, StrictModel, UsageRecord
+from mmaudit.models.schemas import ExecutionEvidenceKind, UsageRecord
 from mmaudit.models.usage import _has_authrunner_owned_real_usage_origin
+from mmaudit.orchestration.authenticated_calibration_accounting import (
+    CalibrationLedgerAccounting,
+    CalibrationLedgerPrefixProjection,
+    RetainedCalibrationLedgerPrefix,
+    require_calibration_ledger_prefix,
+    retain_calibration_ledger_interval,
+)
 from mmaudit.orchestration.cost_ledger import (
     AtomicCostLedger,
-    CostEntry,
-    CostEntryStatus,
-    CostLedgerSnapshot,
+    cost_ledger_snapshot_sha256,
 )
 from mmaudit.orchestration.manifest import canonical_sha256
 
-_SHA256_PATTERN = r"^[0-9a-f]{64}$"
-_REQUEST_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
-_DECIMAL_PATTERN = re.compile(r"(?:0|[1-9][0-9]*)(?:\.[0-9]+)?\Z")
-_RUNNER_LEDGER_CAP_USD = Decimal("250")
-_MAX_INTERVAL_REQUEST_IDS = 100_000
 _MAX_CAMPAIGN_REPORTS = 128
 _MAX_RUNS = 16
 _MAX_CASES = 10_000
 _MAX_ATTEMPTS_PER_REQUEST = 32
-
-
-class AuthenticatedCrossLineageRunnerError(ValueError):
-    """Authenticated runner evidence or live custody is invalid."""
-
-
-class _StrictFrozenEvidence(StrictModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
-
-
-class OpenCrossLineageLedgerInterval:
-    """Opaque PID-local start marker for one exact atomic-ledger interval."""
-
-    __slots__ = ("__weakref__",)
-
-    def __new__(cls, *_args: object, **_kwargs: object) -> OpenCrossLineageLedgerInterval:
-        del cls
-        raise TypeError("open cross-lineage ledger interval cannot be constructed directly")
-
-    def __init__(self, *_args: object, **_kwargs: object) -> None:
-        del self, _args, _kwargs
-
-    def __copy__(self) -> Never:
-        raise TypeError("open cross-lineage ledger interval cannot be copied")
-
-    def __deepcopy__(self, _memo: object) -> Never:
-        raise TypeError("open cross-lineage ledger interval cannot be copied")
-
-    def __reduce__(self) -> Never:
-        raise TypeError("open cross-lineage ledger interval cannot be serialized")
-
-    def __reduce_ex__(self, _protocol: SupportsIndex) -> Never:
-        raise TypeError("open cross-lineage ledger interval cannot be serialized")
-
-
-class ClosedCrossLineageLedgerInterval:
-    """Opaque PID-local proof of one exact reconciled append-only interval."""
-
-    __slots__ = ("__weakref__",)
-
-    def __new__(cls, *_args: object, **_kwargs: object) -> ClosedCrossLineageLedgerInterval:
-        del cls
-        raise TypeError("closed cross-lineage ledger interval cannot be constructed directly")
-
-    def __init__(self, *_args: object, **_kwargs: object) -> None:
-        del self, _args, _kwargs
-
-    def __copy__(self) -> Never:
-        raise TypeError("closed cross-lineage ledger interval cannot be copied")
-
-    def __deepcopy__(self, _memo: object) -> Never:
-        raise TypeError("closed cross-lineage ledger interval cannot be copied")
-
-    def __reduce__(self) -> Never:
-        raise TypeError("closed cross-lineage ledger interval cannot be serialized")
-
-    def __reduce_ex__(self, _protocol: SupportsIndex) -> Never:
-        raise TypeError("closed cross-lineage ledger interval cannot be serialized")
-
-
-class AuthenticatedCrossLineageLedgerEntryEvidence(_StrictFrozenEvidence):
-    """Durable, non-authorizing binding for one known-cost interval entry."""
-
-    request_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
-    entry_sha256: str = Field(pattern=_SHA256_PATTERN)
-    reserved_usd: str | None = Field(
-        default=None,
-        pattern=r"^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$",
-    )
-    actual_cost_usd: str = Field(pattern=r"^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$")
-
-    @field_validator("reserved_usd", "actual_cost_usd")
-    @classmethod
-    def cost_is_canonical(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        if _decimal_text(_parse_decimal(value, label="ledger entry cost")) != value:
-            raise ValueError("ledger entry cost is not canonical")
-        return value
-
-
-class AuthenticatedCrossLineageLedgerIntervalEvidence(_StrictFrozenEvidence):
-    """Durable evidence for a closed interval; it cannot recreate live custody."""
-
-    ledger_identity_sha256: str = Field(pattern=_SHA256_PATTERN)
-    initial_snapshot_sha256: str = Field(pattern=_SHA256_PATTERN)
-    final_snapshot_sha256: str = Field(pattern=_SHA256_PATTERN)
-    cap_usd: Literal["250"] = "250"
-    initial_spent_usd: str = Field(pattern=r"^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$")
-    interval_spent_usd: str = Field(pattern=r"^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$")
-    final_spent_usd: str = Field(pattern=r"^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$")
-    entries: tuple[AuthenticatedCrossLineageLedgerEntryEvidence, ...] = Field(
-        min_length=1,
-        max_length=_MAX_INTERVAL_REQUEST_IDS,
-    )
-
-    @model_validator(mode="after")
-    def interval_is_exact(self) -> AuthenticatedCrossLineageLedgerIntervalEvidence:
-        request_ids = tuple(item.request_id for item in self.entries)
-        if request_ids != tuple(sorted(set(request_ids))):
-            raise ValueError("cross-lineage ledger entries must be unique and sorted")
-        initial = _parse_decimal(self.initial_spent_usd, label="initial ledger spend")
-        interval = _parse_decimal(self.interval_spent_usd, label="interval ledger spend")
-        final = _parse_decimal(self.final_spent_usd, label="final ledger spend")
-        if any(
-            _decimal_text(value) != text
-            for value, text in (
-                (initial, self.initial_spent_usd),
-                (interval, self.interval_spent_usd),
-                (final, self.final_spent_usd),
-            )
-        ):
-            raise ValueError("cross-lineage ledger spend is not canonical")
-        with localcontext() as context:
-            context.prec = 64
-            entry_total = sum(
-                (
-                    _parse_decimal(item.actual_cost_usd, label="interval entry cost")
-                    for item in self.entries
-                ),
-                start=Decimal(0),
-            )
-        if any(
-            item.reserved_usd is not None
-            and _parse_decimal(item.actual_cost_usd, label="ledger entry actual cost")
-            > _parse_decimal(item.reserved_usd, label="ledger entry reserved cost")
-            for item in self.entries
-        ):
-            raise ValueError("cross-lineage ledger actual cost exceeds its reservation")
-        if interval != entry_total or final != initial + interval:
-            raise ValueError("cross-lineage ledger interval spend is inconsistent")
-        if final >= _RUNNER_LEDGER_CAP_USD:
-            raise ValueError("cross-lineage ledger final spend must remain below 250 USD")
-        return self
 
 
 class AuthenticatedCrossLineageCaseExecutionEvidence(_StrictFrozenEvidence):
@@ -620,6 +559,21 @@ class _PidLocalOneWayLeaseRegistry[LeaseCapabilityT, LeaseStateT]:
                 "verified cross-lineage runner custody changed or was revoked during replay"
             )
 
+    def replace_state(
+        self,
+        capability: LeaseCapabilityT,
+        snapshot: _PidLocalLeaseSnapshot[LeaseStateT],
+        state: LeaseStateT,
+    ) -> _PidLocalLeaseSnapshot[LeaseStateT]:
+        """Atomically change one live lease's state; stale or revoked leases stay invalid."""
+
+        with self._lock:
+            self.recheck(capability, snapshot)
+            entry = self._entries[id(capability)]
+            nonce = object()
+            self._entries[id(capability)] = (entry[0], entry[1], state, nonce)
+            return _PidLocalLeaseSnapshot(process_id=entry[1], state=state, nonce=nonce)
+
     def revoke(self, capability: LeaseCapabilityT) -> None:
         """Remove one exact current-PID lease permanently and return no evidence."""
 
@@ -643,444 +597,6 @@ class _PidLocalOneWayLeaseRegistry[LeaseCapabilityT, LeaseStateT]:
             raise AuthenticatedCrossLineageRunnerError(
                 "verified cross-lineage runner custody changed during revocation"
             )
-
-
-@dataclass(frozen=True, slots=True)
-class _ClosedLedgerIntervalView:
-    capability: ClosedCrossLineageLedgerInterval
-    ledger: AtomicCostLedger
-    ledger_identity_sha256: str
-    initial_snapshot: CostLedgerSnapshot
-    final_snapshot: CostLedgerSnapshot
-    new_entries: tuple[CostEntry, ...]
-    evidence: AuthenticatedCrossLineageLedgerIntervalEvidence
-
-
-def _parse_decimal(value: str, *, label: str) -> Decimal:
-    if type(value) is not str or _DECIMAL_PATTERN.fullmatch(value) is None:
-        raise ValueError(f"{label} is invalid")
-    parsed = Decimal(value)
-    if not parsed.is_finite() or parsed < 0:
-        raise ValueError(f"{label} is invalid")
-    return parsed
-
-
-def _decimal_text(value: Decimal) -> str:
-    if type(value) is not Decimal or not value.is_finite() or value < 0:
-        raise ValueError("money value is invalid")
-    if value == 0:
-        return "0"
-    rendered = format(value, "f")
-    if "." in rendered:
-        rendered = rendered.rstrip("0").rstrip(".")
-    return rendered
-
-
-def _entry_material(entry: CostEntry) -> dict[str, object]:
-    return {
-        "request_id": entry.request_id,
-        "reservation_id": entry.reservation_id,
-        "status": entry.status.value,
-        "reserved_usd": _decimal_text(entry.reserved_usd),
-        "actual_cost_usd": (
-            None if entry.actual_cost_usd is None else _decimal_text(entry.actual_cost_usd)
-        ),
-        "accounted_cost_usd": _decimal_text(entry.accounted_cost_usd),
-        "release_reason": None if entry.release_reason is None else entry.release_reason.value,
-        "created_at": entry.created_at.isoformat(),
-        "updated_at": entry.updated_at.isoformat(),
-    }
-
-
-def _canonical_sha256(value: object) -> str:
-    return hashlib.sha256(
-        json.dumps(
-            value,
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=True,
-            allow_nan=False,
-        ).encode("utf-8")
-    ).hexdigest()
-
-
-def _entry_sha256(entry: CostEntry) -> str:
-    return _canonical_sha256(_entry_material(entry))
-
-
-def _snapshot_sha256(snapshot: CostLedgerSnapshot) -> str:
-    return _canonical_sha256(
-        {
-            "cap_usd": _decimal_text(snapshot.cap_usd),
-            "spent_usd": _decimal_text(snapshot.spent_usd),
-            "active_reserved_usd": _decimal_text(snapshot.active_reserved_usd),
-            "entries": [_entry_material(item) for item in snapshot.entries],
-        }
-    )
-
-
-def _build_cross_lineage_ledger_interval_authority() -> tuple[
-    Callable[[AtomicCostLedger], OpenCrossLineageLedgerInterval],
-    Callable[..., ClosedCrossLineageLedgerInterval],
-    Callable[[ClosedCrossLineageLedgerInterval], _ClosedLedgerIntervalView],
-    Callable[[ClosedCrossLineageLedgerInterval], _ClosedLedgerIntervalView],
-    Callable[[], None],
-]:
-    """Build hidden registries for exact process-local ledger interval custody."""
-
-    @dataclass(frozen=True, slots=True)
-    class OpenState:
-        process_id: int
-        ledger: AtomicCostLedger
-        ledger_identity_sha256: str
-        initial_snapshot: CostLedgerSnapshot
-
-    @dataclass(slots=True)
-    class ClosedState:
-        process_id: int
-        view: _ClosedLedgerIntervalView
-        claimed: bool = False
-
-    open_registry: weakref.WeakKeyDictionary[OpenCrossLineageLedgerInterval, OpenState] = (
-        weakref.WeakKeyDictionary()
-    )
-    closed_registry: weakref.WeakKeyDictionary[ClosedCrossLineageLedgerInterval, ClosedState] = (
-        weakref.WeakKeyDictionary()
-    )
-    lock = threading.RLock()
-    namespace = globals()
-    trusted_self_module = sys.modules[__name__]
-    trusted_cost_ledger_module = _cost_ledger_module
-    trusted_sys_module = sys
-    trusted_os_module = os
-    trusted_json_module = json
-    trusted_hashlib_module = hashlib
-    trusted_getpid = os.getpid
-    trusted_os_functions = {
-        name: getattr(os, name) for name in ("close", "fdopen", "fstat", "geteuid", "open")
-    }
-    trusted_json_dumps = json.dumps
-    trusted_json_load = json.load
-    trusted_sha256 = hashlib.sha256
-    trusted_snapshot = AtomicCostLedger.snapshot
-    trusted_identity_getter = cast(property, AtomicCostLedger.identity_sha256).fget
-    assert trusted_identity_getter is not None
-    trusted_cost_ledger_callables = {
-        name: getattr(trusted_cost_ledger_module, name)
-        for name in (
-            "_open_lock_file",
-            "_open_regular_private_file",
-            "_require_exact_lock_path",
-            "_snapshot",
-            "_unique_object",
-            "_validate_state",
-        )
-    }
-
-    def ledger_descriptor_surface() -> tuple[tuple[str, object], ...]:
-        return tuple(
-            sorted(
-                (
-                    (name, descriptor)
-                    for name, descriptor in vars(AtomicCostLedger).items()
-                    if callable(descriptor)
-                    or isinstance(descriptor, (classmethod, staticmethod, property))
-                ),
-                key=lambda item: item[0],
-            )
-        )
-
-    trusted_ledger_descriptor_surface = ledger_descriptor_surface()
-    trusted_objects = {
-        "AtomicCostLedger": AtomicCostLedger,
-        "CostEntry": CostEntry,
-        "CostEntryStatus": CostEntryStatus,
-        "CostLedgerSnapshot": CostLedgerSnapshot,
-        "OpenCrossLineageLedgerInterval": OpenCrossLineageLedgerInterval,
-        "ClosedCrossLineageLedgerInterval": ClosedCrossLineageLedgerInterval,
-        "AuthenticatedCrossLineageLedgerEntryEvidence": (
-            AuthenticatedCrossLineageLedgerEntryEvidence
-        ),
-        "AuthenticatedCrossLineageLedgerIntervalEvidence": (
-            AuthenticatedCrossLineageLedgerIntervalEvidence
-        ),
-        "_canonical_sha256": _canonical_sha256,
-        "_decimal_text": _decimal_text,
-        "_entry_material": _entry_material,
-        "_entry_sha256": _entry_sha256,
-        "_snapshot_sha256": _snapshot_sha256,
-    }
-    public_bindings: dict[str, object] = {}
-
-    def require_pristine() -> None:
-        if (
-            namespace.get("sys") is not trusted_sys_module
-            or namespace.get("os") is not trusted_os_module
-            or namespace.get("json") is not trusted_json_module
-            or namespace.get("hashlib") is not trusted_hashlib_module
-            or namespace.get("_cost_ledger_module") is not trusted_cost_ledger_module
-            or trusted_sys_module.modules.get(__name__) is not trusted_self_module
-            or trusted_sys_module.modules.get(trusted_cost_ledger_module.__name__)
-            is not trusted_cost_ledger_module
-            or any(namespace.get(name) is not value for name, value in trusted_objects.items())
-            or any(namespace.get(name) is not value for name, value in public_bindings.items())
-            or trusted_cost_ledger_module.AtomicCostLedger is not AtomicCostLedger
-            or trusted_cost_ledger_module.CostEntry is not CostEntry
-            or trusted_cost_ledger_module.CostEntryStatus is not CostEntryStatus
-            or trusted_cost_ledger_module.CostLedgerSnapshot is not CostLedgerSnapshot
-            or any(
-                getattr(trusted_cost_ledger_module, name) is not value
-                for name, value in trusted_cost_ledger_callables.items()
-            )
-            or ledger_descriptor_surface() != trusted_ledger_descriptor_surface
-            or AtomicCostLedger.snapshot is not trusted_snapshot
-            or cast(property, AtomicCostLedger.identity_sha256).fget is not trusted_identity_getter
-            or os.getpid is not trusted_getpid
-            or any(getattr(os, name) is not value for name, value in trusted_os_functions.items())
-            or json.dumps is not trusted_json_dumps
-            or json.load is not trusted_json_load
-            or hashlib.sha256 is not trusted_sha256
-        ):
-            raise AuthenticatedCrossLineageRunnerError(
-                "authenticated runner ledger verifier runtime is not pristine"
-            )
-
-    def require_clean_snapshot(snapshot: CostLedgerSnapshot, *, final: bool) -> None:
-        if (
-            type(snapshot) is not CostLedgerSnapshot
-            or snapshot.cap_usd != _RUNNER_LEDGER_CAP_USD
-            or snapshot.active_reserved_usd != 0
-            or snapshot.over_cap
-            or snapshot.has_reservation_overrun
-            or any(
-                item.status
-                in {
-                    CostEntryStatus.RESERVED,
-                    CostEntryStatus.RESERVATION_OVERRUN,
-                }
-                for item in snapshot.entries
-            )
-            or (final and snapshot.spent_usd >= _RUNNER_LEDGER_CAP_USD)
-        ):
-            raise AuthenticatedCrossLineageRunnerError(
-                "cross-lineage ledger is not a terminal non-overrun 250 USD ledger"
-            )
-
-    def current_view(state: ClosedState) -> _ClosedLedgerIntervalView:
-        if state.process_id != trusted_getpid():
-            raise AuthenticatedCrossLineageRunnerError(
-                "closed cross-lineage ledger interval belongs to another process"
-            )
-        view = state.view
-        if (
-            type(view.ledger) is not AtomicCostLedger
-            or trusted_identity_getter(view.ledger) != view.ledger_identity_sha256
-        ):
-            raise AuthenticatedCrossLineageRunnerError(
-                "closed cross-lineage ledger identity changed"
-            )
-        current = trusted_snapshot(view.ledger)
-        require_clean_snapshot(current, final=True)
-        if current != view.final_snapshot:
-            raise AuthenticatedCrossLineageRunnerError(
-                "closed cross-lineage ledger changed after closure"
-            )
-        return view
-
-    def begin(ledger: AtomicCostLedger) -> OpenCrossLineageLedgerInterval:
-        require_pristine()
-        if type(ledger) is not AtomicCostLedger:
-            raise AuthenticatedCrossLineageRunnerError(
-                "cross-lineage ledger interval requires the exact atomic ledger type"
-            )
-        identity = trusted_identity_getter(ledger)
-        initial = trusted_snapshot(ledger)
-        require_clean_snapshot(initial, final=False)
-        capability = object.__new__(OpenCrossLineageLedgerInterval)
-        with lock:
-            open_registry[capability] = OpenState(
-                process_id=trusted_getpid(),
-                ledger=ledger,
-                ledger_identity_sha256=identity,
-                initial_snapshot=initial,
-            )
-        require_pristine()
-        return capability
-
-    def close(
-        interval: OpenCrossLineageLedgerInterval,
-        *,
-        expected_request_ids: Iterable[str],
-    ) -> ClosedCrossLineageLedgerInterval:
-        require_pristine()
-        if type(interval) is not OpenCrossLineageLedgerInterval:
-            raise AuthenticatedCrossLineageRunnerError(
-                "open cross-lineage ledger interval authority is absent"
-            )
-        bounded = tuple(islice(iter(expected_request_ids), _MAX_INTERVAL_REQUEST_IDS + 1))
-        require_pristine()
-        if not bounded or len(bounded) > _MAX_INTERVAL_REQUEST_IDS:
-            raise AuthenticatedCrossLineageRunnerError(
-                "cross-lineage ledger expected request set is empty or exceeds its bound"
-            )
-        if any(
-            type(item) is not str or _REQUEST_ID_PATTERN.fullmatch(item) is None for item in bounded
-        ):
-            raise AuthenticatedCrossLineageRunnerError(
-                "cross-lineage ledger expected request ID is invalid"
-            )
-        expected = tuple(sorted(bounded))
-        if len(expected) != len(set(expected)):
-            raise AuthenticatedCrossLineageRunnerError(
-                "cross-lineage ledger expected request IDs are not unique"
-            )
-        with lock:
-            state = open_registry.get(interval)
-        if state is None or state.process_id != trusted_getpid():
-            raise AuthenticatedCrossLineageRunnerError(
-                "open cross-lineage ledger interval authority is absent"
-            )
-        ledger = state.ledger
-        if trusted_identity_getter(ledger) != state.ledger_identity_sha256:
-            raise AuthenticatedCrossLineageRunnerError(
-                "cross-lineage ledger identity changed during the interval"
-            )
-        final = trusted_snapshot(ledger)
-        require_clean_snapshot(final, final=True)
-        initial_by_id = {item.request_id: item for item in state.initial_snapshot.entries}
-        final_by_id = {item.request_id: item for item in final.entries}
-        if any(final_by_id.get(request_id) != entry for request_id, entry in initial_by_id.items()):
-            raise AuthenticatedCrossLineageRunnerError(
-                "cross-lineage ledger changed an entry that preceded the interval"
-            )
-        new_request_ids = tuple(sorted(set(final_by_id) - set(initial_by_id)))
-        if new_request_ids != expected:
-            raise AuthenticatedCrossLineageRunnerError(
-                "cross-lineage ledger interval differs from the exact expected request set"
-            )
-        new_entries = tuple(final_by_id[item] for item in new_request_ids)
-        if any(
-            item.status is not CostEntryStatus.RECONCILED
-            or item.actual_cost_usd is None
-            or item.accounted_cost_usd != item.actual_cost_usd
-            or item.actual_cost_usd > item.reserved_usd
-            for item in new_entries
-        ):
-            raise AuthenticatedCrossLineageRunnerError(
-                "cross-lineage ledger interval contains non-reconciled or unknown cost"
-            )
-        with localcontext() as context:
-            context.prec = 64
-            interval_spent = final.spent_usd - state.initial_snapshot.spent_usd
-            entry_spent = sum(
-                (cast(Decimal, item.actual_cost_usd) for item in new_entries),
-                start=Decimal(0),
-            )
-        if interval_spent < 0 or interval_spent != entry_spent:
-            raise AuthenticatedCrossLineageRunnerError(
-                "cross-lineage ledger interval spend is inconsistent"
-            )
-        entry_evidence = tuple(
-            AuthenticatedCrossLineageLedgerEntryEvidence(
-                request_id=item.request_id,
-                entry_sha256=_entry_sha256(item),
-                reserved_usd=_decimal_text(item.reserved_usd),
-                actual_cost_usd=_decimal_text(cast(Decimal, item.actual_cost_usd)),
-            )
-            for item in new_entries
-        )
-        evidence = AuthenticatedCrossLineageLedgerIntervalEvidence(
-            ledger_identity_sha256=state.ledger_identity_sha256,
-            initial_snapshot_sha256=_snapshot_sha256(state.initial_snapshot),
-            final_snapshot_sha256=_snapshot_sha256(final),
-            cap_usd="250",
-            initial_spent_usd=_decimal_text(state.initial_snapshot.spent_usd),
-            interval_spent_usd=_decimal_text(interval_spent),
-            final_spent_usd=_decimal_text(final.spent_usd),
-            entries=entry_evidence,
-        )
-        capability = object.__new__(ClosedCrossLineageLedgerInterval)
-        view = _ClosedLedgerIntervalView(
-            capability=capability,
-            ledger=ledger,
-            ledger_identity_sha256=state.ledger_identity_sha256,
-            initial_snapshot=state.initial_snapshot,
-            final_snapshot=final,
-            new_entries=new_entries,
-            evidence=evidence,
-        )
-        with lock:
-            current = open_registry.get(interval)
-            if current is not state:
-                raise AuthenticatedCrossLineageRunnerError(
-                    "open cross-lineage ledger interval changed during closure"
-                )
-            del open_registry[interval]
-            closed_registry[capability] = ClosedState(
-                process_id=trusted_getpid(),
-                view=view,
-            )
-        require_pristine()
-        return capability
-
-    def require_closed(
-        capability: ClosedCrossLineageLedgerInterval,
-    ) -> _ClosedLedgerIntervalView:
-        require_pristine()
-        if type(capability) is not ClosedCrossLineageLedgerInterval:
-            raise AuthenticatedCrossLineageRunnerError(
-                "closed cross-lineage ledger interval authority is absent"
-            )
-        with lock:
-            state = closed_registry.get(capability)
-        if state is None:
-            raise AuthenticatedCrossLineageRunnerError(
-                "closed cross-lineage ledger interval authority is absent"
-            )
-        result = current_view(state)
-        require_pristine()
-        return result
-
-    def claim_closed(
-        capability: ClosedCrossLineageLedgerInterval,
-    ) -> _ClosedLedgerIntervalView:
-        require_pristine()
-        if type(capability) is not ClosedCrossLineageLedgerInterval:
-            raise AuthenticatedCrossLineageRunnerError(
-                "closed cross-lineage ledger interval authority is absent"
-            )
-        with lock:
-            state = closed_registry.get(capability)
-            if state is None:
-                raise AuthenticatedCrossLineageRunnerError(
-                    "closed cross-lineage ledger interval authority is absent"
-                )
-            if state.claimed:
-                raise AuthenticatedCrossLineageRunnerError(
-                    "closed cross-lineage ledger interval was already claimed"
-                )
-            result = current_view(state)
-            state.claimed = True
-        require_pristine()
-        return result
-
-    public_bindings.update(
-        {
-            "begin_cross_lineage_ledger_interval": begin,
-            "close_cross_lineage_ledger_interval": close,
-        }
-    )
-    return begin, close, require_closed, claim_closed, require_pristine
-
-
-(
-    begin_cross_lineage_ledger_interval,
-    close_cross_lineage_ledger_interval,
-    _require_closed_cross_lineage_ledger_interval,
-    _claim_closed_cross_lineage_ledger_interval,
-    _require_pristine_cross_lineage_ledger_runtime,
-) = _build_cross_lineage_ledger_interval_authority()
-del _build_cross_lineage_ledger_interval_authority
 
 
 def _build_runner_child_capability_inventory_revoker() -> Callable[..., None]:
@@ -1165,6 +681,14 @@ def _build_authenticated_cross_lineage_runner_authority() -> tuple[
     ],
     Callable[..., VerifiedCrossLineageRunnerProjection],
     Callable[[VerifiedCrossLineageRunnerCustody], None],
+    Callable[
+        ...,
+        tuple[VerifiedCrossLineageRunnerCustody, tuple[CrossLineageRunnerRunCustody, ...]],
+    ],
+    Callable[
+        ...,
+        tuple[VerifiedCrossLineageRunnerCustody, tuple[CrossLineageRunnerRunCustody, ...]],
+    ],
 ]:
     """Capture every live verifier and retain custody outside durable evidence."""
 
@@ -1180,6 +704,8 @@ def _build_authenticated_cross_lineage_runner_authority() -> tuple[
         generation_capabilities: tuple[TrustedGenerationVerification, ...]
         closed_ledger_interval: ClosedCrossLineageLedgerInterval
         evidence: AuthenticatedCrossLineageRunnerEvidence
+        retained_ledger_prefix: RetainedCalibrationLedgerPrefix | None = None
+        retained_ledger_view: _ClosedLedgerIntervalView | None = None
 
     namespace = globals()
     trusted_self_module = sys.modules[__name__]
@@ -1193,6 +719,8 @@ def _build_authenticated_cross_lineage_runner_authority() -> tuple[
     trusted_usage_module = _usage_module
     trusted_manifest_module = _manifest_module
     trusted_modules = {
+        "_ledger_authority_module": _ledger_authority_module,
+        "_calibration_accounting_module": _calibration_accounting_module,
         "_adjudication_module": trusted_adjudication_module,
         "_model_portfolio_module": trusted_model_portfolio_module,
         "_benchmark_models_module": trusted_benchmark_models_module,
@@ -1217,6 +745,7 @@ def _build_authenticated_cross_lineage_runner_authority() -> tuple[
     trusted_lease_snapshot = _PidLocalOneWayLeaseRegistry.snapshot
     trusted_lease_recheck = _PidLocalOneWayLeaseRegistry.recheck
     trusted_lease_revoke = _PidLocalOneWayLeaseRegistry.revoke
+    trusted_lease_replace = _PidLocalOneWayLeaseRegistry.replace_state
     trusted_model_dump = BaseModel.model_dump
     trusted_dump_json = BaseModel.model_dump_json
     trusted_model_construct = cast(Any, BaseModel.model_construct).__func__
@@ -1224,6 +753,31 @@ def _build_authenticated_cross_lineage_runner_authority() -> tuple[
     trusted_require_ledger = _require_closed_cross_lineage_ledger_interval
     trusted_claim_ledger = _claim_closed_cross_lineage_ledger_interval
     trusted_ledger_pristine = _require_pristine_cross_lineage_ledger_runtime
+    trusted_require_prefix = require_calibration_ledger_prefix
+    trusted_retain_interval = retain_calibration_ledger_interval
+    trusted_snapshot_hash = cost_ledger_snapshot_sha256
+    # Relocating the ledger implementation must not unguard aliases still used
+    # by original runner validators and consumers.
+    trusted_ledger_exports = {
+        name: getattr(_ledger_authority_module, name)
+        for name in (
+            "AuthenticatedCrossLineageRunnerError",
+            "AuthenticatedCrossLineageLedgerEntryEvidence",
+            "AuthenticatedCrossLineageLedgerIntervalEvidence",
+            "ClosedCrossLineageLedgerInterval",
+            "OpenCrossLineageLedgerInterval",
+            "_ClosedLedgerIntervalView",
+            "_StrictFrozenEvidence",
+            "_parse_decimal",
+            "_decimal_text",
+            "_canonical_sha256",
+            "_entry_material",
+            "_entry_sha256",
+            "_snapshot_sha256",
+            "begin_cross_lineage_ledger_interval",
+            "close_cross_lineage_ledger_interval",
+        )
+    }
     trusted_require_independent = require_independent_public_model_lineage
     trusted_prepare_adjudication = prepare_cross_lineage_adjudication
     trusted_case_result_getattribute = CrossLineageAdjudicationCaseResult.__getattribute__
@@ -1252,6 +806,9 @@ def _build_authenticated_cross_lineage_runner_authority() -> tuple[
 
     trusted_usage_origin = _has_authrunner_owned_real_usage_origin
     trusted_types = {
+        "CalibrationLedgerAccounting": CalibrationLedgerAccounting,
+        "CalibrationLedgerPrefixProjection": CalibrationLedgerPrefixProjection,
+        "RetainedCalibrationLedgerPrefix": RetainedCalibrationLedgerPrefix,
         "BaseModel": BaseModel,
         "AuthenticatedCrossLineageRunnerError": AuthenticatedCrossLineageRunnerError,
         "AuthenticatedCrossLineageRunnerEvidence": AuthenticatedCrossLineageRunnerEvidence,
@@ -1284,6 +841,9 @@ def _build_authenticated_cross_lineage_runner_authority() -> tuple[
         "ExecutionEvidenceKind": ExecutionEvidenceKind,
     }
     trusted_functions = {
+        "require_calibration_ledger_prefix": trusted_require_prefix,
+        "retain_calibration_ledger_interval": trusted_retain_interval,
+        "cost_ledger_snapshot_sha256": trusted_snapshot_hash,
         "require_independent_public_model_lineage": trusted_require_independent,
         "prepare_cross_lineage_adjudication": trusted_prepare_adjudication,
         "canonical_sha256": canonical_sha256,
@@ -1351,6 +911,22 @@ def _build_authenticated_cross_lineage_runner_authority() -> tuple[
     trusted_manifest_hashlib = cast(Any, trusted_manifest_module).hashlib
     trusted_benchmark_hashlib = cast(Any, trusted_benchmark_models_module).hashlib
     public_bindings: dict[str, object] = {}
+    retention_function_states = tuple(
+        (
+            function,
+            function.__code__,
+            function.__defaults__,
+            function.__kwdefaults__,
+            tuple(sorted((function.__kwdefaults__ or {}).items())),
+        )
+        for function in (
+            trusted_require_prefix,
+            trusted_retain_interval,
+            trusted_snapshot_hash,
+            trusted_lease_replace,
+            CalibrationLedgerPrefixProjection.__init__,
+        )
+    )
 
     def require_pristine() -> None:
         trusted_ledger_pristine()
@@ -1366,10 +942,33 @@ def _build_authenticated_cross_lineage_runner_authority() -> tuple[
             or any(namespace.get(name) is not value for name, value in trusted_types.items())
             or any(namespace.get(name) is not value for name, value in trusted_functions.items())
             or any(namespace.get(name) is not value for name, value in public_bindings.items())
+            or any(
+                namespace.get(name) is not value
+                or getattr(_ledger_authority_module, name) is not value
+                for name, value in trusted_ledger_exports.items()
+            )
+            or _calibration_accounting_module.CalibrationLedgerAccounting
+            is not CalibrationLedgerAccounting
+            or _calibration_accounting_module.RetainedCalibrationLedgerPrefix
+            is not RetainedCalibrationLedgerPrefix
+            or _calibration_accounting_module.CalibrationLedgerPrefixProjection
+            is not CalibrationLedgerPrefixProjection
+            or _calibration_accounting_module.require_calibration_ledger_prefix
+            is not trusted_require_prefix
+            or _calibration_accounting_module.retain_calibration_ledger_interval
+            is not trusted_retain_interval
+            or any(
+                function.__code__ is not code
+                or function.__defaults__ is not defaults
+                or function.__kwdefaults__ is not kwdefaults
+                or tuple(sorted((function.__kwdefaults__ or {}).items())) != keyword_items
+                for function, code, defaults, kwdefaults, keyword_items in retention_function_states
+            )
             or _PidLocalOneWayLeaseRegistry.register is not trusted_lease_register
             or _PidLocalOneWayLeaseRegistry.snapshot is not trusted_lease_snapshot
             or _PidLocalOneWayLeaseRegistry.recheck is not trusted_lease_recheck
             or _PidLocalOneWayLeaseRegistry.revoke is not trusted_lease_revoke
+            or _PidLocalOneWayLeaseRegistry.replace_state is not trusted_lease_replace
             or trusted_public_lineage_module.VerifiedPublicModelLineage
             is not VerifiedPublicModelLineage
             or trusted_public_lineage_module.VerifiedIndependentPublicModelLineageProjection
@@ -2246,6 +1845,54 @@ def _build_authenticated_cross_lineage_runner_authority() -> tuple[
             raise original
         return capability, evidence
 
+    def ledger_view_for(state: RunnerState) -> _ClosedLedgerIntervalView:
+        """Replay exact closure or its originally captured, currently owned cost prefix."""
+
+        prefix = state.retained_ledger_prefix
+        view = state.retained_ledger_view
+        if prefix is None and view is None:
+            return trusted_require_ledger(state.closed_ledger_interval)
+        if (
+            type(prefix) is not RetainedCalibrationLedgerPrefix
+            or type(view) is not _ClosedLedgerIntervalView
+        ):
+            raise AuthenticatedCrossLineageRunnerError(
+                "retained runner ledger custody is incomplete"
+            )
+        require_pristine()
+        try:
+            current = trusted_require_prefix(prefix)
+        except (TypeError, ValueError) as exc:
+            raise AuthenticatedCrossLineageRunnerError(
+                "retained runner ledger custody is unavailable"
+            ) from exc
+        if type(current) is not CalibrationLedgerPrefixProjection:
+            raise AuthenticatedCrossLineageRunnerError("retained runner cost projection is invalid")
+        if current.current_accounting.blockers:
+            raise AuthenticatedCrossLineageRunnerError(
+                "retained runner ledger has unassigned or unsafe work"
+            )
+        with localcontext() as context:
+            context.prec = 64
+            spent = view.final_snapshot.spent_usd - view.initial_snapshot.spent_usd
+        final_entries = {entry.request_id: entry for entry in view.final_snapshot.entries}
+        if (
+            view.capability is not state.closed_ledger_interval
+            or view.evidence != state.evidence.ledger_interval
+            or view.ledger_identity_sha256 != current.current_accounting.ledger_identity_sha256
+            or trusted_snapshot_hash(view.initial_snapshot) != current.initial_snapshot_sha256
+            or trusted_snapshot_hash(view.final_snapshot) != current.final_snapshot_sha256
+            or tuple(entry.request_id for entry in view.new_entries) != current.interval_request_ids
+            or tuple(final_entries.get(request_id) for request_id in current.interval_request_ids)
+            != view.new_entries
+            or spent != current.interval_spent_usd
+        ):
+            raise AuthenticatedCrossLineageRunnerError(
+                "retained runner prefix differs from its original closed ledger"
+            )
+        require_pristine()
+        return view
+
     def require(
         capability: VerifiedCrossLineageRunnerCustody,
         *,
@@ -2271,7 +1918,7 @@ def _build_authenticated_cross_lineage_runner_authority() -> tuple[
             raise AuthenticatedCrossLineageRunnerError(
                 "verified cross-lineage runner custody is absent or mismatched"
             )
-        ledger_view = trusted_require_ledger(state.closed_ledger_interval)
+        ledger_view = ledger_view_for(state)
         replayed = build_evidence(
             public_lineage_capability=state.public_lineage_capability,
             ground_truth_capability=state.ground_truth_capability,
@@ -2284,6 +1931,10 @@ def _build_authenticated_cross_lineage_runner_authority() -> tuple[
                 "authenticated runner live evidence drifted after issuance"
             )
         result = projection(replayed)
+        if state.retained_ledger_prefix is not None and ledger_view_for(state) != ledger_view:
+            raise AuthenticatedCrossLineageRunnerError(
+                "retained runner ledger changed during replay"
+            )
         trusted_lease_recheck(registry, capability, lease_snapshot)
         require_pristine()
         return result
@@ -2323,20 +1974,308 @@ def _build_authenticated_cross_lineage_runner_authority() -> tuple[
                 "authenticated runner child capability revocation was incomplete"
             ) from None
 
+    # Transfer preserves its source's ledger lifetime. Only explicit retention
+    # below binds a fully verified source to original-prefix accounting custody.
+    transfer_pid = trusted_getpid()
+    transfer_campaign = transfer_trusted_candidate_benchmark_campaign_verification
+    transfer_generation = transfer_trusted_generation_verification
+    transfer_replace = replace
+    request_type = GenerationVerificationRequest
+    transfer_objects = {
+        "replace": transfer_replace,
+        "GenerationVerificationRequest": request_type,
+        "transfer_trusted_candidate_benchmark_campaign_verification": transfer_campaign,
+        "transfer_trusted_generation_verification": transfer_generation,
+    }
+    transfer_functions = (
+        transfer_campaign,
+        transfer_generation,
+        transfer_replace,
+        CrossLineageRunnerRunCustody.__init__,
+        RunnerState.__init__,
+        request_type.__init__,
+        require,
+        revoke,
+    )
+    transfer_function_states = tuple(
+        (
+            function,
+            function.__code__,
+            function.__defaults__,
+            function.__kwdefaults__,
+            tuple(sorted((function.__kwdefaults__ or {}).items())),
+        )
+        for function in transfer_functions
+    )
+
+    def require_transfer_pristine() -> None:
+        require_pristine()
+        if (
+            trusted_getpid() != transfer_pid
+            or any(namespace.get(name) is not value for name, value in transfer_objects.items())
+            or trusted_model_portfolio_module.transfer_trusted_candidate_benchmark_campaign_verification
+            is not transfer_campaign
+            or trusted_generation_evidence_module.transfer_trusted_generation_verification
+            is not transfer_generation
+            or trusted_generation_evidence_module.GenerationVerificationRequest is not request_type
+            or CrossLineageRunnerRunCustody.__init__ is not transfer_functions[3]
+            or RunnerState.__init__ is not transfer_functions[4]
+            or request_type.__init__ is not transfer_functions[5]
+            or any(
+                function.__code__ is not code
+                or function.__defaults__ is not defaults
+                or function.__kwdefaults__ is not kwdefaults
+                or tuple(sorted((function.__kwdefaults__ or {}).items())) != keyword_items
+                for function, code, defaults, kwdefaults, keyword_items in transfer_function_states
+            )
+        ):
+            raise AuthenticatedCrossLineageRunnerError(
+                "authenticated runner custody transfer runtime is not pristine"
+            )
+
+    def generation_transfer_requests(
+        run: CrossLineageRunnerRunCustody,
+        *,
+        candidate: bool,
+    ) -> tuple[GenerationVerificationRequest, ...]:
+        report = run.candidate_report if candidate else run.adjudication_report
+        cases = (
+            run.candidate_report.results[0].cases if candidate else run.adjudication_report.cases
+        )
+        if not 1 <= len(cases) <= 512:
+            raise AuthenticatedCrossLineageRunnerError(
+                "runner transfer exceeds the original generation proof bound"
+            )
+        requests: list[GenerationVerificationRequest] = []
+        for case in cases:
+            usage = case.usage_record
+            if type(usage) is not UsageRecord:
+                raise AuthenticatedCrossLineageRunnerError("runner transfer lacks original usage")
+            target = run.adjudication_report.target
+            requests.append(
+                request_type(
+                    benchmark_report_sha256=report.report_sha256,
+                    case_id=case.case_id,
+                    exact_model_id=(
+                        run.candidate_report.results[0].target.model_id
+                        if candidate
+                        else target.judge_model_id
+                    ),
+                    canonical_model_id=(
+                        required_routing_text(usage, "canonical_model")
+                        if candidate
+                        else target.judge_canonical_model_id
+                    ),
+                    catalog_identity_binding_sha256=(
+                        required_routing_text(usage, "catalog_identity_binding_sha256")
+                        if candidate
+                        else target.judge_catalog_identity_binding_sha256
+                    ),
+                    discovery_evidence_sha256=(
+                        required_routing_text(usage, "discovery_evidence_sha256")
+                        if candidate
+                        else target.judge_discovery_evidence_sha256
+                    ),
+                    expected_provider_name=(
+                        required_routing_text(usage, "selected_provider_name")
+                        if candidate
+                        else target.judge_provider_name
+                    ),
+                    usage_record=usage,
+                )
+            )
+        return tuple(requests)
+
+    def transfer(
+        capability: VerifiedCrossLineageRunnerCustody,
+        *,
+        evidence: AuthenticatedCrossLineageRunnerEvidence,
+    ) -> tuple[VerifiedCrossLineageRunnerCustody, tuple[CrossLineageRunnerRunCustody, ...]]:
+        """Consume one runner and all children; publish only a fully replayed successor.
+
+        This moves ownership, not freshness or the source's ledger lifetime. Original adapter
+        scopes must not use it until they implement an authenticated handoff.
+        A failed transaction never revives consumed custody or drops liabilities.
+        """
+
+        require_transfer_pristine()
+        original_projection = require(capability, evidence=evidence)
+        lease = trusted_lease_snapshot(registry, capability)
+        state = lease.state
+        requests = tuple(
+            (
+                generation_transfer_requests(run, candidate=True),
+                generation_transfer_requests(run, candidate=False),
+            )
+            for run in state.runs
+        )
+        campaigns = list(state.campaign_capabilities)
+        generations = list(state.generation_capabilities)
+        require_transfer_pristine()
+        trusted_lease_recheck(registry, capability, lease)
+        # Only one caller can remove the source. No child move begins before it
+        # succeeds; concurrent readers recheck this same one-way lease afterward.
+        trusted_lease_revoke(registry, capability)
+        successor: VerifiedCrossLineageRunnerCustody | None = None
+        registered = False
+        try:
+            moved_runs: list[CrossLineageRunnerRunCustody] = []
+            for index, run in enumerate(state.runs):
+                require_transfer_pristine()
+                campaigns[index] = transfer_campaign(
+                    campaigns[index],
+                    portfolio_sha256=run.candidate_portfolio.portfolio_sha256,
+                    reports=run.candidate_campaign_reports,
+                    policy_sha256=run.candidate_campaign_policy_sha256,
+                    effective_config_sha256=run.candidate_campaign_effective_config_sha256,
+                )
+                for offset, exact_requests in enumerate(requests[index]):
+                    child = index * 2 + offset
+                    generations[child] = transfer_generation(
+                        generations[child], requests=exact_requests
+                    )
+                moved_runs.append(
+                    transfer_replace(
+                        run,
+                        candidate_campaign_verification=campaigns[index],
+                        candidate_generation_verification=generations[index * 2],
+                        judge_generation_verification=generations[index * 2 + 1],
+                    )
+                )
+            retained = tuple(moved_runs)
+            moved_state = transfer_replace(
+                state,
+                runs=retained,
+                campaign_capabilities=tuple(campaigns),
+                generation_capabilities=tuple(generations),
+            )
+            require_transfer_pristine()
+            successor = trusted_object_new(trusted_runner_capability_type)
+            registered = True
+            trusted_lease_register(registry, successor, moved_state)
+            successor_lease = trusted_lease_snapshot(registry, successor)
+            if require(successor, evidence=evidence) != original_projection:
+                raise AuthenticatedCrossLineageRunnerError(
+                    "runner successor differs from its original verified projection"
+                )
+            require_transfer_pristine()
+            trusted_lease_recheck(registry, successor, successor_lease)
+        except BaseException as original:
+            failure: BaseException | None = None
+            if registered and successor is not None:
+                try:
+                    trusted_lease_revoke(registry, successor)
+                except BaseException as exc:
+                    failure = exc
+            try:
+                trusted_child_inventory_revoke(
+                    campaigns=tuple(campaigns),
+                    generations=tuple(generations),
+                    expected_campaign_count=state.run_count,
+                )
+            except BaseException as exc:
+                if failure is None:
+                    failure = exc
+            if failure is not None:
+                if not isinstance(failure, Exception):
+                    raise failure from None
+                raise AuthenticatedCrossLineageRunnerError(
+                    "authenticated runner transfer cleanup was incomplete"
+                ) from original
+            raise
+        return successor, retained
+
+    def retain(
+        capability: VerifiedCrossLineageRunnerCustody,
+        *,
+        evidence: AuthenticatedCrossLineageRunnerEvidence,
+        accounting: CalibrationLedgerAccounting,
+    ) -> tuple[VerifiedCrossLineageRunnerCustody, tuple[CrossLineageRunnerRunCustody, ...]]:
+        """Move verified custody into one originally captured ledger prefix, never data alone.
+
+        Retention records real cost history before movement. A failed move does
+        not erase that accounting fact or imply a completed candidate campaign.
+        The accounting owner must remain live through every native consumption.
+        """
+
+        require_transfer_pristine()
+        original = require(capability, evidence=evidence)
+        lease = trusted_lease_snapshot(registry, capability)
+        state = lease.state
+        if state.retained_ledger_prefix is not None or state.retained_ledger_view is not None:
+            raise AuthenticatedCrossLineageRunnerError("runner ledger custody is already retained")
+        view = trusted_require_ledger(state.closed_ledger_interval)
+        prefix = trusted_retain_interval(accounting, interval=state.closed_ledger_interval)
+        require_transfer_pristine()
+        trusted_lease_recheck(registry, capability, lease)
+        successor, runs = transfer(capability, evidence=evidence)
+        try:
+            moved = trusted_lease_snapshot(registry, successor)
+            retained_state = transfer_replace(
+                moved.state, retained_ledger_prefix=prefix, retained_ledger_view=view
+            )
+            retained_lease = trusted_lease_replace(registry, successor, moved, retained_state)
+            if require(successor, evidence=evidence) != original:
+                raise AuthenticatedCrossLineageRunnerError(
+                    "retained runner differs from its original verified projection"
+                )
+            require_transfer_pristine()
+            trusted_lease_recheck(registry, successor, retained_lease)
+        except BaseException as original_failure:
+            failure: BaseException | None = None
+            try:
+                trusted_lease_revoke(registry, successor)
+            except BaseException as exc:
+                failure = exc
+            try:
+                trusted_child_inventory_revoke(
+                    campaigns=tuple(
+                        cast(
+                            TrustedCandidateBenchmarkCampaignVerification,
+                            run_child_capability(run, "candidate_campaign_verification"),
+                        )
+                        for run in runs
+                    ),
+                    generations=tuple(
+                        cast(TrustedGenerationVerification, run_child_capability(run, name))
+                        for run in runs
+                        for name in (
+                            "candidate_generation_verification",
+                            "judge_generation_verification",
+                        )
+                    ),
+                    expected_campaign_count=state.run_count,
+                )
+            except BaseException as exc:
+                if failure is None:
+                    failure = exc
+            if failure is not None:
+                if not isinstance(failure, Exception):
+                    raise failure from None
+                raise AuthenticatedCrossLineageRunnerError(
+                    "retained runner cleanup was incomplete"
+                ) from original_failure
+            raise
+        return successor, runs
+
     public_bindings.update(
         {
             "issue_verified_cross_lineage_runner_custody": issue,
             "require_verified_cross_lineage_runner_custody": require,
             "revoke_verified_cross_lineage_runner_custody": revoke,
+            "transfer_verified_cross_lineage_runner_custody": transfer,
+            "retain_verified_cross_lineage_runner_custody": retain,
         }
     )
-    return issue, require, revoke
+    return issue, require, revoke, transfer, retain
 
 
 (
     issue_verified_cross_lineage_runner_custody,
     require_verified_cross_lineage_runner_custody,
     revoke_verified_cross_lineage_runner_custody,
+    transfer_verified_cross_lineage_runner_custody,
+    retain_verified_cross_lineage_runner_custody,
 ) = _build_authenticated_cross_lineage_runner_authority()
 del _build_authenticated_cross_lineage_runner_authority
 
@@ -2358,5 +2297,7 @@ __all__ = [
     "close_cross_lineage_ledger_interval",
     "issue_verified_cross_lineage_runner_custody",
     "require_verified_cross_lineage_runner_custody",
+    "retain_verified_cross_lineage_runner_custody",
     "revoke_verified_cross_lineage_runner_custody",
+    "transfer_verified_cross_lineage_runner_custody",
 ]

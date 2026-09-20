@@ -257,8 +257,10 @@ def test_projection_is_not_an_audit_config_or_runtime_authority() -> None:
     projection = project_public_model_lineage_configuration(resolve_verified_public_model_lineage())
 
     assert type(projection) is PublicModelLineageConfigurationProjection
-    with pytest.raises(TypeError, match="init=False"):
+    # dataclasses.replace uses ValueError on 3.12 and TypeError on 3.13.
+    with pytest.raises((TypeError, ValueError), match="init=False"):
         replace(projection, source_egress_authorized=True)  # type: ignore[arg-type]
+    assert all(getattr(projection, name) is False for name in _FALSE_AUTHORITY_FIELDS)
     assert not hasattr(projection, "model_for")
     assert not hasattr(projection, "routing_evidence")
     assert not hasattr(projection, "authorize")

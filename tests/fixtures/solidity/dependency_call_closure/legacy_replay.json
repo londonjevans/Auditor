@@ -1,0 +1,103 @@
+{
+  "basis": "Captured from the independently revalidated pre-static-closure implementation on existing synthetic dependency fixtures; no runtime or audit authority.",
+  "source_sha256s": {
+    "lib/Math.sol": "6655ccab4d4c6f112fb2cdd1a8b343c8902605c2f1a50d2804d7c037f8f858c2",
+    "src/Controller.sol": "7f3458b119a6f8f0bbb4c4f21f77754683d64e2d7cd251659db4a6bad06d5494",
+    "src/IReserve.sol": "0f771196211aa5eb21dadc3955e94b085b9e933f585d90c0f42b1026d6b6da1b",
+    "src/Reserve.sol": "4ec691c2e77296c67a21b78c84758ce1489b28781b26b2fd9573236275355df7",
+    "src/SecondReserve.sol": "5f6aa534819b017c8232a05c46a5fe9b39a7447789c29bcddc20508b8fc04496"
+  },
+  "cases": [
+    {
+      "manifest_json_sha256": "35502ffb96d185faf1ca01d137f5e6edea5afdde270839001030facf4d1b5bca",
+      "manifest_sha256": "4cedf5096c5ba1f96637128bf3c9f923d2b5821b1f2d2e03a43f3a5dd255a0a6",
+      "options": {},
+      "prompt_sha256": "60a192d7deddf311f84cdeb09d1abeb285a03d1f8d6fca7a7df07cedd7315aed",
+      "schema_version": "1.0"
+    },
+    {
+      "manifest_json_sha256": "caf7c1fdac08706c0df7217c4cb66433b57cd8fa5bc19b33da4b1e5257f22bba",
+      "manifest_sha256": "98c5224f8fa454aef51bebdb0a88dc1487c74357f322ed084261980ff990ceaf",
+      "options": {
+        "dependency_remapping_text": "# Synthetic local namespace only; no dependency fetching.\n@local/=lib/\n"
+      },
+      "prompt_sha256": "7211347c3cd60442741ffb78b9598361f6df6dde5c58252f736b51f72e74fa30",
+      "schema_version": "1.1"
+    },
+    {
+      "manifest_json_sha256": "53e6af619df6f5948b59a23097cede18ab7e73bc1fc5c546514bd4e70e528120",
+      "manifest_sha256": "bb9b1b69fb5ddb5640eed725b68ecdcc28e144b6b4ea69f000665fd8e4c8f583",
+      "options": {
+        "dependency_remapping_text": "# Synthetic local namespace only; no dependency fetching.\n@local/=lib/\n",
+        "dependency_target_context": true
+      },
+      "prompt_sha256": "781c99c90f578c09c3b1a3f7e3cda29b2de3a73328f24e13a79ad54ebc070841",
+      "schema_version": "1.2"
+    },
+    {
+      "manifest_json_sha256": "1f29d8b4643e28a578be0f7af338f11d0465ffad6b07b5a8b8593f7c2923e11f",
+      "manifest_sha256": "be9a141b0f4dbd75640297da395c484880d00c752bec904087917efc39cc62cb",
+      "options": {
+        "dependency_remapping_text": "# Synthetic local namespace only; no dependency fetching.\n@local/=lib/\n",
+        "dependency_scoped_context": true,
+        "dependency_target_context": true
+      },
+      "prompt_sha256": "98f8638487a7d5695f6e025f22d276cc64445da6f1513b6a656f6e865b4514df",
+      "schema_version": "1.4"
+    },
+    {
+      "manifest_json_sha256": "36a1508d9a45fb02b9c28c08363f2bc287418a0d5b3e6c465417aab2a6375df1",
+      "manifest_sha256": "a484a2605bf0bf110336203dcfe93a4fe0507fcaff2a6b4840ca1b6e4b2379df",
+      "options": {
+        "dependency_call_context": true,
+        "dependency_remapping_text": "# Synthetic local namespace only; no dependency fetching.\n@local/=lib/\n",
+        "dependency_scoped_context": true,
+        "dependency_target_context": true
+      },
+      "prompt_sha256": "482bbe6b3eb249f7ee50a73ddaeecc03b25b230d8852d912a86de83f883e89d3",
+      "schema_version": "1.5"
+    },
+    {
+      "manifest_json_sha256": "ad22e5cc50b3534bcf99549325ca7292e1058b5f9a48416a1a5be69831e4229f",
+      "manifest_sha256": "eea3612117bc0789ac35a32935d4211f21d84ebd2f7f18473890c4e4f66303af",
+      "options": {
+        "dependency_call_context": true,
+        "dependency_remapping_text": "# Synthetic local namespace only; no dependency fetching.\n@local/=lib/\n",
+        "dependency_scoped_context": true,
+        "dependency_syntax_context": true,
+        "dependency_target_context": true
+      },
+      "prompt_sha256": "3f0db22d4e1a3aac8ddc91ce1fc5098459baa71d3d4e9070c2347e0c361a450c",
+      "schema_version": "1.6"
+    },
+    {
+      "manifest_json_sha256": "ee84257d730e677ba89949327b8d8424e79b8a9aae09b0204a81840395a4d671",
+      "manifest_sha256": "601f9a8ff769fa6f5042c726483a880d26b28d31e553b0fa1bbfe03f591ef6b3",
+      "options": {
+        "dependency_call_context": true,
+        "dependency_modifier_context": true,
+        "dependency_remapping_text": "# Synthetic local namespace only; no dependency fetching.\n@local/=lib/\n",
+        "dependency_scoped_context": true,
+        "dependency_syntax_context": true,
+        "dependency_target_context": true
+      },
+      "prompt_sha256": "6a2933438198cb0d72a6e527af212601385af1c56cb76a1d3ac384ba8e779396",
+      "schema_version": "1.7"
+    },
+    {
+      "manifest_json_sha256": "a62dbdcb1cae1fa6d50d9a43e36b15c6b28ad9aa6836b4de0516b5f30c4622f2",
+      "manifest_sha256": "0a1014b2c121716da0348646f86909f4fb57b82131adf5fdb48c03348b72de9b",
+      "options": {
+        "dependency_call_context": true,
+        "dependency_constructor_context": true,
+        "dependency_modifier_context": true,
+        "dependency_remapping_text": "# Synthetic local namespace only; no dependency fetching.\n@local/=lib/\n",
+        "dependency_scoped_context": true,
+        "dependency_syntax_context": true,
+        "dependency_target_context": true
+      },
+      "prompt_sha256": "df7fe5ed34fa76a9298997616b692797eac1714621c6ae9b96bf01b87416a054",
+      "schema_version": "1.8"
+    }
+  ]
+}

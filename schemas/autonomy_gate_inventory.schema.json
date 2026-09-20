@@ -131,7 +131,7 @@
       "type": "object"
     },
     "CompletionInputSourceKind": {
-      "description": "Closed authoritative source families scanned by Phase 0.\n\n``DIRECT_ENVIRONMENT_INPUT`` retains the ticket vocabulary but covers the full\nambient runtime boundary: process variables, executable resolution, home/cwd/temp\nroots, host/platform/process identity, Python runtime identity, and clock\nobservations. ``ENTROPY_INPUT`` is the separately frozen finite set of random-value\nloci reviewed for completion-visible authority, resume, ledger, and replay effects.",
+      "description": "Closed authoritative source families scanned by Phase 0.\n\n``DIRECT_ENVIRONMENT_INPUT`` retains the ticket vocabulary but covers the full\nambient runtime boundary: process variables, executable resolution, home/cwd/temp\nroots, host/platform/process identity, Python runtime identity, and clock\nobservations. ``ENTROPY_INPUT`` is the separately frozen finite set of random-value\nloci reviewed for completion-visible authority, resume, ledger, and replay effects.\n``RUNTIME_EXECUTION_INPUT`` separately binds elapsed clocks, imported module state,\nprocess/descriptor observations and generated execution producers. It is a conservative\nsyntactic inventory, not proof of dynamic dataflow or native dependency closure.",
       "enum": [
         "AUDIT_CONFIG_LEAF",
         "AUDIT_RUN_OPTION_LEAF",
@@ -143,6 +143,7 @@
         "COMPLETION_ENTRYPOINT_PARAMETER",
         "DIRECT_ENVIRONMENT_INPUT",
         "ENTROPY_INPUT",
+        "RUNTIME_EXECUTION_INPUT",
         "AUDITED_MODULE_UNIVERSE",
         "EXPLICIT_NON_FIELD_GATE",
         "REQUIRED_MISSING_GATE"
@@ -214,7 +215,7 @@
       "type": "integer"
     },
     "completion_entrypoint_parameter_count": {
-      "const": 355,
+      "const": 360,
       "title": "Completion Entrypoint Parameter Count",
       "type": "integer"
     },
@@ -230,7 +231,7 @@
       "type": "integer"
     },
     "discovery_scope": {
-      "const": "TYPED_BOUNDARIES_REGISTERED_ENTRYPOINTS_RUNTIME_PACKAGE_RESOURCES_UNSEALED_ENV_HOST_WALL_CLOCK_AUTHORITY_ENTROPY_FILESYSTEM_INTERACTIVE_OPAQUE_AUTHORITIES_EXPLICIT_MISSING_OBJECTIVE_BOUNDARIES",
+      "const": "TYPED_BOUNDARIES_REGISTERED_ENTRYPOINTS_RUNTIME_PACKAGE_RESOURCES_UNSEALED_ENV_HOST_WALL_CLOCK_AUTHORITY_ENTROPY_FILESYSTEM_INTERACTIVE_RUNTIME_STATE_ELAPSED_CLOCK_PROCESS_IO_GENERATED_CODE_OPAQUE_AUTHORITIES_EXPLICIT_MISSING_OBJECTIVE_BOUNDARIES",
       "title": "Discovery Scope",
       "type": "string"
     },
@@ -344,8 +345,8 @@
       "additionalProperties": {
         "type": "integer"
       },
-      "maxProperties": 13,
-      "minProperties": 13,
+      "maxProperties": 14,
+      "minProperties": 14,
       "propertyNames": {
         "$ref": "#/$defs/CompletionInputSourceKind"
       },

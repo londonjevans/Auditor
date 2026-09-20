@@ -1,0 +1,79 @@
+{
+  "predecessor_module_sha256s": {
+    "src/mmaudit/solidity/dependency_targets.py": "2fd4e54a9d291b94e213cb6554138ca0aa7b834aff3f2b3a6720acd742f44371",
+    "src/mmaudit/solidity/dependency_closure.py": "7e7ffc995641b9d8f1ac4e9c5c3cd62a2fde13bff44f16f54ba9907bb4a3b1cc",
+    "src/mmaudit/models/development_corpus.py": "1df2a8bcf22e02b7fc4bc2c790f1ec6d566b16e08768b06fbe286e38bf4083e5"
+  },
+  "source_sha256s": {
+    "lib/Math.sol": "6655ccab4d4c6f112fb2cdd1a8b343c8902605c2f1a50d2804d7c037f8f858c2",
+    "src/AliasController.sol": "c55c3fa759b30fe99c32888977ab4285381fe68d313a17613bf5aad3ce8e7feb",
+    "src/Controller.sol": "7f3458b119a6f8f0bbb4c4f21f77754683d64e2d7cd251659db4a6bad06d5494",
+    "src/IReserve.sol": "0f771196211aa5eb21dadc3955e94b085b9e933f585d90c0f42b1026d6b6da1b",
+    "src/InheritedReserve.sol": "6ed449dca7c5b8479956b6d7e384f2bc8b14d23d941179ce9daba153d9c6df50",
+    "src/Intermediate.sol": "d9ff6e8a7c8961bdb39c94e45946001bfba1ec2deb78121e24ae6474f51b7cf9",
+    "src/Reserve.sol": "4ec691c2e77296c67a21b78c84758ce1489b28781b26b2fd9573236275355df7",
+    "src/SecondReserve.sol": "5f6aa534819b017c8232a05c46a5fe9b39a7447789c29bcddc20508b8fc04496"
+  },
+  "corpus_id": "synthetic-scoped-predecessor",
+  "source_scope": "OPERATOR_SUPPLIED_PROTOCOL",
+  "remapping_text": "@local/=lib/\n",
+  "artifacts": {
+    "1.0": {
+      "manifest_sha256": "092f5fa7d23c9703c610b7c152da1fea03de7382f1a61a85fd2810ae06956829",
+      "witness_sha256": null,
+      "prompt_sha256s": {
+        "lib/Math.sol": "0ba6b9848d31d99c248d1c3594300bc238dfee4ceeaff093e34bb31efc684150",
+        "src/AliasController.sol": "ded4389d23b17dc3da395087e37112324f1323007bca934aacdb1f77c319656b",
+        "src/Controller.sol": "e99b7586424e92b999486b3f9b9372c4bd287226d87cf5c4686508c983fa0a5c",
+        "src/IReserve.sol": "aee3bcd04add3650ac75ce655ef1738afaf6adbfe85df10ba0751f9b7c6666b2",
+        "src/InheritedReserve.sol": "bed2756306f8af11487cb706b44c39caee51a6d31ce32f846a04f1a38b0e2c2f",
+        "src/Intermediate.sol": "843c4cf754b368026d32cd6b9143a399dacbc34f5c4e8d0138556869ec804ba0",
+        "src/Reserve.sol": "69b41a547196e26d38c7027ac6c81f8a0d289c5b8a05e5958862258173acd044",
+        "src/SecondReserve.sol": "09fb282616511b3b4e11eaaef6aa805228180c5c00204e0fb401b23bac4357cc"
+      }
+    },
+    "1.1": {
+      "manifest_sha256": "5dafc7f7f2ee427e6a96d0d27868790c5cef708cdd9711fba8ae1bf6c4dce175",
+      "witness_sha256": "7db03e63ce480f3a4542c484c8652e6ce3f6330ac37e82789b6dcaf94501c8dc",
+      "prompt_sha256s": {
+        "lib/Math.sol": "0c7869f76099249f3fe29c99557de0abf4d5fa986d16de1bb14c6dcf5110b811",
+        "src/AliasController.sol": "f297ff7313f81f8ae0b2ed1a1a9b099a828e3b0e21d482745592859f943abb04",
+        "src/Controller.sol": "63f82d9f87735186d5e4ff8b63f977d5676474f2c88115d7d8d2a9166b44db46",
+        "src/IReserve.sol": "c11c7995d583b5f4e813a74783e64435c1ffece3006e33d8a13ad1fb9d82cefa",
+        "src/InheritedReserve.sol": "78ed30185ec87eda6d72059a4345796cc9cf86191d8b8ebfe1e65b62388f8c48",
+        "src/Intermediate.sol": "01b49b2a2be0383ae5dd4516300548341cc5e58dedbbb8281a7c12b89d248169",
+        "src/Reserve.sol": "90fd185f41e9ac8c7ab478ccdfb55aa812732551260d10ae3e91adc830574796",
+        "src/SecondReserve.sol": "364d64db982fc58f90fea14258b183a0cd84b6a415397c47b3af338119b2c04f"
+      }
+    },
+    "1.2": {
+      "manifest_sha256": "62f278b72d8e9c9819fb1368f692fac3e56b31ae97bea8d0efc729a983dda97b",
+      "witness_sha256": "ecf48ef415c309a3163d1bbba118db328a0432ca39deb09d5c6fd3620ee0e782",
+      "prompt_sha256s": {
+        "lib/Math.sol": "fe9e219e930e6a665c646845731ab70fbb7cc1ad75a5063bdbb7e3aa7fa4d404",
+        "src/AliasController.sol": "5d8d7c000fc52ccd0f56713f80c99741702a6934fcf46d255f171dddd29a8790",
+        "src/Controller.sol": "b6b5cad0cd087c8508dfe0a3359ca2ec2f0cf52715b7ffce253376c228a834ed",
+        "src/IReserve.sol": "1ac294c02ed27d25ad7d63f56de8ce83908659bb6d4f3275363ae6288a614764",
+        "src/InheritedReserve.sol": "4bb12bc9f1ea1824f4e0f9cc753bcac11fc0d5b612ecfc260c10cca4f03e6caa",
+        "src/Intermediate.sol": "fc8e6e23aa138e4f85505895c355c9424d69f8e35be81380c1e1145deadb4fcf",
+        "src/Reserve.sol": "7c1fc8b31fdf80349882e4a2caed5586302272f93b695bcd2e2a1be341664240",
+        "src/SecondReserve.sol": "9fd4dabb199744fa2409cee710506d88053186297d37efa03e192474b51908d9"
+      }
+    },
+    "1.3": {
+      "manifest_sha256": "4eee90a8643b6ad498a70467e27eeea5696b9ce14a07e0e1f93ded56c7b63173",
+      "witness_sha256": "ecf48ef415c309a3163d1bbba118db328a0432ca39deb09d5c6fd3620ee0e782",
+      "prompt_sha256s": {
+        "lib/Math.sol": "ef48f63150c70ac1878fc6690c04d614452715b7addf43131d9bbf76b9f3b72b",
+        "src/AliasController.sol": "93f92d20cd7868c787f5583972cd7a02dbdc6c0b069427e76bb3a4321e428d4a",
+        "src/Controller.sol": "25fb36c56846e9bfac1d73a1435bfc4d200d98e40281d5f8fbb0378c36091324",
+        "src/IReserve.sol": "8928d276e63ea4f626e23f5549af6c41c4fe3250bfb23e9a449be807cb254205",
+        "src/InheritedReserve.sol": "f861ae3096251bdbb748746389a5c33369514cb9cb0d5c966ae7231522749362",
+        "src/Intermediate.sol": "56144837a05e20f95a2eec4f0ef13250562d5a55edaa8c9a1ecb488a30975d25",
+        "src/Reserve.sol": "d0de16b40c843e4ccd7d674a4721e4e660ea128c826f633287e295ad3dcd2d82",
+        "src/SecondReserve.sol": "b29d5395667d5ae5d9fdca0ab3d32aeb39b195e0da9bb32821f205fd95b1786e"
+      }
+    }
+  },
+  "all_four_versions_exact": true
+}

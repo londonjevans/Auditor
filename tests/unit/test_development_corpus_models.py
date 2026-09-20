@@ -9,6 +9,9 @@ import pytest
 from jsonschema import Draft202012Validator
 
 from mmaudit.models.development_corpus import (
+    MAX_DEVELOPMENT_CORPUS_BYTES,
+    MAX_DEVELOPMENT_CORPUS_FILE_BYTES,
+    MAX_DEVELOPMENT_CORPUS_FILES,
     DevelopmentCorpusManifest,
     DevelopmentCorpusMaterial,
     DevelopmentCorpusPlan,
@@ -56,7 +59,10 @@ def test_fourteen_file_plan_has_full_selected_context_and_exact_versioned_source
     )
 
 
-@pytest.mark.parametrize("scope", ["OPERATOR_SUPPLIED_SYNTHETIC", "OPERATOR_SUPPLIED_PUBLIC"])
+@pytest.mark.parametrize(
+    "scope",
+    ["OPERATOR_SUPPLIED_SYNTHETIC", "OPERATOR_SUPPLIED_PUBLIC", "OPERATOR_SUPPLIED_PROTOCOL"],
+)
 def test_declared_scope_never_authenticates_provenance_or_dependency_completeness(scope):
     manifest = freeze_development_corpus(
         corpus_id="local", source_scope=scope, source_files=supplied_sources()
@@ -129,14 +135,22 @@ def test_exact_source_manifest_rejects_invalid_or_ambiguous_bytes(kind):
     elif kind == "case_alias":
         sources = (("A.sol", b"x"), ("a.sol", b"x"))
     elif kind == "too_many":
-        sources = tuple((f"src/F{i:03d}.sol", b"x") for i in range(65))
+        sources = tuple(
+            (f"src/F{i:03d}.sol", b"x") for i in range(MAX_DEVELOPMENT_CORPUS_FILES + 1)
+        )
     elif kind == "whole_bound":
-        sources = tuple((f"src/F{i:03d}.sol", b"x" * 65536) for i in range(9))
+        sources = (
+            *(
+                (f"src/F{i:03d}.sol", b"x" * MAX_DEVELOPMENT_CORPUS_FILE_BYTES)
+                for i in range(MAX_DEVELOPMENT_CORPUS_BYTES // MAX_DEVELOPMENT_CORPUS_FILE_BYTES)
+            ),
+            ("src/Overflow.sol", b"x"),
+        )
     else:
         content = {
             "empty_bytes": b"",
             "bytearray": bytearray(b"x"),
-            "too_large": b"x" * 65537,
+            "too_large": b"x" * (MAX_DEVELOPMENT_CORPUS_FILE_BYTES + 1),
             "too_many_lines": b"x\n" * 10001,
             "invalid_utf8": b"\xff",
             "nul": b"x\x00",

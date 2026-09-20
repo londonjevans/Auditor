@@ -9,6 +9,7 @@ import pytest
 import scripts.generate_release_schemas as release_schema_generator
 from mmaudit.benchmark.cross_lineage_adjudication import CrossLineageAdjudicationReport
 from mmaudit.config import ModelLineageConfig
+from mmaudit.constants import SPECIALIST_INVESTIGATOR_ROLES
 from mmaudit.models.authenticated_calibration import AuthenticatedModelCalibrationArtifact
 from mmaudit.models.authenticated_runner import AuthenticatedCrossLineageRunnerEvidence
 from mmaudit.models.authenticated_runner_cost_plan import AuthenticatedRunnerStagedCostPlan
@@ -42,8 +43,14 @@ from mmaudit.models.policy_selection import (
     AuditModelSelection,
     AuditModelSelectionEvidenceBundle,
 )
+from mmaudit.models.provisional_findings import ProvisionalFindingInventory
 from mmaudit.models.public_lineage_authority import PublicModelLineageEvidenceBundle
 from mmaudit.models.qualification import QualificationPolicy
+from mmaudit.models.route_cost_reservations import (
+    ExactRouteCostReservation,
+    RouteCostReservationPlanningEnvelope,
+    RouteCostReservationPolicy,
+)
 from mmaudit.models.route_runtime_evidence import RouteRuntimeEvidenceArtifact
 from mmaudit.models.schemas import ConsensusReviewArtifact
 from mmaudit.orchestration.autonomy_gate_inventory import (
@@ -61,6 +68,150 @@ from mmaudit.orchestration.managed_toolchain import (
 from scripts.generate_release_schemas import MODELS, rendered_schema
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_provisional_findings_schema_requires_explicit_false_credit_and_original_bindings() -> None:
+    name = "provisional_truncated_findings.schema.json"
+    assert MODELS[name] is ProvisionalFindingInventory
+    schema = json.loads(rendered_schema(name, MODELS[name]))
+    assert schema["additionalProperties"] is False
+    assert schema["properties"]["evidence_authority"]["const"] == "comparison_required"
+    for field in (
+        "review_credit_authorized",
+        "coverage_credit_authorized",
+        "validated_finding_authorized",
+        "completion_authorized",
+    ):
+        assert field in schema["required"]
+        assert schema["properties"][field]["const"] is False
+        assert schema["properties"][field]["type"] == "boolean"
+        assert "default" not in schema["properties"][field]
+    assert {
+        "campaign_id",
+        "manifest_sha256",
+        "journal_evidence_sha256",
+        "scheduler_artifact_sha256",
+        "inventory_sha256",
+    } <= set(schema["required"])
+    assert schema["properties"]["sources"]["maxItems"] == 100_000
+    source = schema["$defs"]["ProvisionalFindingSource"]
+    assert source["additionalProperties"] is False
+    assert {
+        "source_entry_sha256",
+        "task_id",
+        "request_id",
+        "usage_record_sha256",
+        "original_response_sha256",
+        "truncation_projection_sha256",
+        "findings_state",
+        "surface_reviews_state",
+        "summary_state",
+    } <= set(source["required"])
+    assert source["properties"]["records"]["maxItems"] == 1000
+
+
+def test_runtime_schema_preserves_exact_smoke_source_version_and_false_authority() -> None:
+    name = "route_runtime_evidence_artifact.schema.json"
+    schema = json.loads(rendered_schema(name, MODELS[name]))
+    assert schema["properties"]["schema_version"]["enum"] == ["1.0", "1.1"]
+    assert schema["additionalProperties"] is False
+    mode = schema["allOf"][0]
+    assert mode["if"] == {
+        "properties": {"schema_version": {"const": "1.1"}},
+        "required": ["schema_version"],
+    }
+    assert mode["then"]["required"] == ["source_kind"]
+    for branch, version, kind in (
+        ("then", "1.3", "AUTHENTICATED_RUNNER_NONCREDITING_SMOKE_V1_3"),
+        ("else", "1.2", "AUTHENTICATED_RUNNER_NONCREDITING_SMOKE_V1_2"),
+    ):
+        assert mode[branch]["properties"] == {
+            "source_kind": {"const": kind},
+            "source_bundle": {"properties": {"schema_version": {"const": version}}},
+        }
+    for field in (
+        "provider_call_authorized",
+        "campaign_admission_authorized",
+        "runner_custody_authorized",
+    ):
+        assert schema["properties"][field]["const"] is False
+
+
+def test_operator_refresh_schema_separates_reservations_from_total_cap_evidence() -> None:
+    name = "audit_model_refresh_pricing_attempt_evidence.schema.json"
+    schema = json.loads(rendered_schema(name, MODELS[name]))
+    assert schema["properties"]["schema_version"]["enum"] == ["1.0", "1.1", "1.2"]
+    assert schema["additionalProperties"] is False
+    mode = schema["allOf"][0]
+    assert mode["if"]["properties"]["schema_version"] == {"const": "1.2"}
+    assert set(mode["then"]["required"]) == {
+        "operator_cost_reservation",
+        "route_predicate_profile",
+        "route_predicate_profile_sha256",
+    }
+    assert mode["then"]["properties"]["operator_cost_reservation"] == {"type": "object"}
+    assert mode["then"]["properties"]["route_predicate_profile"]["type"] == "object"
+    assert mode["then"]["not"] == {
+        "anyOf": [
+            {"required": ["price_cap_algorithm"]},
+            {"required": ["price_component_unit_envelopes"]},
+        ]
+    }
+    assert mode["else"] == {"not": {"required": ["operator_cost_reservation"]}}
+    for field in ("pricing_use_authorized", "provider_access_authorized"):
+        assert schema["properties"][field]["const"] is False
+
+
+def test_operator_planning_schema_does_not_claim_request_or_transport_authority() -> None:
+    name = "route_cost_reservation_planning_envelope.schema.json"
+    assert MODELS[name] is RouteCostReservationPlanningEnvelope
+    schema = json.loads(rendered_schema(name, MODELS[name]))
+    assert schema["additionalProperties"] is False
+    assert schema["properties"]["status"]["const"] == "NONAUTHORIZING_COST_PLANNING"
+    assert {"policy", "route", "exact_pricing", "components", "planning_sha256"} <= set(
+        schema["required"]
+    )
+    assert not {"request_material_sha256", "request_token_plan", "authorizes_dispatch"} & set(
+        schema["properties"]
+    )
+
+
+def test_operator_reservation_schemas_keep_cost_basis_separate_from_provider_guarantees() -> None:
+    name = "route_cost_reservation.schema.json"
+    assert release_schema_generator.MODELS[name] is ExactRouteCostReservation
+    schema = json.loads(release_schema_generator.rendered_schema(name, ExactRouteCostReservation))
+    assert schema["properties"]["status"]["const"] == "NONAUTHORIZING_COST_RESERVATION"
+    assert "expressible" not in schema["properties"] and "no_weaker" not in schema["properties"]
+    assert set(schema["$defs"]["ReservationRateBasis"]["enum"]) == {
+        "PROVIDER_CAPPED_RATE",
+        "OPERATOR_RESERVED_UNCAPPABLE_RATE",
+    }
+    policy_name = "route_cost_reservation_policy.schema.json"
+    assert release_schema_generator.MODELS[policy_name] is RouteCostReservationPolicy
+    policy = json.loads(
+        release_schema_generator.rendered_schema(policy_name, RouteCostReservationPolicy)
+    )
+    assert policy["properties"]["operator_decision_id"]["const"] == "OP-COST-2026-09-09"
+    assert policy["properties"]["provider_enforced_total_ceiling"]["const"] is False
+    assert policy["properties"]["automatic_ceiling_increase"]["const"] is False
+    assert policy["properties"]["unknown_billing_blocks_new_work"]["const"] is True
+    attempt_name = "operator_route_cost_attempt_evidence.schema.json"
+    attempt = json.loads(rendered_schema(attempt_name, MODELS[attempt_name]))
+    assert attempt["additionalProperties"] is False
+    assert {
+        "reservation",
+        "ledger_entry_sha256",
+        "ledger_reservation_id",
+        "ledger_status",
+        "evidence_sha256",
+    } <= set(attempt["required"])
+    assert attempt["properties"]["attempt_index"]["maximum"] == 32
+    assert (
+        attempt["$defs"]["RouteCostReservationPolicy"]["properties"][
+            "provider_enforced_total_ceiling"
+        ]["const"]
+        is False
+    )
 
 
 def test_native_calibration_schema_preserves_no_authority_and_config_bound_sources() -> None:
@@ -444,7 +595,7 @@ def test_authenticated_runner_cost_schemas_require_exact_nonauthorizing_boundari
     for field_name in authority_fields:
         assert preview["properties"][field_name]["const"] is False
         assert plan["properties"][field_name]["const"] is False
-    assert preview["properties"]["schema_version"]["enum"] == ["1.0", "1.1", "1.2"]
+    assert preview["properties"]["schema_version"]["enum"] == ["1.0", "1.1", "1.2", "1.4"]
     assert preview["$defs"]["ProviderPriceCapAlgorithm"]["enum"] == [
         "MMAUDIT_OPENROUTER_MAX_PRICE_CEILING_V1",
         "MMAUDIT_OPENROUTER_MAX_PRICE_REQUEST_UNITS_V2",
@@ -971,6 +1122,7 @@ def test_scheduler_recovery_schema_is_hash_only_versioned_and_terminal_discrimin
         "delivered_source_inventory_sha256",
         "direct_child_result_sha256s",
         "evidence_authority",
+        "full_tree_binding",
         "nested_child_result_sha256s",
         "nested_family_closure_id",
         "nested_family_closure_sha256",
@@ -988,7 +1140,7 @@ def test_scheduler_recovery_schema_is_hash_only_versioned_and_terminal_discrimin
         "schema_version",
         "superseded_bridge_result_sha256",
     }
-    assert promotion["properties"]["schema_version"]["enum"] == ["1.0", "1.1"]
+    assert promotion["properties"]["schema_version"]["enum"] == ["1.0", "1.1", "1.2"]
     for field_name in (
         "original_truncated_result_sha256",
         "promotion_entry_sha256",
@@ -1047,7 +1199,18 @@ def test_scheduler_recovery_schema_is_hash_only_versioned_and_terminal_discrimin
                     ]
                 }
             },
-        }
+        },
+        {
+            "if": {
+                "properties": {"schema_version": {"const": "1.2"}},
+                "required": ["schema_version"],
+            },
+            "then": {
+                "properties": {"full_tree_binding": {"not": {"type": "null"}}},
+                "required": ["full_tree_binding"],
+            },
+            "else": {"not": {"required": ["full_tree_binding"]}},
+        },
     ]
     for field_name in (
         "provider_dispatch_authorized",
@@ -1058,6 +1221,34 @@ def test_scheduler_recovery_schema_is_hash_only_versioned_and_terminal_discrimin
     ):
         assert promotion["properties"][field_name]["const"] is False
 
+    full_tree = definitions["SchedulerTruncationRecoveryFullTreeBinding"]
+    assert promotion["properties"]["full_tree_binding"]["anyOf"] == [
+        {"$ref": "#/$defs/SchedulerTruncationRecoveryFullTreeBinding"},
+        {"type": "null"},
+    ]
+    assert full_tree["additionalProperties"] is False
+    for field_name, minimum, maximum in (
+        ("family_root_sha256s", 2, 16),
+        ("family_closure_sha256s", 2, 16),
+        ("child_result_sha256s", 4, 32),
+        ("bridge_result_sha256s", 1, 15),
+        ("leaf_result_sha256s", 3, 32),
+    ):
+        values = full_tree["properties"][field_name]
+        assert values["minItems"] == minimum
+        assert values["maxItems"] == maximum
+        assert values["uniqueItems"] is True
+        assert values["items"] == {"type": "string", "pattern": sha256_pattern}
+        assert field_name in full_tree["required"]
+    for field_name in (
+        "provider_dispatch_authorized",
+        "review_credit_authorized",
+        "coverage_credit_authorized",
+        "completion_authorized",
+        "release_authorized",
+    ):
+        assert full_tree["properties"][field_name]["const"] is False
+
     request = definitions["SchedulerTruncationRecoveryModelRequestEvidence"]
     assert request["additionalProperties"] is False
     assert request["properties"]["schema_version"]["enum"] == [
@@ -1065,6 +1256,7 @@ def test_scheduler_recovery_schema_is_hash_only_versioned_and_terminal_discrimin
         "1.1",
         "1.2",
         "1.3",
+        "1.4",
     ]
     assert request["properties"]["terminal_status"]["enum"] == [
         "SUCCEEDED",
@@ -1153,7 +1345,7 @@ def test_scheduler_recovery_schema_is_hash_only_versioned_and_terminal_discrimin
         },
         {
             "if": {
-                "properties": {"schema_version": {"const": "1.2"}},
+                "properties": {"schema_version": {"enum": ["1.2", "1.4"]}},
                 "required": ["schema_version"],
             },
             "then": {
@@ -1244,7 +1436,7 @@ def test_scheduler_recovery_schema_is_hash_only_versioned_and_terminal_discrimin
                 "allOf": [
                     {
                         "not": {
-                            "properties": {"schema_version": {"const": "1.2"}},
+                            "properties": {"schema_version": {"enum": ["1.2", "1.4"]}},
                             "required": ["schema_version"],
                         }
                     },
@@ -1255,6 +1447,33 @@ def test_scheduler_recovery_schema_is_hash_only_versioned_and_terminal_discrimin
                 ]
             },
             "then": {"not": {"required": ["promotion_entry_sha256"]}},
+        },
+        {
+            "if": {
+                "properties": {"schema_version": {"const": "1.4"}},
+                "required": ["schema_version"],
+            },
+            "then": {
+                "properties": {
+                    "role": {
+                        "enum": sorted(
+                            f"specialist:{role}" for role in SPECIALIST_INVESTIGATOR_ROLES
+                        )
+                    },
+                },
+                "required": ["role", "terminal_status"],
+                "if": {
+                    "properties": {"terminal_status": {"const": "SUCCEEDED"}},
+                    "required": ["terminal_status"],
+                },
+                "then": {
+                    "properties": {
+                        "specialist_accepted_outcome_sha256": {"not": {"type": "null"}},
+                    },
+                    "required": ["specialist_accepted_outcome_sha256"],
+                },
+                "else": {"not": {"required": ["specialist_accepted_outcome_sha256"]}},
+            },
         },
     ]
     for field_name in (

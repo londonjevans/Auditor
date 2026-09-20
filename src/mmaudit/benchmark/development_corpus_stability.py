@@ -24,8 +24,16 @@ from mmaudit.benchmark.development_corpus_control_measurement import (
     read_development_corpus_control_measurement,
 )
 from mmaudit.models.development_audit import _AuditArtifact
-from mmaudit.models.development_corpus import DevelopmentCorpusObservation, DevelopmentCorpusPlan
-from mmaudit.models.development_corpus_resume import DevelopmentCorpusResumeAttempt
+from mmaudit.models.development_corpus import (
+    MAX_DEVELOPMENT_CORPUS_CLAIMS,
+    DevelopmentCorpusObservation,
+    DevelopmentCorpusPlan,
+)
+from mmaudit.models.development_corpus_resume import (
+    MAX_DEVELOPMENT_CORPUS_RESUME_ACCOUNTED_REQUESTS,
+    MAX_DEVELOPMENT_CORPUS_RESUME_REQUESTS,
+    DevelopmentCorpusResumeAttempt,
+)
 from mmaudit.models.development_judgment import _money_sum
 from mmaudit.models.development_review import _DevelopmentModel
 from mmaudit.models.schemas import Severity
@@ -95,8 +103,8 @@ def read_development_stability_selection(content: bytes) -> DevelopmentStability
 
 
 class DevelopmentStabilityRatio(DevelopmentMeasurementRatio):
-    numerator: int = Field(ge=0, le=81_920)
-    denominator: int = Field(ge=0, le=81_920)
+    numerator: int = Field(ge=0, le=MAX_DEVELOPMENT_CORPUS_CLAIMS * 8 * 10)
+    denominator: int = Field(ge=0, le=MAX_DEVELOPMENT_CORPUS_CLAIMS * 8 * 10)
 
 
 def _ratio(numerator: int, denominator: int, *, complete: bool) -> DevelopmentStabilityRatio:
@@ -141,10 +149,16 @@ class DevelopmentStabilityTrial(_DevelopmentModel):
     cohort_sha256: str = Field(pattern=_SHA)
     transport: Literal["MOCK_HTTP", "HTTP_OBSERVATION"]
     quality_scope: Literal["COMPLETE_OBSERVATIONS", "INCOMPLETE_OBSERVATIONS"]
-    selected_request_count: int = Field(ge=1, le=576)
-    missing_accounting_request_ids: tuple[str, ...] = Field(max_length=576)
-    unknown_actual_cost_request_ids: tuple[str, ...] = Field(max_length=72)
-    missing_runtime_request_ids: tuple[str, ...] = Field(max_length=576)
+    selected_request_count: int = Field(ge=1, le=MAX_DEVELOPMENT_CORPUS_RESUME_REQUESTS)
+    missing_accounting_request_ids: tuple[str, ...] = Field(
+        max_length=MAX_DEVELOPMENT_CORPUS_RESUME_REQUESTS
+    )
+    unknown_actual_cost_request_ids: tuple[str, ...] = Field(
+        max_length=MAX_DEVELOPMENT_CORPUS_RESUME_ACCOUNTED_REQUESTS
+    )
+    missing_runtime_request_ids: tuple[str, ...] = Field(
+        max_length=MAX_DEVELOPMENT_CORPUS_RESUME_REQUESTS
+    )
     accounted_cost_usd: Decimal = Field(ge=0)
     reported_actual_cost_usd: Decimal = Field(ge=0)
     uncertain_accounted_cost_usd: Decimal = Field(ge=0)
@@ -179,11 +193,11 @@ class DevelopmentStabilityGroup(_DevelopmentModel):
     role: Literal["CANDIDATE"] = "CANDIDATE"
     comparison_scope: _ComparisonScope
     quality_scope: Literal["COMPLETE_OBSERVATIONS", "INCOMPLETE_OBSERVATIONS"]
-    total_claim_count: int = Field(ge=0, le=8192)
-    guarded_invariant_claim_count: int = Field(ge=0, le=8192)
-    guarded_advisory_claim_count: int = Field(ge=0, le=8192)
-    unmatched_claim_count: int = Field(ge=0, le=8192)
-    ambiguous_claim_count: int = Field(ge=0, le=8192)
+    total_claim_count: int = Field(ge=0, le=MAX_DEVELOPMENT_CORPUS_CLAIMS * 8)
+    guarded_invariant_claim_count: int = Field(ge=0, le=MAX_DEVELOPMENT_CORPUS_CLAIMS * 8)
+    guarded_advisory_claim_count: int = Field(ge=0, le=MAX_DEVELOPMENT_CORPUS_CLAIMS * 8)
+    unmatched_claim_count: int = Field(ge=0, le=MAX_DEVELOPMENT_CORPUS_CLAIMS * 8)
+    ambiguous_claim_count: int = Field(ge=0, le=MAX_DEVELOPMENT_CORPUS_CLAIMS * 8)
     union_location_coverage: DevelopmentStabilityRatio
     union_assertion_coverage: DevelopmentStabilityRatio
     severity_weighted_union_location_coverage: DevelopmentStabilityRatio

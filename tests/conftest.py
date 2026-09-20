@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import shutil
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +18,17 @@ from mmaudit.models.schemas import (
 )
 
 FIXTURES = Path(__file__).parent / "fixtures"
+
+
+@pytest.fixture
+def original_candidate_report(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Any]:
+    """Give each report test its own owner, including independent close/reopen custody."""
+
+    from tests.truncation_tree_report_support import original_candidate_report_fixture
+
+    yield from original_candidate_report_fixture(tmp_path_factory)
+
+
 MODEL_IDS = {
     "threat_model": "alpha/atlas-secure",
     "source_audit": "bravo/borealis-secure",

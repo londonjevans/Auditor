@@ -465,6 +465,10 @@ def _build_generation_capability_authority() -> tuple[
         None,
     ],
     Callable[[TrustedGenerationVerification], None],
+    Callable[
+        [TrustedGenerationVerification, _TrustedGenerationCapabilitySnapshot],
+        TrustedGenerationVerification,
+    ],
 ]:
     """Keep PID-local generation bindings outside caller-mutable instances."""
 
@@ -602,7 +606,25 @@ def _build_generation_capability_authority() -> tuple[
                 "generation verification capability changed during revocation"
             )
 
-    return register, binding_for, snapshot, recheck, revoke
+    def move(
+        capability: TrustedGenerationVerification,
+        lease_snapshot: _TrustedGenerationCapabilitySnapshot,
+    ) -> TrustedGenerationVerification:
+        """Move exact structural bindings once; never create a provider-origin mark."""
+
+        with lock:
+            recheck(capability, lease_snapshot)
+            successor = object.__new__(trusted_capability_type)
+            try:
+                register(successor, tuple(lease_snapshot.bindings.values()))
+                recheck(capability, lease_snapshot)
+                registry.pop(id(capability))
+            except BaseException:
+                registry.pop(id(successor), None)
+                raise
+            return successor
+
+    return register, binding_for, snapshot, recheck, revoke, move
 
 
 (
@@ -611,6 +633,7 @@ def _build_generation_capability_authority() -> tuple[
     _snapshot_trusted_generation_capability,
     _recheck_trusted_generation_capability,
     _revoke_trusted_generation_capability,
+    _move_trusted_generation_capability,
 ) = _build_generation_capability_authority()
 
 
@@ -620,6 +643,14 @@ def _build_authrunner_generation_origin_authority() -> tuple[
     Callable[..., bool],
     Callable[[TrustedGenerationVerification], None],
     Callable[[], None],
+    Callable[
+        [
+            TrustedGenerationVerification,
+            _TrustedGenerationCapabilitySnapshot,
+            tuple[GenerationVerificationRequest, ...],
+        ],
+        tuple[TrustedGenerationVerification, bool],
+    ],
 ]:
     """Keep fresh REAL re-fetch origin separate from structural test capabilities."""
 
@@ -654,6 +685,8 @@ def _build_authrunner_generation_origin_authority() -> tuple[
     trusted_binding_for = _trusted_generation_binding_for
     trusted_snapshot = _snapshot_trusted_generation_capability
     trusted_recheck = _recheck_trusted_generation_capability
+    trusted_core_move = _move_trusted_generation_capability
+    trusted_core_revoke = _revoke_trusted_generation_capability
     trusted_usage_origin = _has_authrunner_owned_real_usage_origin
     trusted_smoke_scope = authrunner_noncrediting_unknown_token_smoke_scope
     trusted_capability_type = TrustedGenerationVerification
@@ -1184,7 +1217,93 @@ def _build_authrunner_generation_origin_authority() -> tuple[
                 "generation verification AUTHRUNNER origin changed during revocation"
             )
 
-    return register_issuer, mark, contains, revoke, finalize_issuer_function_states
+    def move_custody(
+        capability: TrustedGenerationVerification,
+        lease_snapshot: _TrustedGenerationCapabilitySnapshot,
+        requests: tuple[GenerationVerificationRequest, ...],
+    ) -> tuple[TrustedGenerationVerification, bool]:
+        """Move only an existing origin and its exact lease under both registry locks."""
+
+        successor: TrustedGenerationVerification | None = None
+        with lock:
+            trusted_recheck(capability, lease_snapshot)
+            if (
+                type(requests) is not tuple
+                or not 1 <= len(requests) <= 512
+                or any(type(request) is not GenerationVerificationRequest for request in requests)
+            ):
+                raise GenerationEvidenceValidationError(
+                    "generation custody move requires an exact bounded request tuple"
+                )
+            request_bindings = tuple(
+                (
+                    request.benchmark_report_sha256,
+                    request.exact_model_id,
+                    request.case_id,
+                    trusted_usage_sha256(request.usage_record),
+                )
+                for request in requests
+            )
+            expected_bindings = tuple(
+                (*key, binding.usage_record_sha256)
+                for key, binding in lease_snapshot.bindings.items()
+            )
+            if sorted(request_bindings) != sorted(expected_bindings):
+                raise GenerationEvidenceValidationError(
+                    "generation custody move requires every original request binding"
+                )
+            original = registry.get(id(capability))
+            if original is not None:
+                if original[0]() is not capability or not contains(
+                    capability, atomic_ledger=original[2]
+                ):
+                    raise GenerationEvidenceValidationError(
+                        "generation custody transfer cannot authenticate its original origin"
+                    )
+                if sorted(original[1]) != sorted(request_bindings):
+                    raise GenerationEvidenceValidationError(
+                        "generation custody transfer origin does not cover the complete proof"
+                    )
+                if not all(
+                    trusted_usage_origin(request.usage_record, atomic_ledger=original[2])
+                    for request in requests
+                ):
+                    raise GenerationEvidenceValidationError(
+                        "generation custody transfer requires every original REAL usage"
+                    )
+            try:
+                successor = trusted_core_move(capability, lease_snapshot)
+                if registry.get(id(capability)) is not original:
+                    raise GenerationEvidenceValidationError(
+                        "generation origin changed during custody transfer"
+                    )
+                if original is not None:
+                    registry.pop(id(capability))
+                    key = id(successor)
+
+                    def discard(
+                        reference: weakref.ReferenceType[TrustedGenerationVerification],
+                    ) -> None:
+                        with lock:
+                            current = registry.get(key)
+                            if current is not None and current[0] is reference:
+                                registry.pop(key, None)
+
+                    reference = weakref.ref(successor, discard)
+                    registry[key] = (reference, original[1], original[2], original[3])
+                    if not contains(successor, atomic_ledger=original[2]):
+                        raise GenerationEvidenceValidationError(
+                            "generation origin could not follow its exact custody transfer"
+                        )
+                return successor, original is not None
+            except BaseException:
+                if successor is not None:
+                    registry.pop(id(capability), None)
+                    registry.pop(id(successor), None)
+                    trusted_core_revoke(successor)
+                raise
+
+    return register_issuer, mark, contains, revoke, finalize_issuer_function_states, move_custody
 
 
 (
@@ -1193,6 +1312,7 @@ def _build_authrunner_generation_origin_authority() -> tuple[
     _has_authrunner_generation_origin,
     _revoke_authrunner_generation_origin,
     _finalize_authrunner_generation_origin_issuer,
+    _move_generation_custody_with_origin,
 ) = _build_authrunner_generation_origin_authority()
 del _build_authrunner_generation_origin_authority
 
@@ -2207,3 +2327,164 @@ def _json_default(value: Any) -> str:
     if isinstance(value, Decimal):
         return _canonical_nonnegative_decimal(value, "decimal")
     raise TypeError("unsupported generation evidence value")
+
+
+def _build_generation_custody_transfer() -> Callable[..., TrustedGenerationVerification]:
+    """Bind move-only custody to existing verifiers, never to caller origin claims."""
+
+    namespace = globals()
+    trusted_module = sys.modules[__name__]
+    trusted_sys = sys
+    trusted_os = os
+    trusted_getpid = os.getpid
+    process_id = trusted_getpid()
+    capability_type = TrustedGenerationVerification
+    request_type = GenerationVerificationRequest
+    request_getattribute = request_type.__getattribute__
+    attestation_for = capability_type.attestation_for
+    snapshot = _snapshot_trusted_generation_capability
+    recheck = _recheck_trusted_generation_capability
+    move = _move_generation_custody_with_origin
+    has_origin = _has_authrunner_generation_origin
+    revoke = revoke_trusted_generation_verification
+    protected = {
+        name: namespace[name]
+        for name in (
+            "TrustedGenerationVerification",
+            "GenerationVerificationRequest",
+            "GenerationReconciliationExpectation",
+            "OpenRouterGenerationEvidence",
+            "_snapshot_trusted_generation_capability",
+            "_recheck_trusted_generation_capability",
+            "_move_trusted_generation_capability",
+            "_move_generation_custody_with_origin",
+            "_has_authrunner_generation_origin",
+            "_has_authrunner_owned_real_usage_origin",
+            "_validated_usage_copy_preserving_owned_attestation",
+            "_revoke_trusted_generation_capability",
+            "_revoke_authrunner_generation_origin",
+            "revoke_trusted_generation_verification",
+            "_reconcile_generation_expectation_structural",
+            "_TRUSTED_RECONCILE_GENERATION_EXPECTATION_STRUCTURAL",
+        )
+    }
+    functions = (
+        attestation_for,
+        snapshot,
+        recheck,
+        move,
+        has_origin,
+        revoke,
+        _move_trusted_generation_capability,
+        request_type.__init__,
+        request_type.__post_init__,
+    )
+    callable_states = tuple(
+        (
+            function,
+            function.__code__,
+            function.__defaults__,
+            function.__kwdefaults__,
+            tuple(sorted((function.__kwdefaults__ or {}).items())),
+        )
+        for function in functions
+    )
+    public: dict[str, object] = {}
+
+    def pristine() -> None:
+        if (
+            namespace.get("sys") is not trusted_sys
+            or namespace.get("os") is not trusted_os
+            or trusted_os.getpid is not trusted_getpid
+            or trusted_getpid() != process_id
+            or trusted_sys.modules.get(__name__) is not trusted_module
+            or any(namespace.get(name) is not value for name, value in protected.items())
+            or any(namespace.get(name) is not value for name, value in public.items())
+            or capability_type.attestation_for is not attestation_for
+            or request_type.__getattribute__ is not request_getattribute
+            or request_type.__init__ is not functions[-2]
+            or request_type.__post_init__ is not functions[-1]
+            or any(
+                function.__code__ is not code
+                or function.__defaults__ is not defaults
+                or function.__kwdefaults__ is not kwdefaults
+                or tuple(sorted((function.__kwdefaults__ or {}).items())) != keyword_items
+                for function, code, defaults, kwdefaults, keyword_items in callable_states
+            )
+        ):
+            raise GenerationEvidenceValidationError(
+                "generation custody transfer runtime is not pristine"
+            )
+
+    def replay(
+        capability: TrustedGenerationVerification,
+        requests: tuple[GenerationVerificationRequest, ...],
+    ) -> _TrustedGenerationCapabilitySnapshot:
+        lease = snapshot(capability)
+        keys = tuple(
+            (request.benchmark_report_sha256, request.exact_model_id, request.case_id)
+            for request in requests
+        )
+        if len(set(keys)) != len(keys) or set(keys) != set(lease.bindings):
+            raise GenerationEvidenceValidationError(
+                "generation custody transfer requires the complete original request set"
+            )
+        for request in requests:
+            attestation_for(
+                capability,
+                benchmark_report_sha256=request.benchmark_report_sha256,
+                case_id=request.case_id,
+                exact_model_id=request.exact_model_id,
+                canonical_model_id=request.canonical_model_id,
+                catalog_identity_binding_sha256=request.catalog_identity_binding_sha256,
+                discovery_evidence_sha256=request.discovery_evidence_sha256,
+                usage_record=request.usage_record,
+                expected_provider_name=request.expected_provider_name,
+            )
+        recheck(capability, lease)
+        pristine()
+        return lease
+
+    def transfer(
+        capability: TrustedGenerationVerification,
+        *,
+        requests: tuple[GenerationVerificationRequest, ...],
+    ) -> TrustedGenerationVerification:
+        """Consume one exact proof and return its successor, without fetching or granting origin.
+
+        Every original request must be replayable. Pre-move rejection preserves the
+        original; failure after the move disposes its successor, never revives the old
+        handle. This primitive does not transfer ownership of a containing runner.
+        """
+
+        pristine()
+        if (
+            type(capability) is not capability_type
+            or type(requests) is not tuple
+            or not 1 <= len(requests) <= 512
+            or any(type(request) is not request_type for request in requests)
+        ):
+            raise GenerationEvidenceValidationError(
+                "generation custody transfer requires an exact bounded request tuple"
+            )
+        lease = replay(capability, requests)
+        successor, origin_was_present = move(capability, lease, requests)
+        try:
+            pristine()
+            replay(successor, requests)
+            if has_origin(successor) is not origin_was_present or has_origin(capability):
+                raise GenerationEvidenceValidationError(
+                    "generation custody transfer changed authenticated origin"
+                )
+            pristine()
+            return successor
+        except BaseException:
+            revoke(successor)
+            raise
+
+    public["transfer_trusted_generation_verification"] = transfer
+    return transfer
+
+
+transfer_trusted_generation_verification = _build_generation_custody_transfer()
+del _build_generation_custody_transfer

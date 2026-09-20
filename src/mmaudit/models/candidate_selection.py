@@ -55,6 +55,7 @@ from mmaudit.models.route_constraints import (
     ExactRouteRole,
     ProviderPriceCapAlgorithm,
     RouteConstraintPurpose,
+    RouteCostReservationPolicy,
     RoutePredicateProfile,
     bind_registry_route_facts,
     evaluate_route_predicates,
@@ -495,6 +496,260 @@ class CandidateSelectionPlanAncestryTransitionBinding(StrictModel):
         return self
 
 
+class CandidateSelectionRoleRouteRefresh(StrictModel):
+    """One role's unverified inventory change and exact replacement constraint."""
+
+    role: ExactRouteRole
+    inventory_refresh: CandidateSelectionEndpointInventoryRefresh
+    replacement_constraint: ExactRouteConstraint
+
+    @model_validator(mode="after")
+    def refresh_matches_the_replacement_route(self) -> Self:
+        refresh = self.inventory_refresh
+        constraint = self.replacement_constraint
+        if (
+            constraint.role is not self.role
+            or constraint.exact_model_id != refresh.exact_model_id
+            or constraint.provider_endpoint != refresh.provider_endpoint
+            or constraint.provider_endpoint != constraint.provider_endpoint.casefold()
+        ):
+            raise ValueError("role endpoint refresh differs from its replacement constraint")
+        return self
+
+
+class CandidateSelectionPlanRoleRouteTransitionBinding(StrictModel):
+    """Nonauthorizing three-role refresh from capability-verified unavailable ancestry."""
+
+    schema_version: Literal["1.0"]
+    artifact_kind: Literal["REPOSITORY_PINNED_SELECTION_PLAN_ROLE_ROUTE_TRANSITION"]
+    operator_decision_id: Literal["OP-COST-2026-09-09"]
+    selected_ancestor_raw_sha256: str = Field(pattern=_SHA256_PATTERN)
+    selected_ancestor_plan_sha256: str = Field(pattern=_SHA256_PATTERN)
+    unavailable_predecessor_raw_sha256: str = Field(pattern=_SHA256_PATTERN)
+    unavailable_predecessor_plan_sha256: str = Field(pattern=_SHA256_PATTERN)
+    unavailable_state_sha256: str = Field(pattern=_SHA256_PATTERN)
+    matched_revocation_set_sha256: str = Field(pattern=_SHA256_PATTERN)
+    ancestry_evidence_sha256: str = Field(pattern=_SHA256_PATTERN)
+    revocation_entry_sha256s: tuple[_Sha256Value, ...] = Field(min_length=1, max_length=16)
+    withdrawn_candidate_constraint_sha256s: tuple[_Sha256Value, ...] = Field(
+        min_length=1, max_length=16
+    )
+    selected_ancestor_role_assignment_sha256: str = Field(pattern=_SHA256_PATTERN)
+    retained_route_predicate_profile_sha256: str = Field(pattern=_SHA256_PATTERN)
+    predecessor_judge_constraint_sha256s: tuple[_Sha256Value, ...] = Field(
+        min_length=2, max_length=17
+    )
+    retained_primary_judge_model_id: str = Field(pattern=EXACT_MODEL_ID_PATTERN)
+    retained_replay_judge_model_id: str = Field(pattern=EXACT_MODEL_ID_PATTERN)
+    route_refreshes: tuple[CandidateSelectionRoleRouteRefresh, ...] = Field(
+        min_length=3, max_length=3
+    )
+    price_cap_profile_decision: Literal["RETAIN_EXACT_PREDECESSOR_V1"]
+    opaque_ancestry_capability_required: Literal[True]
+    endpoint_inventory_refresh_staged: Literal[True]
+    constrained_discovery_required: Literal[True]
+    price_cap_profile_upgrade_authorized: Literal[False]
+    provider_call_authorized: Literal[False]
+    source_egress_authorized: Literal[False]
+    qualification_authorized: Literal[False]
+    production_selection_authorized: Literal[False]
+    runner_authority_authorized: Literal[False]
+    benchmark_authorized: Literal[False]
+    seal_publication_authorized: Literal[False]
+    release_authorized: Literal[False]
+    serialized_authority: Literal[False]
+    binding_sha256: str = Field(pattern=_SHA256_PATTERN)
+
+    @field_validator("retained_primary_judge_model_id", "retained_replay_judge_model_id")
+    @classmethod
+    def retained_judge_id_is_exact(cls, value: str) -> str:
+        return require_exact_openrouter_model_id(value)
+
+    @field_validator(
+        "revocation_entry_sha256s",
+        "withdrawn_candidate_constraint_sha256s",
+        "predecessor_judge_constraint_sha256s",
+    )
+    @classmethod
+    def custody_hashes_are_canonical(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if value != tuple(sorted(set(value))):
+            raise ValueError("role transition custody hashes must be unique and sorted")
+        return value
+
+    @model_validator(mode="after")
+    def transition_is_complete_and_self_hashed(self) -> Self:
+        if self.selected_ancestor_plan_sha256 == self.unavailable_predecessor_plan_sha256:
+            raise ValueError("role transition must bind distinct plan generations")
+        if tuple(item.role for item in self.route_refreshes) != tuple(ExactRouteRole):
+            raise ValueError("role transition must refresh candidate, primary and replay exactly")
+        constraints = tuple(item.replacement_constraint for item in self.route_refreshes)
+        if len({item.exact_model_id for item in constraints}) != 3:
+            raise ValueError("role transition candidate and judges must remain distinct")
+        if (
+            constraints[1].exact_model_id != self.retained_primary_judge_model_id
+            or constraints[2].exact_model_id != self.retained_replay_judge_model_id
+            or any(
+                item.profile_sha256 != self.retained_route_predicate_profile_sha256
+                for item in constraints
+            )
+        ):
+            raise ValueError("role transition differs from retained judges or profile")
+        expected_revocations = canonical_sha256(
+            {
+                "schema_version": "1.0",
+                "artifact_kind": "MATCHED_CANDIDATE_SELECTION_REVOCATIONS",
+                "revocation_entry_sha256s": list(self.revocation_entry_sha256s),
+            }
+        )
+        if self.matched_revocation_set_sha256 != expected_revocations:
+            raise ValueError("role transition revocation set is inconsistent")
+        if self.binding_sha256 != canonical_sha256(
+            self.model_dump(mode="json", exclude={"binding_sha256"})
+        ):
+            raise ValueError("role transition binding self-hash is inconsistent")
+        return self
+
+
+class CandidateSelectionPlanCostTransitionBinding(StrictModel):
+    """Cost-only successor data; opaque ancestry replay supplies its authentication."""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "allOf": [
+                {
+                    "if": {"properties": {"schema_version": {"const": version}}},
+                    "then": {"properties": {"operator_decision_id": {"const": decision}}},
+                }
+                for version, decision in (
+                    ("1.0", "OP-COST-2026-09-09"),
+                    ("1.1", "OP-COSTLEGACY-2026-09-11"),
+                )
+            ]
+        }
+    )
+
+    schema_version: Literal["1.0", "1.1"] = "1.0"
+    artifact_kind: Literal["REPOSITORY_PINNED_OPERATOR_COST_TRANSITION"] = (
+        "REPOSITORY_PINNED_OPERATOR_COST_TRANSITION"
+    )
+    operator_decision_id: Literal["OP-COST-2026-09-09", "OP-COSTLEGACY-2026-09-11"] = (
+        "OP-COST-2026-09-09"
+    )
+    predecessor_raw_sha256: str = Field(pattern=_SHA256_PATTERN)
+    predecessor_plan_sha256: str = Field(pattern=_SHA256_PATTERN)
+    ancestry_evidence_sha256: str = Field(pattern=_SHA256_PATTERN)
+    predecessor_profile_sha256: str = Field(pattern=_SHA256_PATTERN)
+    replacement_profile_sha256: str = Field(pattern=_SHA256_PATTERN)
+    reservation_policy_sha256: str = Field(pattern=_SHA256_PATTERN)
+    predecessor_constraints: tuple[ExactRouteConstraint, ...] = Field(min_length=3, max_length=3)
+    replacement_constraints: tuple[ExactRouteConstraint, ...] = Field(min_length=3, max_length=3)
+    security_requirements_relaxed: Literal[False] = False
+    provider_call_authorized: Literal[False] = False
+    serialized_authority: Literal[False] = False
+    binding_sha256: str = Field(pattern=_SHA256_PATTERN)
+
+    @field_validator(
+        "security_requirements_relaxed",
+        "provider_call_authorized",
+        "serialized_authority",
+        mode="before",
+    )
+    @classmethod
+    def authority_flags_are_literal_false(cls, value: object) -> bool:
+        if value is not False:
+            raise ValueError("cost transition must have literal-false authorities")
+        return False
+
+    @model_validator(mode="after")
+    def transition_is_cost_only_and_self_hashed(self) -> Self:
+        if (self.schema_version == "1.1") != (
+            self.operator_decision_id == "OP-COSTLEGACY-2026-09-11"
+        ):
+            raise ValueError("cost transition version must identify its exact operator decision")
+        if self.predecessor_profile_sha256 == self.replacement_profile_sha256:
+            raise ValueError("cost transition must bind different profile generations")
+        for constraints, profile_hash in (
+            (self.predecessor_constraints, self.predecessor_profile_sha256),
+            (self.replacement_constraints, self.replacement_profile_sha256),
+        ):
+            if tuple(item.role for item in constraints) != tuple(ExactRouteRole) or any(
+                item.profile_sha256 != profile_hash for item in constraints
+            ):
+                raise ValueError("cost transition constraint inventory is inconsistent")
+        if tuple(
+            (item.role, item.exact_model_id, item.provider_endpoint)
+            for item in self.predecessor_constraints
+        ) != tuple(
+            (item.role, item.exact_model_id, item.provider_endpoint)
+            for item in self.replacement_constraints
+        ):
+            raise ValueError("cost transition cannot change route identities")
+        if self.binding_sha256 != canonical_sha256(
+            self.model_dump(mode="json", exclude={"binding_sha256"})
+        ):
+            raise ValueError("cost transition binding self-hash is inconsistent")
+        return self
+
+
+class CandidateSelectionPlanEndpointTrialBinding(StrictModel):
+    """A single staged endpoint addition, never adoption or paid-run authority."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    artifact_kind: Literal["REPOSITORY_PINNED_CANDIDATE_ENDPOINT_TRIAL"] = (
+        "REPOSITORY_PINNED_CANDIDATE_ENDPOINT_TRIAL"
+    )
+    operator_decision_id: Literal["OP-ENDPOINTTRIAL-2026-09-11"] = "OP-ENDPOINTTRIAL-2026-09-11"
+    predecessor_raw_sha256: Literal[
+        "7af8d0eeeade437767c965482c563dafa893ce76eee818333fd728daab7cdbb0"
+    ]
+    predecessor_plan_sha256: Literal[
+        "a868db571f4ced1cba9db7aa53d9a6b56b05c99bb465618d445ca940cd73313c"
+    ]
+    retained_profile_sha256: Literal[
+        "279f5050a7cd0dd3ce04f724d4987c239b740b7bfced1325e605e94537938a08"
+    ]
+    retained_constraints: tuple[ExactRouteConstraint, ...] = Field(min_length=3, max_length=3)
+    added_candidate_constraint: ExactRouteConstraint
+    disposition: Literal["NONCREDITING_SMOKE_STAGING"] = "NONCREDITING_SMOKE_STAGING"
+    plan_adoption_authorized: Literal[False] = False
+    qualification_authorized: Literal[False] = False
+    seal_publication_authorized: Literal[False] = False
+    durable_runner_authorized: Literal[False] = False
+    provider_call_authorized: Literal[False] = False
+    serialized_authority: Literal[False] = False
+    binding_sha256: str = Field(pattern=_SHA256_PATTERN)
+
+    @model_validator(mode="after")
+    def only_the_first_exact_candidate_endpoint(self) -> Self:
+        expected = (
+            (ExactRouteRole.CANDIDATE, "deepseek/deepseek-v4-pro-0813", "together"),
+            (ExactRouteRole.PRIMARY_JUDGE, "z-ai/glm-5.2", "deepinfra/fp4"),
+            (ExactRouteRole.REPLAY_JUDGE, "moonshotai/kimi-k3", "together"),
+        )
+        added = self.added_candidate_constraint
+        if (
+            tuple(
+                (item.role, item.exact_model_id, item.provider_endpoint)
+                for item in self.retained_constraints
+            )
+            != expected
+            or (added.role, added.exact_model_id, added.provider_endpoint)
+            != (ExactRouteRole.CANDIDATE, "deepseek/deepseek-v4-pro-0813", "fireworks")
+            or any(
+                item.profile_sha256 != self.retained_profile_sha256
+                for item in (*self.retained_constraints, added)
+            )
+        ):
+            raise ValueError(
+                "endpoint trial must add only Fireworks and preserve every original route"
+            )
+        if self.binding_sha256 != canonical_sha256(
+            self.model_dump(mode="json", exclude={"binding_sha256"})
+        ):
+            raise ValueError("endpoint trial binding hash is inconsistent")
+        return self
+
+
 class CandidateSelectionPlan(StrictModel):
     """Self-hashed operator-staged seed with only literal-false authority flags."""
 
@@ -583,11 +838,148 @@ class CandidateSelectionPlan(StrictModel):
                     },
                     "else": {"not": {"required": ["ancestry_transition_binding"]}},
                 },
+                {
+                    "if": {
+                        "properties": {"schema_version": {"const": "1.9"}},
+                        "required": ["schema_version"],
+                    },
+                    "then": {
+                        "properties": {
+                            "authenticated_runner_selection": {
+                                "type": "object",
+                                "properties": {
+                                    "route_predicate_profile": {
+                                        "type": "object",
+                                        "properties": {
+                                            "schema_version": {"const": "1.0"},
+                                            "price_cap_algorithm": {
+                                                "const": ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_CEILING_V1.value
+                                            },
+                                            "price_component_unit_envelopes": {"type": "null"},
+                                        },
+                                        "required": ["schema_version", "price_cap_algorithm"],
+                                    }
+                                },
+                                "required": ["route_predicate_profile"],
+                            },
+                            "ancestry_route_transition_binding": {"not": {"type": "null"}},
+                        },
+                        "required": [
+                            "authenticated_runner_selection",
+                            "ancestry_route_transition_binding",
+                        ],
+                    },
+                    "else": {"not": {"required": ["ancestry_route_transition_binding"]}},
+                },
+                {
+                    "if": {
+                        "properties": {"schema_version": {"enum": ["1.10", "1.11"]}},
+                        "required": ["schema_version"],
+                    },
+                    "then": {
+                        "properties": {
+                            "operator_cost_transition_binding": {"type": "object"},
+                            "authenticated_runner_selection": {
+                                "type": "object",
+                                "properties": {
+                                    "route_predicate_profile": {
+                                        "properties": {"schema_version": {"const": "1.3"}}
+                                    }
+                                },
+                            },
+                        },
+                        "required": [
+                            "operator_cost_transition_binding",
+                            "authenticated_runner_selection",
+                        ],
+                    },
+                    "else": {"not": {"required": ["operator_cost_transition_binding"]}},
+                },
+                {
+                    "if": {
+                        "properties": {"schema_version": {"enum": ["1.10", "1.11", "1.12"]}},
+                        "required": ["schema_version"],
+                    },
+                    "else": {
+                        "properties": {
+                            "authenticated_runner_selection": {
+                                "properties": {
+                                    "route_predicate_profile": {
+                                        "not": {"required": ["operator_reservation_policy"]}
+                                    }
+                                }
+                            }
+                        },
+                    },
+                },
+                {
+                    "if": {"properties": {"schema_version": {"const": "1.10"}}},
+                    "then": {
+                        "properties": {
+                            "operator_cost_transition_binding": {
+                                "properties": {"schema_version": {"const": "1.0"}}
+                            },
+                            "authenticated_runner_selection": {
+                                "properties": {
+                                    "route_predicate_profile": {
+                                        "properties": {
+                                            "operator_reservation_policy": {
+                                                "properties": {"schema_version": {"const": "1.0"}}
+                                            }
+                                        }
+                                    }
+                                }
+                            },
+                        }
+                    },
+                },
+                {
+                    "if": {"properties": {"schema_version": {"const": "1.11"}}},
+                    "then": {
+                        "properties": {
+                            "operator_cost_transition_binding": {
+                                "properties": {"schema_version": {"const": "1.1"}}
+                            },
+                            "authenticated_runner_selection": {
+                                "properties": {
+                                    "route_predicate_profile": {
+                                        "properties": {
+                                            "operator_reservation_policy": {
+                                                "properties": {"schema_version": {"const": "1.1"}}
+                                            }
+                                        }
+                                    }
+                                }
+                            },
+                        }
+                    },
+                },
+                {
+                    "if": {"properties": {"schema_version": {"const": "1.12"}}},
+                    "then": {
+                        "required": [
+                            "operator_endpoint_trial_binding",
+                            "authenticated_runner_selection",
+                        ],
+                        "properties": {
+                            "operator_endpoint_trial_binding": {"type": "object"},
+                            "authenticated_runner_selection": {
+                                "type": "object",
+                                "properties": {
+                                    "route_predicate_profile": {
+                                        "properties": {"schema_version": {"const": "1.3"}}
+                                    }
+                                },
+                            },
+                        },
+                    },
+                    "else": {"not": {"required": ["operator_endpoint_trial_binding"]}},
+                },
             ]
         }
     )
 
-    schema_version: Literal["1.4", "1.5", "1.6", "1.7", "1.8"]
+    schema_version: Literal["1.4", "1.5", "1.6", "1.7", "1.8", "1.9", "1.10", "1.11", "1.12"]
     artifact_kind: Literal["OPERATOR_STAGED_MODEL_SELECTION"]
     status: Literal["NONAUTHORIZING"]
     objective_sha256: Literal["e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15"]
@@ -613,6 +1005,15 @@ class CandidateSelectionPlan(StrictModel):
     ancestry_transition_binding: CandidateSelectionPlanAncestryTransitionBinding | None = Field(
         default=None,
         exclude_if=lambda value: value is None,
+    )
+    ancestry_route_transition_binding: CandidateSelectionPlanRoleRouteTransitionBinding | None = (
+        Field(default=None, exclude_if=lambda value: value is None)
+    )
+    operator_cost_transition_binding: CandidateSelectionPlanCostTransitionBinding | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    operator_endpoint_trial_binding: CandidateSelectionPlanEndpointTrialBinding | None = Field(
+        default=None, exclude_if=lambda value: value is None
     )
     unresolved_requirements: tuple[str, ...] = Field(max_length=64)
     ranking_executed: Literal[False]
@@ -650,6 +1051,25 @@ class CandidateSelectionPlan(StrictModel):
         refresh_supplied = "endpoint_inventory_refresh" in self.model_fields_set
         unavailability_supplied = "authenticated_runner_unavailability" in self.model_fields_set
         ancestry_supplied = "ancestry_transition_binding" in self.model_fields_set
+        route_transition_supplied = "ancestry_route_transition_binding" in self.model_fields_set
+        cost_transition_supplied = "operator_cost_transition_binding" in self.model_fields_set
+        trial_supplied = "operator_endpoint_trial_binding" in self.model_fields_set
+        if self.schema_version == "1.12":
+            if not trial_supplied or self.operator_endpoint_trial_binding is None:
+                raise ValueError("endpoint trial requires its separate predecessor binding")
+        elif trial_supplied or self.operator_endpoint_trial_binding is not None:
+            raise ValueError("earlier plan cannot carry an endpoint trial")
+        if self.schema_version in {"1.10", "1.11"}:
+            if not cost_transition_supplied or self.operator_cost_transition_binding is None:
+                raise ValueError("cost transition requires its separate authenticated binding")
+        elif cost_transition_supplied or self.operator_cost_transition_binding is not None:
+            raise ValueError("legacy plan cannot carry an operator cost transition")
+        cost_selection = self.authenticated_runner_selection
+        if cost_selection is not None and (
+            (cost_selection.route_predicate_profile.operator_reservation_policy is not None)
+            != (self.schema_version in {"1.10", "1.11", "1.12"})
+        ):
+            raise ValueError("operator reservation profile requires authenticated cost ancestry")
         if self.schema_version == "1.4":
             predecessor_is_valid = not predecessor_supplied and self.predecessor_plan_sha256 is None
         else:
@@ -693,6 +1113,18 @@ class CandidateSelectionPlan(StrictModel):
         )
         if not ancestry_is_valid:
             raise ValueError("candidate selection ancestry transition differs from its schema")
+        route_transition_is_valid = (
+            self.schema_version == "1.9"
+            and route_transition_supplied
+            and self.ancestry_route_transition_binding is not None
+            and self.authenticated_runner_selection is not None
+        ) or (
+            self.schema_version != "1.9"
+            and not route_transition_supplied
+            and self.ancestry_route_transition_binding is None
+        )
+        if not route_transition_is_valid:
+            raise ValueError("candidate selection role transition differs from its schema")
         kinds = tuple(binding.kind for binding in self.source_bindings)
         expected_kinds = ("MODEL_RANKING_IMPLEMENTATION", "OPERATOR_LINEAGE_REVIEW")
         if kinds != expected_kinds:
@@ -815,6 +1247,71 @@ class CandidateSelectionPlan(StrictModel):
                 or NO_ACTIVE_CANDIDATE_REQUIREMENT in self.unresolved_requirements
             ):
                 raise ValueError("ancestry transition differs from its reactivated assignment")
+        if self.ancestry_route_transition_binding is not None:
+            role_transition = self.ancestry_route_transition_binding
+            role_selection = self.authenticated_runner_selection
+            if role_selection is None:
+                raise ValueError("role transition requires an exact runner assignment")
+            profile = role_selection.route_predicate_profile
+            if (
+                self.predecessor_plan_sha256 != role_transition.unavailable_predecessor_plan_sha256
+                or role_selection.primary_judge_model_id
+                != role_transition.retained_primary_judge_model_id
+                or role_selection.replay_judge_model_id
+                != role_transition.retained_replay_judge_model_id
+                or role_selection.route_constraints
+                != tuple(item.replacement_constraint for item in role_transition.route_refreshes)
+                or profile.profile_sha256 != role_transition.retained_route_predicate_profile_sha256
+                or profile.schema_version != "1.0"
+                or profile.price_cap_algorithm
+                is not ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_CEILING_V1
+                or profile.price_component_unit_envelopes is not None
+                or NO_ACTIVE_CANDIDATE_REQUIREMENT in self.unresolved_requirements
+            ):
+                raise ValueError("role transition differs from its reactivated assignment")
+            refreshed_entries = {entry.exact_model_id: entry for entry in self.entries}
+            for item in role_transition.route_refreshes:
+                refresh = item.inventory_refresh
+                if refreshed_entries[refresh.exact_model_id].allowed_provider_endpoints != (
+                    refresh.provider_endpoint,
+                ):
+                    raise ValueError("role transition differs from refreshed entry endpoints")
+        if self.operator_cost_transition_binding is not None:
+            cost_transition = self.operator_cost_transition_binding
+            if cost_selection is None:
+                raise ValueError("cost transition requires an exact runner selection")
+            cost_profile = cost_selection.route_predicate_profile
+            legacy_transition = self.schema_version == "1.11"
+            if (
+                cost_profile.schema_version != "1.3"
+                or cost_profile.operator_reservation_policy is None
+                or cost_profile.profile_sha256 != cost_transition.replacement_profile_sha256
+                or cost_profile.operator_reservation_policy.policy_sha256
+                != cost_transition.reservation_policy_sha256
+                or self.predecessor_plan_sha256 != cost_transition.predecessor_plan_sha256
+                or cost_selection.route_constraints != cost_transition.replacement_constraints
+                or (cost_transition.schema_version == "1.1") != legacy_transition
+                or (cost_profile.operator_reservation_policy.legacy_uncertain_allowance is not None)
+                != legacy_transition
+            ):
+                raise ValueError("cost transition differs from its replacement selection")
+        if self.operator_endpoint_trial_binding is not None:
+            trial = self.operator_endpoint_trial_binding
+            trial_selection = self.authenticated_runner_selection
+            expected_constraints = tuple(
+                sorted(
+                    (*trial.retained_constraints, trial.added_candidate_constraint),
+                    key=lambda item: (item.role.value, item.exact_model_id, item.provider_endpoint),
+                )
+            )
+            if (
+                trial_selection is None
+                or self.predecessor_plan_sha256 != trial.predecessor_plan_sha256
+                or trial_selection.route_constraints != expected_constraints
+                or trial_selection.route_predicate_profile.profile_sha256
+                != trial.retained_profile_sha256
+            ):
+                raise ValueError("endpoint trial differs from its exact added and retained routes")
         expected = canonical_sha256(self.model_dump(mode="json", exclude={"plan_sha256"}))
         if self.plan_sha256 != expected:
             raise ValueError("candidate selection plan self-hash is inconsistent")
@@ -1113,20 +1610,32 @@ def _seal_candidate_selection_plan(
     unresolved_requirements: tuple[str, ...],
     predecessor_plan_sha256: str | None,
     ancestry_transition_binding: CandidateSelectionPlanAncestryTransitionBinding | None = None,
+    ancestry_route_transition_binding: CandidateSelectionPlanRoleRouteTransitionBinding
+    | None = None,
+    operator_cost_transition_binding: CandidateSelectionPlanCostTransitionBinding | None = None,
+    operator_endpoint_trial_binding: CandidateSelectionPlanEndpointTrialBinding | None = None,
 ) -> CandidateSelectionPlan:
     ordered_sources = tuple(sorted(source_bindings, key=lambda item: item.kind))
     ordered_entries = tuple(sorted(entries, key=lambda item: item.exact_model_id))
     values: dict[str, object] = {
         "schema_version": (
-            "1.4"
+            "1.12"
+            if operator_endpoint_trial_binding is not None
+            else ("1.11" if operator_cost_transition_binding.schema_version == "1.1" else "1.10")
+            if operator_cost_transition_binding is not None
+            else "1.4"
             if predecessor_plan_sha256 is None
             else (
-                "1.8"
-                if ancestry_transition_binding is not None
+                "1.9"
+                if ancestry_route_transition_binding is not None
                 else (
-                    "1.7"
-                    if authenticated_runner_unavailability is not None
-                    else ("1.6" if endpoint_inventory_refresh is not None else "1.5")
+                    "1.8"
+                    if ancestry_transition_binding is not None
+                    else (
+                        "1.7"
+                        if authenticated_runner_unavailability is not None
+                        else ("1.6" if endpoint_inventory_refresh is not None else "1.5")
+                    )
                 )
             )
         ),
@@ -1160,6 +1669,12 @@ def _seal_candidate_selection_plan(
         values["endpoint_inventory_refresh"] = endpoint_inventory_refresh.model_dump(mode="json")
     if ancestry_transition_binding is not None:
         values["ancestry_transition_binding"] = ancestry_transition_binding.model_dump(mode="json")
+    if ancestry_route_transition_binding is not None:
+        values["ancestry_route_transition_binding"] = ancestry_route_transition_binding
+    if operator_cost_transition_binding is not None:
+        values["operator_cost_transition_binding"] = operator_cost_transition_binding
+    if operator_endpoint_trial_binding is not None:
+        values["operator_endpoint_trial_binding"] = operator_endpoint_trial_binding
     values["plan_sha256"] = canonical_sha256(
         {
             **values,
@@ -1182,6 +1697,33 @@ def _seal_candidate_selection_plan(
                 if ancestry_transition_binding is None
                 else {
                     "ancestry_transition_binding": ancestry_transition_binding.model_dump(
+                        mode="json"
+                    )
+                }
+            ),
+            **(
+                {}
+                if ancestry_route_transition_binding is None
+                else {
+                    "ancestry_route_transition_binding": (
+                        ancestry_route_transition_binding.model_dump(mode="json")
+                    )
+                }
+            ),
+            **(
+                {}
+                if operator_cost_transition_binding is None
+                else {
+                    "operator_cost_transition_binding": operator_cost_transition_binding.model_dump(
+                        mode="json"
+                    )
+                }
+            ),
+            **(
+                {}
+                if operator_endpoint_trial_binding is None
+                else {
+                    "operator_endpoint_trial_binding": operator_endpoint_trial_binding.model_dump(
                         mode="json"
                     )
                 }
@@ -1220,8 +1762,12 @@ def _build_candidate_selection_successor_dependency_guard() -> Callable[[], bool
         AuthenticatedRunnerSelection,
         CandidateSelectionUnavailableState,
         CandidateSelectionPlanAncestryTransitionBinding,
+        CandidateSelectionRoleRouteRefresh,
+        CandidateSelectionPlanRoleRouteTransitionBinding,
+        CandidateSelectionPlanCostTransitionBinding,
         CandidateSelectionPlan,
         RoutePredicateProfile,
+        RouteCostReservationPolicy,
         ExactRouteConstraint,
     )
     successor_model_mro_types = tuple(
@@ -1277,9 +1823,19 @@ def _build_candidate_selection_successor_dependency_guard() -> Callable[[], bool
             "CandidateSelectionPlanAncestryTransitionBinding",
             CandidateSelectionPlanAncestryTransitionBinding,
         ),
+        ("CandidateSelectionRoleRouteRefresh", CandidateSelectionRoleRouteRefresh),
+        (
+            "CandidateSelectionPlanRoleRouteTransitionBinding",
+            CandidateSelectionPlanRoleRouteTransitionBinding,
+        ),
+        (
+            "CandidateSelectionPlanCostTransitionBinding",
+            CandidateSelectionPlanCostTransitionBinding,
+        ),
         ("CandidateSelectionPlan", CandidateSelectionPlan),
         ("CandidateSelectionError", CandidateSelectionError),
         ("RoutePredicateProfile", RoutePredicateProfile),
+        ("RouteCostReservationPolicy", RouteCostReservationPolicy),
         ("ExactRouteConstraint", ExactRouteConstraint),
         ("ExactRouteRole", ExactRouteRole),
         ("ProviderPriceCapAlgorithm", ProviderPriceCapAlgorithm),

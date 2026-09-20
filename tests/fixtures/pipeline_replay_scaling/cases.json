@@ -1,0 +1,10 @@
+{
+  "schema_version": "1.0",
+  "scope": "SYNTHETIC_FULL_PIPELINE_ORIGINAL_REPLAY_NO_PROVIDER",
+  "cases": ["generic-open", "mixed-specialist"],
+  "fresh_pipeline_samples": 1,
+  "unprofiled_resume_samples": 3,
+  "additional_profiled_resume_samples": 1,
+  "serial_execution": true,
+  "runtime_optimization_applied": false
+}

@@ -93,7 +93,7 @@ ENDPOINT_C = "provider-gamma/global"
 ENDPOINT_D = "provider-delta"
 REFRESHED_ENDPOINT_A = "provider-alpha/new-fp8"
 ROOT = Path(__file__).parents[2]
-ACTIVE_SELECTION_PLAN_PATH = ROOT / "config" / "models.selection-plan.json"
+UNAVAILABLE_SELECTION_PLAN_PATH = ROOT / "tests/fixtures/model_selection/unavailable-plan-v1.7.json"
 REVOKED_SELECTION_PLAN_PATH = (
     ROOT / "tests" / "fixtures" / "model_selection" / "revoked-active-plan-v1.4.json"
 )
@@ -101,10 +101,12 @@ REVOKED_SELECTION_PLAN_RAW_SHA256 = (
     "0da03b75dd608efade4c41e87de38139fb735576049f824365889be9c9a3ff24"
 )
 REVOKED_SELECTION_PLAN_SHA256 = "bb3d60c3ff75ed2062b1ee68fe7b2011cf37ce860461b7d37eb10cd5faf7650f"
-ACTIVE_SELECTION_PLAN_RAW_SHA256 = (
+UNAVAILABLE_SELECTION_PLAN_RAW_SHA256 = (
     "4e7fff76ffb126a1cdf044cdfc889d79def96a29076aa11e3b42c7ef0ff9a695"
 )
-ACTIVE_SELECTION_PLAN_SHA256 = "14566de1f7da5e4a769502bdd6a7e1ec6c0f193ed126c8fc85236f0851586fd3"
+UNAVAILABLE_SELECTION_PLAN_SHA256 = (
+    "14566de1f7da5e4a769502bdd6a7e1ec6c0f193ed126c8fc85236f0851586fd3"
+)
 ACTIVE_UNAVAILABLE_STATE_SHA256 = "98941c3253ffe0f1aa88890b1c8b7fafb7d6575ee28ca31cb7724f14e784ceae"
 MATCHED_REVOCATION_SET_SHA256 = "7c0118f5c170d46e6d2478bf92cbd83d1be6b426bda36dd57a6fc93e2ffd18c5"
 HIGH_REASONING_EFFORTS: tuple[ReasoningEffort, ...] = (
@@ -490,10 +492,15 @@ def test_selection_plan_is_deterministic_and_strictly_nonauthorizing() -> None:
         "1.6",
         "1.7",
         "1.8",
+        "1.9",
+        "1.10",
+        "1.11",
+        "1.12",
     ]
     assert "predecessor_plan_sha256" not in required
     assert "endpoint_inventory_refresh" not in required
-    assert schema["allOf"] == [
+    assert len(schema["allOf"]) == 10
+    assert schema["allOf"][:4] == [
         {
             "if": {
                 "properties": {"schema_version": {"const": "1.4"}},
@@ -2528,14 +2535,14 @@ def test_candidate_selection_schema_versions_require_exact_predecessor_custody()
         CandidateSelectionPlan.model_validate_json(json.dumps(refresh_on_v15), strict=True)
 
 
-def test_committed_selection_plan_is_canonical_and_nonauthorizing() -> None:
-    plan = load_candidate_selection_plan(ACTIVE_SELECTION_PLAN_PATH)
+def test_archived_unavailable_selection_plan_is_canonical_and_nonauthorizing() -> None:
+    plan = load_candidate_selection_plan(UNAVAILABLE_SELECTION_PLAN_PATH)
     predecessor = load_candidate_selection_plan(REVOKED_SELECTION_PLAN_PATH)
     guide = (ROOT / "docs" / "models" / "model_selection.md").read_text(encoding="utf-8")
 
     assert plan.schema_version == "1.7"
     assert plan.predecessor_plan_sha256 == REVOKED_SELECTION_PLAN_SHA256
-    assert plan.plan_sha256 == ACTIVE_SELECTION_PLAN_SHA256
+    assert plan.plan_sha256 == UNAVAILABLE_SELECTION_PLAN_SHA256
     assert len(plan.entries) == 12
     assert plan.source_bindings == predecessor.source_bindings
     assert plan.entries == predecessor.entries
@@ -2651,8 +2658,8 @@ def test_committed_selection_plan_is_canonical_and_nonauthorizing() -> None:
 def test_unavailable_successor_is_deterministic_and_replays_the_committed_bytes() -> None:
     predecessor_bytes = REVOKED_SELECTION_PLAN_PATH.read_bytes()
     predecessor = load_candidate_selection_plan(REVOKED_SELECTION_PLAN_PATH)
-    committed_bytes = ACTIVE_SELECTION_PLAN_PATH.read_bytes()
-    committed = load_candidate_selection_plan(ACTIVE_SELECTION_PLAN_PATH)
+    committed_bytes = UNAVAILABLE_SELECTION_PLAN_PATH.read_bytes()
+    committed = load_candidate_selection_plan(UNAVAILABLE_SELECTION_PLAN_PATH)
 
     first = derive_candidate_selection_plan_unavailable_successor(predecessor=predecessor)
     second = derive_candidate_selection_plan_unavailable_successor(predecessor=predecessor)
@@ -2671,8 +2678,8 @@ def test_unavailable_successor_is_deterministic_and_replays_the_committed_bytes(
     assert stable_json(predecessor).encode("utf-8") == predecessor_bytes
     assert stable_json(first).encode("utf-8") == committed_bytes
     assert len(committed_bytes) == 15_163
-    assert hashlib.sha256(committed_bytes).hexdigest() == ACTIVE_SELECTION_PLAN_RAW_SHA256
-    assert committed.plan_sha256 == ACTIVE_SELECTION_PLAN_SHA256
+    assert hashlib.sha256(committed_bytes).hexdigest() == UNAVAILABLE_SELECTION_PLAN_RAW_SHA256
+    assert committed.plan_sha256 == UNAVAILABLE_SELECTION_PLAN_SHA256
     assert predecessor_bytes == REVOKED_SELECTION_PLAN_PATH.read_bytes()
 
 
@@ -2725,7 +2732,7 @@ def test_unavailable_state_replay_ignores_unrelated_future_revocation_entries() 
 
 
 def test_unavailable_successor_rejects_routes_and_cannot_be_used_as_a_profile() -> None:
-    plan = load_candidate_selection_plan(ACTIVE_SELECTION_PLAN_PATH)
+    plan = load_candidate_selection_plan(UNAVAILABLE_SELECTION_PLAN_PATH)
 
     for model_id, provider_endpoint in (
         ("deepseek/deepseek-v4-pro-0813", "parasail/fp8"),
@@ -2760,7 +2767,7 @@ def test_unavailable_successor_blocks_discovery_and_registry_derivation(
     tmp_path: Path,
     config_factory: Callable[..., AuditConfig],
 ) -> None:
-    plan = load_candidate_selection_plan(ACTIVE_SELECTION_PLAN_PATH)
+    plan = load_candidate_selection_plan(UNAVAILABLE_SELECTION_PLAN_PATH)
     config = config_factory(privacy={"profile": PrivacyProfile.SYNTHETIC_BENCHMARK})
     manifest, evidence, _template = fixtures._discovery_and_registry(
         tmp_path=tmp_path,
@@ -2791,7 +2798,7 @@ def test_unavailable_successor_blocks_discovery_and_registry_derivation(
 
 
 def test_unavailable_successor_refuses_reactivation_without_authenticated_ancestry() -> None:
-    inactive = load_candidate_selection_plan(ACTIVE_SELECTION_PLAN_PATH)
+    inactive = load_candidate_selection_plan(UNAVAILABLE_SELECTION_PLAN_PATH)
     unavailable = inactive.authenticated_runner_unavailability
     assert unavailable is not None
     forged_payload = inactive.model_dump(mode="json")
@@ -2827,7 +2834,7 @@ def test_unavailable_successor_refuses_reactivation_without_authenticated_ancest
 
 def test_selected_private_plan_cannot_claim_unavailable_plan_as_authenticated_predecessor() -> None:
     archived = load_candidate_selection_plan(REVOKED_SELECTION_PLAN_PATH)
-    inactive = load_candidate_selection_plan(ACTIVE_SELECTION_PLAN_PATH)
+    inactive = load_candidate_selection_plan(UNAVAILABLE_SELECTION_PLAN_PATH)
     selected = derive_candidate_selection_plan_successor(
         predecessor=archived,
         candidate_model_id="tencent/hy3",
@@ -2870,7 +2877,7 @@ def test_selected_private_plan_cannot_claim_unavailable_plan_as_authenticated_pr
 
 def test_unavailable_successor_rejects_state_tamper_and_candidate_resurrection() -> None:
     predecessor = load_candidate_selection_plan(REVOKED_SELECTION_PLAN_PATH)
-    successor = load_candidate_selection_plan(ACTIVE_SELECTION_PLAN_PATH)
+    successor = load_candidate_selection_plan(UNAVAILABLE_SELECTION_PLAN_PATH)
 
     raw_hash_tamper = successor.model_dump(mode="json")
     raw_unavailable = raw_hash_tamper["authenticated_runner_unavailability"]

@@ -145,7 +145,8 @@ def authority_fixture() -> _Fixture:
                 suite=suite,
                 execution_evidence=ExecutionEvidenceKind.MOCK,
             ),
-        )
+        ),
+        loop_factory=asyncio.new_event_loop,
     )
     replay_report = asyncio.run(
         run_model_benchmark(
@@ -155,7 +156,8 @@ def authority_fixture() -> _Fixture:
                 suite=suite,
                 execution_evidence=ExecutionEvidenceKind.MOCK,
             ),
-        )
+        ),
+        loop_factory=asyncio.new_event_loop,
     )
     candidate = build_evidence_seal_lineage_binding(
         exact_model_id=primary_target.model_id,
@@ -468,7 +470,8 @@ def test_replay_output_must_be_byte_identical(authority_fixture: _Fixture) -> No
                 )
             ],
             provider=_UnavailableProvider(),
-        )
+        ),
+        loop_factory=asyncio.new_event_loop,
     )
     replay = build_evidence_seal_decision_projection(
         suite=authority_fixture.suite,

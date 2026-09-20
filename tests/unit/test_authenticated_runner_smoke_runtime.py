@@ -80,6 +80,7 @@ from mmaudit.models.route_constraints import (
     RouteConstraintPurpose,
     RoutePredicateDisposition,
     RoutePredicateId,
+    RoutePredicateProfile,
 )
 from mmaudit.models.schemas import UsageRecord
 from mmaudit.models.token_planning import (
@@ -297,6 +298,7 @@ def _launch(
     candidate_tripwires: tuple[Decimal, Decimal] = (Decimal("1"), Decimal("1")),
     judge_tripwires: tuple[Decimal, Decimal] = (Decimal("1"), Decimal("1")),
     smoke_run_index: int = 1,
+    route_predicate_profile: RoutePredicateProfile | None = None,
 ) -> AuthenticatedRunnerSmokeOpenRouterLaunch:
     tmp_path.chmod(0o700)
     ledger = AtomicCostLedger.initialize(
@@ -324,6 +326,7 @@ def _launch(
             tmp_path=tmp_path / "candidate-route",
             config=config,
             route_role=ExactRouteRole.CANDIDATE,
+            route_predicate_profile=route_predicate_profile,
             specs=(
                 candidate_fixtures._CandidateSpec(
                     model_id=CANDIDATE_ID,
@@ -339,6 +342,7 @@ def _launch(
             tmp_path=tmp_path / "primary-route",
             config=config,
             route_role=ExactRouteRole.PRIMARY_JUDGE,
+            route_predicate_profile=route_predicate_profile,
             specs=(
                 candidate_fixtures._CandidateSpec(
                     model_id=PRIMARY_JUDGE_ID,
@@ -353,6 +357,7 @@ def _launch(
         tmp_path=tmp_path / "replay-route",
         config=config,
         route_role=ExactRouteRole.REPLAY_JUDGE,
+        route_predicate_profile=route_predicate_profile,
         specs=(
             candidate_fixtures._CandidateSpec(
                 model_id=REPLAY_JUDGE_ID,
@@ -467,17 +472,20 @@ def _install_live_route_client_factory(
         launch.run_plans[0].judge,
         launch.run_plans[1].judge,
     )
-    models_by_endpoint = {item.approved_provider_endpoint: item for item in models}
+    models_by_route = {
+        (item.exact_model_id, item.approved_provider_endpoint): item for item in models
+    }
 
     def build_client(**kwargs: Any) -> Any:
         provider_policy = kwargs["provider_policy"]
         endpoint = provider_policy.only[0]
+        constraint = kwargs["candidate_revocation_route_constraint"]
         client = factory(
             api_key=kwargs["api_key"],
             config=launch.config,
             budget=kwargs["budget"],
             usage=kwargs["usage"],
-            candidate=models_by_endpoint[endpoint],
+            candidate=models_by_route[(constraint.exact_model_id, endpoint)],
             provider_policy=provider_policy,
             candidate_revocation_route_constraint=kwargs["candidate_revocation_route_constraint"],
             reasoning_policy=kwargs["reasoning_policy"],
@@ -615,7 +623,7 @@ def _validate_fake_bundle(
     monkeypatch: pytest.MonkeyPatch,
     bundle: SimpleNamespace,
 ) -> object:
-    monkeypatch.setattr(smoke_evidence_module, "_require_usage_preview_join", lambda *_a: None)
+    monkeypatch.setattr(smoke_evidence_module, "_require_usage_preview_join", lambda *_a: ())
     monkeypatch.setattr(
         smoke_evidence_module,
         "_canonical_sha256",
@@ -1916,11 +1924,14 @@ def test_smoke_execution_lineage_mismatch_precedes_secrets_provider_and_ledger_m
     before = ledger.snapshot()
     secrets = OperatorSecrets({OPENROUTER_API_KEY_NAME: "synthetic-provider-free-lineage-test"})
     try:
-        with pytest.raises(
-            AuthenticatedRunnerSmokeOpenRouterError,
-            match="non-independent projection",
+        with (
+            pytest.raises(
+                AuthenticatedRunnerSmokeOpenRouterError,
+                match="non-independent projection",
+            ),
+            asyncio.Runner(loop_factory=asyncio.new_event_loop) as runner,
         ):
-            asyncio.run(
+            runner.run(
                 execute_authenticated_runner_smoke_openrouter(
                     launch=launch,
                     operator_secrets=secrets,
@@ -3602,8 +3613,11 @@ def test_execution_orders_both_candidates_then_both_judge_preparations_and_judge
         fail_second_candidate_delta=False,
     )
     try:
-        with pytest.raises(_StopAfterJudges):
-            asyncio.run(
+        with (
+            pytest.raises(_StopAfterJudges),
+            asyncio.Runner(loop_factory=asyncio.new_event_loop) as runner,
+        ):
+            runner.run(
                 execute_authenticated_runner_smoke_openrouter(
                     launch=launch,
                     operator_secrets=secrets,
@@ -3637,11 +3651,14 @@ def test_execution_never_prepares_or_dispatches_judge_after_candidate_ledger_ano
         fail_second_candidate_delta=True,
     )
     try:
-        with pytest.raises(
-            AuthenticatedRunnerSmokeOpenRouterError,
-            match="ledger anomaly",
+        with (
+            pytest.raises(
+                AuthenticatedRunnerSmokeOpenRouterError,
+                match="ledger anomaly",
+            ),
+            asyncio.Runner(loop_factory=asyncio.new_event_loop) as runner,
         ):
-            asyncio.run(
+            runner.run(
                 execute_authenticated_runner_smoke_openrouter(
                     launch=launch,
                     operator_secrets=secrets,

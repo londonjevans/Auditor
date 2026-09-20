@@ -146,7 +146,7 @@ def test_public_manifest_judgment_schema_retains_bounded_nested_reference_contra
     )
     response = manifest_judgment_response(verdict=verdict)
     decision = response["decisions"][0]
-    decision["claim_id"] = "file-0064:16"
+    decision["claim_id"] = "file-0256:16"
     if references:
         decision["source_refs"][0].update(
             filename="src/nested/Maximum.sol", line_start=10000, line_end=10000
@@ -155,7 +155,7 @@ def test_public_manifest_judgment_schema_retains_bounded_nested_reference_contra
         decision["source_refs"] = []
     validator = Draft202012Validator(schema)
     assert validator.is_valid(response) == (references or verdict == "INCONCLUSIVE")
-    decision["claim_id"] = "file-0065:16"
+    decision["claim_id"] = "file-0257:16"
     assert not validator.is_valid(response)
 
 
@@ -173,9 +173,9 @@ def test_manifest_score_schema_retains_scale_and_nonqualification_contract(field
     if field == "source":
         data["binding"]["truth"]["controls"][0]["origin"]["line_end"] = 10001
     elif field == "claims":
-        data["claims"][0]["claim_id"] = "file-0065:01"
+        data["claims"][0]["claim_id"] = "file-0257:01"
     elif field == "weight":
-        data["summary"]["severity_weighted_structural_precision"]["denominator"] = 10241
+        data["summary"]["severity_weighted_structural_precision"]["denominator"] = 40961
     elif field == "authority":
         data["findings_validated"] = True
     elif field == "provenance":
@@ -203,11 +203,11 @@ def test_cumulative_score_schema_requires_original_binding_and_bounded_nonqualif
     elif field == "missing_binding":
         del data["history"]["original_score"]
     elif field == "requests":
-        data["requests"] = data["requests"][:1] * 577
+        data["requests"] = data["requests"][:1] * 2305
     elif field == "stage":
         data["requests"][0]["stage_index"] = 9
     elif field == "claims":
-        data["claims"][0]["claim_id"] = "file-0065:01"
+        data["claims"][0]["claim_id"] = "file-0257:01"
     elif field == "authority":
         data["qualification_eligible"] = True
     else:
@@ -235,7 +235,7 @@ def test_control_measurement_schema_retains_typed_source_and_nonqualifying_bound
     elif field == "stage":
         data["claims"][0]["stage_index"] = 9
     elif field == "claims":
-        data["claims"] = data["claims"][:1] * 1025
+        data["claims"] = data["claims"][:1] * 4097
     elif field == "authority":
         data["qualification_eligible"] = True
     elif field == "root":

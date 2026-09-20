@@ -6,6 +6,7 @@ import ctypes
 import errno
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -2805,6 +2806,7 @@ def isolated_executable_version_probe(
     repository_javascript: bool = False,
     timeout_seconds: float = 15.0,
     expected_host_observation: _ScannerExecutableObservation | None = None,
+    absolute_deadline: float | None = None,
 ) -> ExecutableVersionProbe:
     """Probe privately, rechecking a supplied host identity after probe preparation.
 
@@ -2813,6 +2815,17 @@ def isolated_executable_version_probe(
 
     if not 0 < timeout_seconds <= 15.0:
         raise ValueError("isolated executable version timeout is outside its fixed bound")
+    if absolute_deadline is not None and (
+        type(absolute_deadline) not in {int, float} or not math.isfinite(absolute_deadline)
+    ):
+        raise ValueError("isolated executable version deadline must be finite")
+    if absolute_deadline is not None and time.monotonic() >= absolute_deadline:
+        return ExecutableVersionProbe(
+            status=ExecutableVersionProbeStatus.TIMED_OUT,
+            version=None,
+            diagnostic=_VERSION_TIMEOUT_DIAGNOSTIC,
+            return_code=None,
+        )
     if repository_javascript and expected_host_observation is not None:
         raise ValueError("host executable observation cannot verify an image-side probe")
     probe_dir = _version_probe_directory(private_dir, executable)
@@ -2869,6 +2882,8 @@ def isolated_executable_version_probe(
                         diagnostic=identity_error,
                         return_code=None,
                     )
+            if absolute_deadline is not None and time.monotonic() >= absolute_deadline:
+                raise subprocess.TimeoutExpired(command, timeout_seconds)
             process = subprocess.Popen(
                 command,
                 cwd=workspace,
@@ -2892,6 +2907,8 @@ def isolated_executable_version_probe(
                 ),
             )
             deadline = time.monotonic() + timeout_seconds
+            if absolute_deadline is not None:
+                deadline = min(deadline, absolute_deadline)
             while process.poll() is None:
                 if time.monotonic() >= deadline:
                     timed_out = True
@@ -2922,6 +2939,8 @@ def isolated_executable_version_probe(
                     break
                 time.sleep(_VERSION_PROBE_POLL_SECONDS)
             return_code = process.wait(timeout=5)
+            if absolute_deadline is not None and time.monotonic() >= absolute_deadline:
+                timed_out = True
             descendant_error = _cleanup_lingering_process_group(
                 process,
                 diagnostic=_VERSION_DESCENDANT_DIAGNOSTIC,
@@ -2949,6 +2968,8 @@ def isolated_executable_version_probe(
     finally:
         cleanup_error = _scanner_cleanup_error(backend, private_dir)
 
+    if absolute_deadline is not None and time.monotonic() >= absolute_deadline:
+        timed_out = True
     if toolchain_resolution_failed:
         return ExecutableVersionProbe(
             status=ExecutableVersionProbeStatus.INTERPRETER_OR_LOADER_FAILURE,

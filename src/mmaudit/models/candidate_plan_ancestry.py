@@ -1,8 +1,9 @@
 """Repository-pinned ancestry custody for unavailable candidate-selection plans.
 
-The active schema-v1.7 plan intentionally has no candidate assignment.  This module
-authenticates its exact repository ancestry before a distinct, private schema-v1.8
-reactivation plan can be derived.  The opaque capability and every serialized plan
+The retained schema-v1.7 predecessor intentionally has no candidate assignment. This
+module authenticates its exact repository ancestry before a private schema-v1.8
+reactivation or explicit schema-v1.9 role-route refresh can be derived. The opaque
+capability and every serialized plan
 remain nonauthorizing: no provider, adoption, qualification, runner, or release
 authority is created here.
 """
@@ -32,6 +33,10 @@ from mmaudit.models.candidate_selection import (
     CandidateSelectionError,
     CandidateSelectionPlan,
     CandidateSelectionPlanAncestryTransitionBinding,
+    CandidateSelectionPlanCostTransitionBinding,
+    CandidateSelectionPlanEndpointTrialBinding,
+    CandidateSelectionPlanRoleRouteTransitionBinding,
+    CandidateSelectionRoleRouteRefresh,
     load_candidate_selection_plan,
     preflight_candidate_selection_plan_successor_output,
     require_candidate_selection_plan_currently_eligible,
@@ -39,10 +44,15 @@ from mmaudit.models.candidate_selection import (
     seal_candidate_selection_entry,
     validate_candidate_selection_plan_successor,
 )
+from mmaudit.models.legacy_cost_allowance import (
+    LegacyUncertainCostAllowance,
+    LegacyUncertainCostEntry,
+)
 from mmaudit.models.route_constraints import (
     ExactRouteConstraint,
     ExactRouteRole,
     ProviderPriceCapAlgorithm,
+    RouteCostReservationPolicy,
     RoutePredicateProfile,
 )
 from mmaudit.orchestration.manifest import ManifestFileBinding, canonical_sha256
@@ -52,7 +62,7 @@ from mmaudit.reporting.json_report import stable_json
 _MAX_PLAN_BYTES = 2_000_000
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 _SELECTED_ANCESTOR_RELATIVE_PATH = "tests/fixtures/model_selection/revoked-active-plan-v1.4.json"
-_UNAVAILABLE_PREDECESSOR_RELATIVE_PATH = "config/models.selection-plan.json"
+_UNAVAILABLE_PREDECESSOR_RELATIVE_PATH = "tests/fixtures/model_selection/unavailable-plan-v1.7.json"
 
 SELECTED_ANCESTOR_RAW_SHA256 = "0da03b75dd608efade4c41e87de38139fb735576049f824365889be9c9a3ff24"
 SELECTED_ANCESTOR_PLAN_SHA256 = "bb3d60c3ff75ed2062b1ee68fe7b2011cf37ce860461b7d37eb10cd5faf7650f"
@@ -64,6 +74,41 @@ UNAVAILABLE_PREDECESSOR_PLAN_SHA256 = (
 )
 UNAVAILABLE_STATE_SHA256 = "98941c3253ffe0f1aa88890b1c8b7fafb7d6575ee28ca31cb7724f14e784ceae"
 MATCHED_REVOCATION_SET_SHA256 = "7c0118f5c170d46e6d2478bf92cbd83d1be6b426bda36dd57a6fc93e2ffd18c5"
+COST_PREDECESSOR_RAW_SHA256 = "ae31d07d200625b64682d386b202b9b2e83cc22e0824065b5511f8651030976c"
+COST_PREDECESSOR_PLAN_SHA256 = "58700428e45543ace843af5463b1cf5756ce5683f91daaed9c805151a225f87f"
+LEGACY_COST_PREDECESSOR_RAW_SHA256 = (
+    "95b136f0f2254c84ada3391eead1aeee9a52bd88f60ce78d4cd88bd42ed7be59"
+)
+LEGACY_COST_PREDECESSOR_PLAN_SHA256 = (
+    "55c79770ac0255e711d89f07fdbe02dd9a5e8bec770a8df6d070678dd96a1d44"
+)
+ENDPOINT_TRIAL_PREDECESSOR_RAW_SHA256 = (
+    "7af8d0eeeade437767c965482c563dafa893ce76eee818333fd728daab7cdbb0"
+)
+ENDPOINT_TRIAL_PREDECESSOR_PLAN_SHA256 = (
+    "a868db571f4ced1cba9db7aa53d9a6b56b05c99bb465618d445ca940cd73313c"
+)
+# Exact non-secret metadata supplied in operator report875e435c, 2026-09-11T08:59Z.
+# Jos's direct instruction authorizes only this pair; the report is not authority.
+# Immutable tuples prevent a general prefix, age-based or future-entry allowance.
+_LEGACY_COST_ROWS = (
+    (
+        "authrunner.smoke.r17.judge.replay:"
+        "362788774fcd9547f0ebc92413f5aea00d2b91910ccbda5224589c0859b29829",
+        "88a38af618eb417391099013418c741c",
+        "2026-08-24T02:12:47.028075+00:00",
+        "2026-08-24T02:12:47.048063+00:00",
+        "0.18105",
+    ),
+    (
+        "authrunner.smoke.r2.candidate.primary:"
+        "721f058726cf9509c07cb2aae662fb6ac23b5c30a363db40229faf8895034497",
+        "bec758dc72d74ebebdd32bcd4c1efbd1",
+        "2026-08-23T06:33:01.887394+00:00",
+        "2026-08-23T06:33:01.892191+00:00",
+        "0.05225616",
+    ),
+)
 
 
 class CandidateSelectionPlanAncestryError(ValueError):
@@ -232,6 +277,13 @@ def _build_candidate_selection_plan_ancestry_runtime() -> tuple[
     revocation_error_type = CandidateSelectionRevocationError
     plan_type = CandidateSelectionPlan
     binding_type = CandidateSelectionPlanAncestryTransitionBinding
+    role_binding_type = CandidateSelectionPlanRoleRouteTransitionBinding
+    role_refresh_type = CandidateSelectionRoleRouteRefresh
+    cost_binding_type = CandidateSelectionPlanCostTransitionBinding
+    endpoint_trial_type = CandidateSelectionPlanEndpointTrialBinding
+    reservation_policy_type = RouteCostReservationPolicy
+    legacy_allowance_type = LegacyUncertainCostAllowance
+    legacy_entry_type = LegacyUncertainCostEntry
     projection_type = CandidateSelectionPlanAncestryProjection
     capability_type = VerifiedCandidateSelectionPlanAncestry
     observed_type = _ObservedCandidateSelectionPlanAncestry
@@ -239,6 +291,8 @@ def _build_candidate_selection_plan_ancestry_runtime() -> tuple[
     route_constraint_type = ExactRouteConstraint
     route_profile_type = RoutePredicateProfile
     candidate_role = ExactRouteRole.CANDIDATE
+    primary_role = ExactRouteRole.PRIMARY_JUDGE
+    replay_role = ExactRouteRole.REPLAY_JUDGE
     v1_price_algorithm = ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_CEILING_V1
 
     repository_root = _REPOSITORY_ROOT
@@ -250,6 +304,13 @@ def _build_candidate_selection_plan_ancestry_runtime() -> tuple[
     unavailable_plan_sha256 = UNAVAILABLE_PREDECESSOR_PLAN_SHA256
     unavailable_state_sha256 = UNAVAILABLE_STATE_SHA256
     matched_revocation_set_sha256 = MATCHED_REVOCATION_SET_SHA256
+    cost_predecessor_raw_sha256 = COST_PREDECESSOR_RAW_SHA256
+    cost_predecessor_plan_sha256 = COST_PREDECESSOR_PLAN_SHA256
+    legacy_cost_predecessor_raw_sha256 = LEGACY_COST_PREDECESSOR_RAW_SHA256
+    legacy_cost_predecessor_plan_sha256 = LEGACY_COST_PREDECESSOR_PLAN_SHA256
+    endpoint_trial_predecessor_raw_sha256 = ENDPOINT_TRIAL_PREDECESSOR_RAW_SHA256
+    endpoint_trial_predecessor_plan_sha256 = ENDPOINT_TRIAL_PREDECESSOR_PLAN_SHA256
+    legacy_cost_rows = _LEGACY_COST_ROWS
     maximum_plan_bytes = _MAX_PLAN_BYTES
     no_candidate_requirement = NO_ACTIVE_CANDIDATE_REQUIREMENT
 
@@ -261,6 +322,9 @@ def _build_candidate_selection_plan_ancestry_runtime() -> tuple[
     trusted_require_eligible = require_candidate_selection_plan_currently_eligible
     trusted_seal_selection = seal_authenticated_runner_selection
     trusted_seal_entry = seal_candidate_selection_entry
+    trusted_seal_refresh = (
+        candidate_selection_module._seal_candidate_selection_endpoint_inventory_refresh
+    )
     trusted_seal_plan = candidate_selection_module._seal_candidate_selection_plan
     trusted_assignment_gate = require_candidate_assignment_eligible
     trusted_candidate_pristine = (
@@ -298,6 +362,9 @@ def _build_candidate_selection_plan_ancestry_runtime() -> tuple[
             release_io_module._FileObservation,
             release_io_module.FileEvidenceObservation,
             ManifestFileBinding,
+            legacy_allowance_type,
+            legacy_entry_type,
+            endpoint_trial_type,
         )
     )
     mutable_class_bindings = tuple(
@@ -392,6 +459,20 @@ def _build_candidate_selection_plan_ancestry_runtime() -> tuple[
             "MATCHED_REVOCATION_SET_SHA256": matched_revocation_set_sha256,
             "CandidateSelectionPlan": plan_type,
             "CandidateSelectionPlanAncestryTransitionBinding": binding_type,
+            "CandidateSelectionPlanRoleRouteTransitionBinding": role_binding_type,
+            "CandidateSelectionRoleRouteRefresh": role_refresh_type,
+            "CandidateSelectionPlanCostTransitionBinding": cost_binding_type,
+            "CandidateSelectionPlanEndpointTrialBinding": endpoint_trial_type,
+            "RouteCostReservationPolicy": reservation_policy_type,
+            "COST_PREDECESSOR_RAW_SHA256": cost_predecessor_raw_sha256,
+            "COST_PREDECESSOR_PLAN_SHA256": cost_predecessor_plan_sha256,
+            "LEGACY_COST_PREDECESSOR_RAW_SHA256": legacy_cost_predecessor_raw_sha256,
+            "LEGACY_COST_PREDECESSOR_PLAN_SHA256": legacy_cost_predecessor_plan_sha256,
+            "ENDPOINT_TRIAL_PREDECESSOR_RAW_SHA256": endpoint_trial_predecessor_raw_sha256,
+            "ENDPOINT_TRIAL_PREDECESSOR_PLAN_SHA256": endpoint_trial_predecessor_plan_sha256,
+            "_LEGACY_COST_ROWS": legacy_cost_rows,
+            "LegacyUncertainCostAllowance": legacy_allowance_type,
+            "LegacyUncertainCostEntry": legacy_entry_type,
             "CandidateSelectionPlanAncestryProjection": projection_type,
             "VerifiedCandidateSelectionPlanAncestry": capability_type,
             "CandidateSelectionPlanAncestryError": error_type,
@@ -403,7 +484,17 @@ def _build_candidate_selection_plan_ancestry_runtime() -> tuple[
     )
     external_bindings = (
         (candidate_selection_module, "seal_candidate_selection_entry", trusted_seal_entry),
+        (
+            candidate_selection_module,
+            "_seal_candidate_selection_endpoint_inventory_refresh",
+            trusted_seal_refresh,
+        ),
         (candidate_selection_module, "_seal_candidate_selection_plan", trusted_seal_plan),
+        (
+            candidate_selection_module,
+            "CandidateSelectionPlanEndpointTrialBinding",
+            endpoint_trial_type,
+        ),
         (
             candidate_selection_module,
             "_candidate_selection_successor_callables_are_pristine",
@@ -505,6 +596,7 @@ def _build_candidate_selection_plan_ancestry_runtime() -> tuple[
     io_dependency_functions = tuple(io_functions)
     function_codes: tuple[tuple[object, object], ...] = (
         (trusted_seal_entry, trusted_seal_entry.__code__),
+        (trusted_seal_refresh, trusted_seal_refresh.__code__),
         (trusted_candidate_pristine, getattr(trusted_candidate_pristine, "__code__", None)),
         (trusted_revocation_pristine, getattr(trusted_revocation_pristine, "__code__", None)),
         (trusted_validate_successor, getattr(trusted_validate_successor, "__code__", None)),
@@ -920,22 +1012,458 @@ def _build_candidate_selection_plan_ancestry_runtime() -> tuple[
             raise error_type("candidate-selection reactivation eligibility result changed")
         return eligible
 
+    def derive_role_refresh_impl(
+        capability: VerifiedCandidateSelectionPlanAncestry,
+        *,
+        candidate_model_id: str,
+        provider_endpoint: str,
+        primary_judge_provider_endpoint: str,
+        replay_judge_provider_endpoint: str,
+    ) -> CandidateSelectionPlan:
+        observed = replay(capability)
+        predecessor = observed.unavailable_predecessor
+        projection = observed.projection
+        unavailable = predecessor.authenticated_runner_unavailability
+        if unavailable is None:
+            raise error_type("candidate-selection ancestry predecessor is not unavailable")
+        endpoints = (
+            provider_endpoint,
+            primary_judge_provider_endpoint,
+            replay_judge_provider_endpoint,
+        )
+        if type(candidate_model_id) is not str or any(type(item) is not str for item in endpoints):
+            raise error_type("candidate-selection role refresh endpoints require exact strings")
+        if any(item != item.casefold() for item in endpoints):
+            raise error_type("candidate-selection role refresh endpoints must be lowercase")
+        if candidate_model_id in {
+            unavailable.primary_judge_model_id,
+            unavailable.replay_judge_model_id,
+        }:
+            raise error_type("candidate-selection role refresh would collide with a judge")
+        role_models = (
+            (candidate_role, candidate_model_id),
+            (primary_role, unavailable.primary_judge_model_id),
+            (replay_role, unavailable.replay_judge_model_id),
+        )
+        entries = {item.exact_model_id: item for item in predecessor.entries}
+        profile = route_profile_type.model_validate_json(
+            unavailable.route_predicate_profile.model_dump_json(), strict=True
+        )
+        refreshes: list[CandidateSelectionRoleRouteRefresh] = []
+        for (role, model_id), endpoint in zip(role_models, endpoints, strict=True):
+            entry = entries.get(model_id)
+            if entry is None:
+                raise error_type("candidate-selection role refresh model is outside the plan")
+            try:
+                trusted_assignment_gate(
+                    role=role, exact_model_id=model_id, provider_endpoint=endpoint
+                )
+            except revocation_error_type as exc:
+                raise error_type(
+                    f"candidate-selection role refresh route is revoked: {exc}"
+                ) from exc
+            if endpoint in entry.allowed_provider_endpoints:
+                raise error_type(
+                    "candidate-selection role refresh requires previously unlisted endpoints"
+                )
+            constraint = route_constraint_type.build(
+                role=role, exact_model_id=model_id, provider_endpoint=endpoint, profile=profile
+            )
+            refresh = trusted_seal_refresh(predecessor_entry=entry, provider_endpoint=endpoint)
+            refreshes.append(
+                role_refresh_type(
+                    role=role, inventory_refresh=refresh, replacement_constraint=constraint
+                )
+            )
+        selection = trusted_seal_selection(
+            candidate_model_id=candidate_model_id,
+            primary_judge_model_id=unavailable.primary_judge_model_id,
+            replay_judge_model_id=unavailable.replay_judge_model_id,
+            route_predicate_profile=profile,
+            route_constraints=tuple(item.replacement_constraint for item in refreshes),
+        )
+        binding_values: dict[str, object] = {
+            "schema_version": "1.0",
+            "artifact_kind": "REPOSITORY_PINNED_SELECTION_PLAN_ROLE_ROUTE_TRANSITION",
+            "operator_decision_id": "OP-COST-2026-09-09",
+            "selected_ancestor_raw_sha256": projection.selected_ancestor_raw_sha256,
+            "selected_ancestor_plan_sha256": projection.selected_ancestor_plan_sha256,
+            "unavailable_predecessor_raw_sha256": projection.unavailable_predecessor_raw_sha256,
+            "unavailable_predecessor_plan_sha256": projection.unavailable_predecessor_plan_sha256,
+            "unavailable_state_sha256": projection.unavailable_state_sha256,
+            "matched_revocation_set_sha256": projection.matched_revocation_set_sha256,
+            "ancestry_evidence_sha256": projection.projection_sha256,
+            "revocation_entry_sha256s": projection.revocation_entry_sha256s,
+            "withdrawn_candidate_constraint_sha256s": (
+                projection.withdrawn_candidate_constraint_sha256s
+            ),
+            "selected_ancestor_role_assignment_sha256": (
+                projection.selected_ancestor_role_assignment_sha256
+            ),
+            "retained_route_predicate_profile_sha256": (
+                projection.retained_route_predicate_profile_sha256
+            ),
+            "predecessor_judge_constraint_sha256s": projection.retained_judge_constraint_sha256s,
+            "retained_primary_judge_model_id": unavailable.primary_judge_model_id,
+            "retained_replay_judge_model_id": unavailable.replay_judge_model_id,
+            "route_refreshes": tuple(refreshes),
+            "price_cap_profile_decision": "RETAIN_EXACT_PREDECESSOR_V1",
+            "opaque_ancestry_capability_required": True,
+            "endpoint_inventory_refresh_staged": True,
+            "constrained_discovery_required": True,
+            "price_cap_profile_upgrade_authorized": False,
+            "provider_call_authorized": False,
+            "source_egress_authorized": False,
+            "qualification_authorized": False,
+            "production_selection_authorized": False,
+            "runner_authority_authorized": False,
+            "benchmark_authorized": False,
+            "seal_publication_authorized": False,
+            "release_authorized": False,
+            "serialized_authority": False,
+        }
+        binding = role_binding_type.model_validate(
+            {
+                **binding_values,
+                "binding_sha256": trusted_canonical_sha256(
+                    {
+                        **binding_values,
+                        "route_refreshes": [item.model_dump(mode="json") for item in refreshes],
+                    }
+                ),
+            },
+            strict=True,
+        )
+        refreshed_by_model = {
+            item.inventory_refresh.exact_model_id: item.inventory_refresh.provider_endpoint
+            for item in refreshes
+        }
+        successor = trusted_seal_plan(
+            source_bindings=predecessor.source_bindings,
+            entries=tuple(
+                trusted_seal_entry(
+                    exact_model_id=item.exact_model_id,
+                    priority_rank=item.priority_rank,
+                    advisory_lineage_group=item.advisory_lineage_group,
+                    allowed_provider_endpoints=(refreshed_by_model[item.exact_model_id],),
+                )
+                if item.exact_model_id in refreshed_by_model
+                else item
+                for item in predecessor.entries
+            ),
+            authenticated_runner_selection=selection,
+            authenticated_runner_unavailability=None,
+            endpoint_inventory_refresh=None,
+            unresolved_requirements=tuple(
+                item
+                for item in predecessor.unresolved_requirements
+                if item != no_candidate_requirement
+            ),
+            predecessor_plan_sha256=predecessor.plan_sha256,
+            ancestry_route_transition_binding=binding,
+        )
+        eligible = trusted_require_eligible(successor)
+        if (
+            type(eligible) is not plan_type
+            or eligible != successor
+            or successor.schema_version != "1.9"
+            or replay(capability) != observed
+        ):
+            raise error_type("candidate-selection role refresh custody changed during derivation")
+        return eligible
+
+    def derive_cost_transition_impl(
+        capability: VerifiedCandidateSelectionPlanAncestry,
+        predecessor: CandidateSelectionPlan,
+        *,
+        legacy_allowance: bool = False,
+    ) -> CandidateSelectionPlan:
+        """Replay each exact predecessor before its separately authorized cost-only change."""
+
+        predecessor = validate_impl(capability, predecessor)
+        expected_version = "1.10" if legacy_allowance else "1.9"
+        expected_plan_hash = (
+            legacy_cost_predecessor_plan_sha256
+            if legacy_allowance
+            else cost_predecessor_plan_sha256
+        )
+        expected_raw_hash = (
+            legacy_cost_predecessor_raw_sha256 if legacy_allowance else cost_predecessor_raw_sha256
+        )
+        if (
+            predecessor.schema_version != expected_version
+            or predecessor.plan_sha256 != expected_plan_hash
+            or canonical_sha256_bytes(trusted_stable_json(predecessor)) != expected_raw_hash
+        ):
+            raise error_type(
+                "operator cost transition requires its exact authenticated predecessor"
+            )
+        old_selection = predecessor.authenticated_runner_selection
+        assert old_selection is not None
+        old_profile = old_selection.route_predicate_profile
+        if legacy_allowance:
+            first, second = tuple(
+                legacy_entry_type.model_validate(
+                    {
+                        "request_id": request_id,
+                        "reservation_id": reservation_id,
+                        "created_at": created_at,
+                        "updated_at": updated_at,
+                        "reserved_usd_exact": amount,
+                        "accounted_cost_usd_exact": amount,
+                    }
+                )
+                for request_id, reservation_id, created_at, updated_at, amount in legacy_cost_rows
+            )
+            policy = reservation_policy_type.build(
+                legacy_uncertain_allowance=legacy_allowance_type.build((first, second))
+            )
+        else:
+            policy = reservation_policy_type.build()
+        profile = route_profile_type.build(
+            reasoning_policy_sha256=old_profile.reasoning_policy_sha256,
+            reasoning_role_profile_sha256=old_profile.reasoning_role_profile_sha256,
+            reasoning_role_binding_sha256=old_profile.reasoning_role_binding_sha256,
+            reasoning_control_profile_sha256=old_profile.reasoning_control_profile_sha256,
+            reserved_reasoning_tokens=old_profile.reserved_reasoning_tokens,
+            minimum_prompt_tokens=old_profile.minimum_prompt_tokens,
+            required_output_tokens=old_profile.required_output_tokens,
+            minimum_context_tokens=old_profile.minimum_context_tokens,
+            operator_reservation_policy=policy,
+        )
+        constraints = tuple(
+            route_constraint_type.build(
+                role=item.role,
+                exact_model_id=item.exact_model_id,
+                provider_endpoint=item.provider_endpoint,
+                profile=profile,
+            )
+            for item in old_selection.route_constraints
+        )
+        selection = trusted_seal_selection(
+            candidate_model_id=old_selection.candidate_model_id,
+            primary_judge_model_id=old_selection.primary_judge_model_id,
+            replay_judge_model_id=old_selection.replay_judge_model_id,
+            route_predicate_profile=profile,
+            route_constraints=constraints,
+        )
+        projection = replay(capability).projection
+        values = {
+            "schema_version": "1.1" if legacy_allowance else "1.0",
+            "artifact_kind": "REPOSITORY_PINNED_OPERATOR_COST_TRANSITION",
+            "operator_decision_id": (
+                "OP-COSTLEGACY-2026-09-11" if legacy_allowance else "OP-COST-2026-09-09"
+            ),
+            "predecessor_raw_sha256": expected_raw_hash,
+            "predecessor_plan_sha256": predecessor.plan_sha256,
+            "ancestry_evidence_sha256": projection.projection_sha256,
+            "predecessor_profile_sha256": old_profile.profile_sha256,
+            "replacement_profile_sha256": profile.profile_sha256,
+            "reservation_policy_sha256": policy.policy_sha256,
+            "predecessor_constraints": old_selection.route_constraints,
+            "replacement_constraints": selection.route_constraints,
+            "security_requirements_relaxed": False,
+            "provider_call_authorized": False,
+            "serialized_authority": False,
+        }
+        hash_values = {
+            **values,
+            "predecessor_constraints": [
+                item.model_dump(mode="json") for item in old_selection.route_constraints
+            ],
+            "replacement_constraints": [
+                item.model_dump(mode="json") for item in selection.route_constraints
+            ],
+        }
+        binding = cost_binding_type.model_validate(
+            {**values, "binding_sha256": trusted_canonical_sha256(hash_values)}
+        )
+        successor = trusted_seal_plan(
+            source_bindings=predecessor.source_bindings,
+            entries=predecessor.entries,
+            authenticated_runner_selection=selection,
+            authenticated_runner_unavailability=None,
+            endpoint_inventory_refresh=None,
+            unresolved_requirements=predecessor.unresolved_requirements,
+            predecessor_plan_sha256=predecessor.plan_sha256,
+            operator_cost_transition_binding=binding,
+        )
+        trusted_require_eligible(successor)
+        replay(capability)
+        return successor
+
+    def derive_endpoint_trial_impl(
+        capability: VerifiedCandidateSelectionPlanAncestry,
+    ) -> CandidateSelectionPlan:
+        """Add only Fireworks to the exact original v1.11; never rewrite cost ancestry."""
+
+        predecessor = derive_role_refresh_impl(
+            capability,
+            candidate_model_id="deepseek/deepseek-v4-pro-0813",
+            provider_endpoint="together",
+            primary_judge_provider_endpoint="deepinfra/fp4",
+            replay_judge_provider_endpoint="together",
+        )
+        predecessor = derive_cost_transition_impl(capability, predecessor)
+        predecessor = derive_cost_transition_impl(capability, predecessor, legacy_allowance=True)
+        if (
+            predecessor.plan_sha256 != endpoint_trial_predecessor_plan_sha256
+            or canonical_sha256_bytes(trusted_stable_json(predecessor))
+            != endpoint_trial_predecessor_raw_sha256
+        ):
+            raise error_type("endpoint trial requires its exact authenticated v1.11 predecessor")
+        old_selection = predecessor.authenticated_runner_selection
+        assert old_selection is not None
+        profile = old_selection.route_predicate_profile
+        added = route_constraint_type.build(
+            role=candidate_role,
+            exact_model_id=old_selection.candidate_model_id,
+            provider_endpoint="fireworks",
+            profile=profile,
+        )
+        trusted_assignment_gate(
+            role=candidate_role,
+            exact_model_id=added.exact_model_id,
+            provider_endpoint=added.provider_endpoint,
+        )
+        selection = trusted_seal_selection(
+            candidate_model_id=old_selection.candidate_model_id,
+            primary_judge_model_id=old_selection.primary_judge_model_id,
+            replay_judge_model_id=old_selection.replay_judge_model_id,
+            route_predicate_profile=profile,
+            route_constraints=(*old_selection.route_constraints, added),
+        )
+        values = {
+            "schema_version": "1.0",
+            "artifact_kind": "REPOSITORY_PINNED_CANDIDATE_ENDPOINT_TRIAL",
+            "operator_decision_id": "OP-ENDPOINTTRIAL-2026-09-11",
+            "predecessor_raw_sha256": endpoint_trial_predecessor_raw_sha256,
+            "predecessor_plan_sha256": endpoint_trial_predecessor_plan_sha256,
+            "retained_profile_sha256": profile.profile_sha256,
+            "retained_constraints": [
+                item.model_dump(mode="json") for item in old_selection.route_constraints
+            ],
+            "added_candidate_constraint": added.model_dump(mode="json"),
+            "disposition": "NONCREDITING_SMOKE_STAGING",
+            "plan_adoption_authorized": False,
+            "qualification_authorized": False,
+            "seal_publication_authorized": False,
+            "durable_runner_authorized": False,
+            "provider_call_authorized": False,
+            "serialized_authority": False,
+        }
+        binding = endpoint_trial_type.model_validate(
+            {
+                **values,
+                "retained_constraints": old_selection.route_constraints,
+                "added_candidate_constraint": added,
+                "binding_sha256": trusted_canonical_sha256(values),
+            },
+            strict=True,
+        )
+        entries = tuple(
+            trusted_seal_entry(
+                exact_model_id=entry.exact_model_id,
+                priority_rank=entry.priority_rank,
+                advisory_lineage_group=entry.advisory_lineage_group,
+                allowed_provider_endpoints=(*entry.allowed_provider_endpoints, "fireworks"),
+            )
+            if entry.exact_model_id == old_selection.candidate_model_id
+            else entry
+            for entry in predecessor.entries
+        )
+        result = trusted_seal_plan(
+            source_bindings=predecessor.source_bindings,
+            entries=entries,
+            authenticated_runner_selection=selection,
+            authenticated_runner_unavailability=None,
+            endpoint_inventory_refresh=None,
+            unresolved_requirements=predecessor.unresolved_requirements,
+            predecessor_plan_sha256=predecessor.plan_sha256,
+            operator_endpoint_trial_binding=binding,
+        )
+        trusted_require_eligible(result)
+        replay(capability)
+        return result
+
     def derive_candidate_selection_plan_reactivation(
         capability: VerifiedCandidateSelectionPlanAncestry,
         *,
         candidate_model_id: str,
         provider_endpoint: str,
+        refresh_endpoint_inventory: bool = False,
+        primary_judge_provider_endpoint: str | None = None,
+        replay_judge_provider_endpoint: str | None = None,
+        reserve_then_reconcile_costs: bool = False,
+        allow_exact_legacy_uncertainty: bool = False,
+        candidate_endpoint_trial: bool = False,
     ) -> CandidateSelectionPlan:
-        """Derive one private nonauthorizing v1.8 plan from exact opaque ancestry."""
+        """Derive a legacy v1.8 or explicit three-role v1.9 plan from opaque ancestry."""
 
         if require_pristine.__code__ is not pristine_code:
             raise error_type("candidate-selection ancestry runtime boundary changed")
         require_pristine()
-        result = derive_impl(
-            capability,
-            candidate_model_id=candidate_model_id,
-            provider_endpoint=provider_endpoint,
-        )
+        if type(candidate_endpoint_trial) is not bool:
+            raise error_type("candidate endpoint trial mode must be boolean")
+        if candidate_endpoint_trial:
+            if (
+                type(candidate_model_id) is not str
+                or type(provider_endpoint) is not str
+                or candidate_model_id != "deepseek/deepseek-v4-pro-0813"
+                or provider_endpoint != "fireworks"
+                or refresh_endpoint_inventory is not False
+                or reserve_then_reconcile_costs is not False
+                or allow_exact_legacy_uncertainty is not False
+                or primary_judge_provider_endpoint is not None
+                or replay_judge_provider_endpoint is not None
+            ):
+                raise error_type(
+                    "endpoint trial permits only the separate exact Fireworks addition"
+                )
+            result = derive_endpoint_trial_impl(capability)
+            if require_pristine.__code__ is not pristine_code:
+                raise error_type("candidate-selection ancestry runtime boundary changed")
+            require_pristine()
+            return result
+        if type(refresh_endpoint_inventory) is not bool:
+            raise error_type("candidate-selection endpoint refresh mode must be boolean")
+        if type(reserve_then_reconcile_costs) is not bool:
+            raise error_type("operator cost transition mode must be boolean")
+        if type(allow_exact_legacy_uncertainty) is not bool:
+            raise error_type("legacy cost transition mode must be boolean")
+        if allow_exact_legacy_uncertainty and not reserve_then_reconcile_costs:
+            raise error_type("legacy allowance requires the authenticated operator cost transition")
+        if reserve_then_reconcile_costs and not refresh_endpoint_inventory:
+            raise error_type(
+                "operator cost transition requires the authenticated three-role refresh"
+            )
+        if refresh_endpoint_inventory:
+            if primary_judge_provider_endpoint is None or replay_judge_provider_endpoint is None:
+                raise error_type("candidate-selection role refresh requires both judge endpoints")
+            result = derive_role_refresh_impl(
+                capability,
+                candidate_model_id=candidate_model_id,
+                provider_endpoint=provider_endpoint,
+                primary_judge_provider_endpoint=primary_judge_provider_endpoint,
+                replay_judge_provider_endpoint=replay_judge_provider_endpoint,
+            )
+        else:
+            if (
+                primary_judge_provider_endpoint is not None
+                or replay_judge_provider_endpoint is not None
+            ):
+                raise error_type(
+                    "judge endpoint changes require explicit endpoint inventory refresh"
+                )
+            result = derive_impl(
+                capability,
+                candidate_model_id=candidate_model_id,
+                provider_endpoint=provider_endpoint,
+            )
+        if reserve_then_reconcile_costs:
+            result = derive_cost_transition_impl(capability, result)
+        if allow_exact_legacy_uncertainty:
+            result = derive_cost_transition_impl(capability, result, legacy_allowance=True)
         if require_pristine.__code__ is not pristine_code:
             raise error_type("candidate-selection ancestry runtime boundary changed")
         require_pristine()
@@ -951,20 +1479,55 @@ def _build_candidate_selection_plan_ancestry_runtime() -> tuple[
             canonical = plan_type.model_validate_json(successor.model_dump_json(), strict=True)
         except ValueError as exc:
             raise error_type("candidate-selection reactivation successor is invalid") from exc
-        binding = canonical.ancestry_transition_binding
         selection = canonical.authenticated_runner_selection
-        if canonical.schema_version != "1.8" or binding is None or selection is None:
+        if selection is None:
             raise error_type("candidate-selection reactivation successor lacks ancestry custody")
+        if canonical.schema_version == "1.12":
+            expected_trial = derive_endpoint_trial_impl(capability)
+            if canonical != expected_trial:
+                raise error_type(
+                    "candidate-selection endpoint trial differs from its exact derivation"
+                )
+            return canonical
         candidate_constraints = tuple(
             item for item in selection.route_constraints if item.role is candidate_role
         )
         if len(candidate_constraints) != 1:
             raise error_type("candidate-selection reactivation lacks one candidate constraint")
-        expected = derive_impl(
-            capability,
-            candidate_model_id=candidate_constraints[0].exact_model_id,
-            provider_endpoint=candidate_constraints[0].provider_endpoint,
-        )
+        if (
+            canonical.schema_version == "1.9"
+            and canonical.ancestry_route_transition_binding is not None
+        ) or (
+            canonical.schema_version in {"1.10", "1.11"}
+            and canonical.operator_cost_transition_binding is not None
+        ):
+            (primary,) = tuple(
+                item for item in selection.route_constraints if item.role is primary_role
+            )
+            (replay_route,) = tuple(
+                item for item in selection.route_constraints if item.role is replay_role
+            )
+            expected = derive_role_refresh_impl(
+                capability,
+                candidate_model_id=candidate_constraints[0].exact_model_id,
+                provider_endpoint=candidate_constraints[0].provider_endpoint,
+                primary_judge_provider_endpoint=primary.provider_endpoint,
+                replay_judge_provider_endpoint=replay_route.provider_endpoint,
+            )
+            if canonical.schema_version in {"1.10", "1.11"}:
+                expected = derive_cost_transition_impl(capability, expected)
+            if canonical.schema_version == "1.11":
+                expected = derive_cost_transition_impl(capability, expected, legacy_allowance=True)
+        elif (
+            canonical.schema_version == "1.8" and canonical.ancestry_transition_binding is not None
+        ):
+            expected = derive_impl(
+                capability,
+                candidate_model_id=candidate_constraints[0].exact_model_id,
+                provider_endpoint=candidate_constraints[0].provider_endpoint,
+            )
+        else:
+            raise error_type("candidate-selection reactivation successor lacks ancestry custody")
         if canonical != expected:
             raise error_type("candidate-selection reactivation differs from exact derivation")
         return canonical
@@ -974,7 +1537,7 @@ def _build_candidate_selection_plan_ancestry_runtime() -> tuple[
         *,
         successor: CandidateSelectionPlan,
     ) -> CandidateSelectionPlan:
-        """Replay exact repository ancestry and validate one v1.8 successor."""
+        """Replay exact repository ancestry and validate one v1.8/v1.9 successor."""
 
         if require_pristine.__code__ is not pristine_code:
             raise error_type("candidate-selection ancestry runtime boundary changed")
@@ -991,7 +1554,7 @@ def _build_candidate_selection_plan_ancestry_runtime() -> tuple[
         path: Path,
         successor: CandidateSelectionPlan,
     ) -> CandidateSelectionPlan:
-        """Publish one fresh private v1.8 plan after immediate ancestry replay."""
+        """Publish one fresh private v1.8/v1.9 plan after immediate ancestry replay."""
 
         if require_pristine.__code__ is not pristine_code:
             raise error_type("candidate-selection ancestry runtime boundary changed")
@@ -1122,6 +1685,9 @@ def _build_candidate_selection_plan_ancestry_runtime() -> tuple[
         observe_pair,
         replay,
         derive_impl,
+        derive_role_refresh_impl,
+        derive_cost_transition_impl,
+        derive_endpoint_trial_impl,
         validate_impl,
         canonical_sha256_bytes,
         *(function for _name, function in public_bindings),

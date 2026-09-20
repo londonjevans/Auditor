@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import os
 import re
 import shutil
@@ -12,7 +13,7 @@ import time
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from mmaudit.config import ReproductionConfig, SmartContractsConfig
 from mmaudit.isolation.provenance import (
@@ -882,17 +883,32 @@ class _ManagedInvariantSelection:
                 return path, observation
         raise ValueError("managed invariant execution has no prepared tool for the selected role")
 
-    def preflight(self, backend: IsolationBackend, private_dir: Path) -> dict[str, str]:
+    def preflight(
+        self,
+        backend: IsolationBackend,
+        private_dir: Path,
+        *,
+        execution_budget: InvariantExecutionBudget | None = None,
+    ) -> dict[str, str]:
         versions: dict[str, str] = {}
         for role, path, observation, expected_version in self.tools:
             self.verify()
+            if execution_budget is not None:
+                execution_budget.remaining_seconds()
             version = _external_executable_version(
                 path,
                 backend=backend,
                 private_dir=private_dir,
                 expected_host_observation=observation,
+                **(
+                    {"absolute_deadline": execution_budget.deadline}
+                    if execution_budget is not None
+                    else {}
+                ),
             )
             self.verify()
+            if execution_budget is not None:
+                execution_budget.remaining_seconds()
             if scanner_trust_pin_error(
                 version=version,
                 executable_sha256=observation.sha256,
@@ -951,6 +967,36 @@ def _managed_invariant_selection(
     )
     selected.verify()
     return selected
+
+
+@dataclass
+class InvariantExecutionBudget:
+    """Shared local process admission and deadline; never relax a runner's own limits."""
+
+    maximum_attempts: int
+    deadline: float
+    attempts: int = dataclass_field(default=0, init=False)
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.maximum_attempts) is not int
+            or not 0 <= self.maximum_attempts <= 500
+            or type(self.deadline) not in {int, float}
+            or not math.isfinite(self.deadline)
+        ):
+            raise ValueError("invalid shared invariant execution budget")
+
+    def remaining_seconds(self) -> float:
+        remaining = self.deadline - time.monotonic()
+        if remaining <= 0:
+            raise ValueError("shared invariant execution deadline exhausted")
+        return remaining
+
+    def reserve_attempt(self) -> None:
+        self.remaining_seconds()
+        if self.attempts >= self.maximum_attempts:
+            raise ValueError("shared invariant execution attempts exhausted")
+        self.attempts += 1
 
 
 class FoundryInvariantRunner:
@@ -1034,8 +1080,13 @@ class FoundryInvariantRunner:
         project: SolidityProjectMetadata,
         specification: FoundryInvariantHarnessSpec,
         private_dir: Path,
+        execution_budget: InvariantExecutionBudget | None = None,
     ) -> InvariantExecutionResult:
         self._verify_managed_selection()
+        if execution_budget is not None:
+            if type(execution_budget) is not InvariantExecutionBudget:
+                raise ValueError("invariant execution requires an exact shared budget")
+            execution_budget.remaining_seconds()
         if self.offline_forks is not None:
             self.offline_forks.verify_roots(repository_root, private_dir)
         if self._managed is not None:
@@ -1188,7 +1239,9 @@ class FoundryInvariantRunner:
                 )
             try:
                 if self._managed is not None:
-                    versions = self._managed.preflight(self.backend, private_dir)
+                    versions = self._managed.preflight(
+                        self.backend, private_dir, execution_budget=execution_budget
+                    )
                     self._verify_managed_selection()
                     compiler, observation = self._managed.tool(ManagedToolchainRole.SOLC)
                     compiler_version = versions[ManagedToolchainRole.SOLC.value]
@@ -1203,6 +1256,9 @@ class FoundryInvariantRunner:
                         compiler,
                         backend=self.backend,
                         private_dir=private_dir,
+                        absolute_deadline=(
+                            execution_budget.deadline if execution_budget is not None else None
+                        ),
                     )
                     compiler_sha256 = _file_sha256(compiler)
             except (OSError, subprocess.TimeoutExpired, ValueError) as exc:
@@ -1257,6 +1313,8 @@ class FoundryInvariantRunner:
         }
         for attempt in range(1, attempt_limit + 1):
             self._verify_managed_selection()
+            if execution_budget is not None:
+                execution_budget.reserve_attempt()
             attempt_root = private_dir / source_hash[:16] / f"attempt-{attempt}"
             workspace = attempt_root / "workspace"
             copied_compiler: Path | None = None
@@ -1297,6 +1355,7 @@ class FoundryInvariantRunner:
                 repository_root=repository_root,
                 workspace=workspace,
                 private_dir=attempt_root,
+                **({"execution_budget": execution_budget} if execution_budget is not None else {}),
             )
             self._verify_managed_selection()
             executions.append(execution)
@@ -1497,6 +1556,11 @@ class FoundryInvariantRunner:
                         private_dir=(
                             private_dir / "minimization" / f"remove-{index + 1}-{removed_action_id}"
                         ),
+                        **(
+                            {"execution_budget": execution_budget}
+                            if execution_budget is not None
+                            else {}
+                        ),
                     )
                     if (
                         trial_result.status is not InvariantExecutionStatus.PASSED
@@ -1593,6 +1657,7 @@ class FoundryInvariantRunner:
         repository_root: Path,
         workspace: Path,
         private_dir: Path,
+        execution_budget: InvariantExecutionBudget | None = None,
     ) -> tuple[_InvariantExecution, list[str]]:
         """Keep source-local execution intact and own managed fork reads until verified closure."""
 
@@ -1662,6 +1727,11 @@ class FoundryInvariantRunner:
                     for item in command[1:]
                 ),
             ]
+            budget_arguments: dict[str, Any] = {}
+            if deadline is not None:
+                budget_arguments["absolute_deadline"] = deadline
+            if execution_budget is not None:
+                budget_arguments["execution_budget"] = execution_budget
             execution = self._execute(
                 command,
                 workspace=workspace,
@@ -1676,7 +1746,7 @@ class FoundryInvariantRunner:
                 property_ids={
                     property_spec.property_id for property_spec in specification.properties
                 },
-                **({"absolute_deadline": deadline} if deadline is not None else {}),
+                **budget_arguments,
             )
             return execution, display_command
         except BaseException as exc:
@@ -1712,6 +1782,7 @@ class FoundryInvariantRunner:
         action_functions: dict[str, str],
         property_ids: set[str],
         absolute_deadline: float | None = None,
+        execution_budget: InvariantExecutionBudget | None = None,
     ) -> _InvariantExecution:
         self._verify_managed_selection()
         private_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -1741,6 +1812,8 @@ class FoundryInvariantRunner:
         try:
             with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
                 self._verify_managed_selection()
+                if execution_budget is not None:
+                    execution_budget.remaining_seconds()
                 if absolute_deadline is not None:
                     if self.offline_forks is None:
                         raise ValueError("invariant attempt lost its prepared archive")
@@ -1759,6 +1832,8 @@ class FoundryInvariantRunner:
                     assert self.offline_forks is not None
                     self.offline_forks.verify_invariant_execution_budget(absolute_deadline)
                 deadline = time.monotonic() + self.reproduction.timeout_seconds
+                if execution_budget is not None:
+                    deadline = min(deadline, execution_budget.deadline)
                 while process.poll() is None:
                     if time.monotonic() >= deadline:
                         timed_out = True
@@ -1958,6 +2033,7 @@ def _external_executable_version(
     backend: IsolationBackend,
     private_dir: Path,
     expected_host_observation: _ScannerExecutableObservation | None = None,
+    absolute_deadline: float | None = None,
 ) -> str:
     """Probe one trusted compiler only inside the selected hardened isolation backend."""
 
@@ -1972,6 +2048,7 @@ def _external_executable_version(
         private_dir,
         timeout_seconds=10,
         expected_host_observation=expected_host_observation,
+        absolute_deadline=absolute_deadline,
     )
     if probe.status is not ExecutableVersionProbeStatus.SUCCESS or probe.version is None:
         raise ValueError("external compiler version probe failed closed under isolation")

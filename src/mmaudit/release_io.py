@@ -30,6 +30,7 @@ DEFAULT_MAX_EVIDENCE_BYTES = 100_000_000
 MAX_COMPOSED_EVIDENCE_BYTES = 256_000_000
 MAX_STREAMED_EVIDENCE_BYTES = 4 * 1024**3
 MAX_STREAMED_EVIDENCE_SECONDS = 600.0
+MAX_EVIDENCE_BINDING_BATCH_FILES = 8192
 _READ_CHUNK_BYTES = 1024 * 1024
 _NOFOLLOW_FLAG = getattr(os, "O_NOFOLLOW", 0)
 _NONBLOCK_FLAG = getattr(os, "O_NONBLOCK", 0)
@@ -789,6 +790,104 @@ def revalidate_evidence_file_binding(
     return observed
 
 
+def revalidate_evidence_file_bindings(
+    *,
+    evidence_root: Path,
+    bindings: tuple[ManifestFileBinding, ...],
+    max_bytes: int = DEFAULT_MAX_EVIDENCE_BYTES,
+) -> tuple[ManifestFileBinding, ...]:
+    """Reuse one root descriptor, never a source observation, for a bounded binding tuple.
+
+    Every source is reopened and fully read twice through freshly opened parents.
+    Live root/ancestor checks bracket each read; bytes and full file identities
+    must agree. Expected bindings are detached and rechecked before return.
+    This is not an atomic whole-tree snapshot or an inter-invocation cache.
+    """
+
+    bound = _validate_max_bytes(max_bytes)
+    expected = _evidence_binding_batch_snapshots(bindings, max_bytes=bound)
+    if not expected:
+        return ()
+    if not _NONBLOCK_FLAG:
+        raise ValueError("nonblocking evidence binding traversal is unavailable")
+    root = _open_root(evidence_root)
+    try:
+        ancestry = tuple(
+            (path, _directory_identity(path.lstat()))
+            for path in (*reversed(root.path.parents), root.path)
+        )
+        for binding in expected:
+            first: _FileObservation | None = None
+            for _ in range(2):
+                _require_evidence_binding_batch_root(root, ancestry)
+                observed = _read_file_at_root(
+                    root=root, relative_path=binding.path, max_bytes=bound
+                )
+                _require_evidence_binding_batch_root(root, ancestry)
+                if first is None:
+                    if _binding(binding.path, observed.content) != binding:
+                        raise ValueError("release evidence file differs from its manifest binding")
+                    first = observed
+                elif first != observed:
+                    raise ValueError("release evidence file changed while being observed")
+        if _evidence_binding_batch_snapshots(bindings, max_bytes=bound) != expected:
+            raise ValueError("release evidence expected binding batch changed during observation")
+        _require_evidence_binding_batch_root(root, ancestry)
+        return expected
+    except OSError as exc:
+        raise ValueError("release evidence batch could not be read safely") from exc
+    finally:
+        os.close(root.descriptor)
+
+
+def _evidence_binding_batch_snapshots(
+    bindings: tuple[ManifestFileBinding, ...], *, max_bytes: int
+) -> tuple[ManifestFileBinding, ...]:
+    if type(bindings) is not tuple or len(bindings) > MAX_EVIDENCE_BINDING_BATCH_FILES:
+        raise ValueError("release evidence binding batch exceeds its count bound")
+    snapshots = []
+    seen: set[str] = set()
+    for binding in bindings:
+        if (
+            type(binding) is not ManifestFileBinding
+            or type(binding.path) is not str
+            or type(binding.sha256) is not str
+            or type(binding.size) is not int
+        ):
+            raise ValueError("release evidence batch requires exact file bindings")
+        if _normalize_evidence_path(binding.path) != binding.path:
+            raise ValueError("release evidence batch requires normalized paths")
+        selected = ManifestFileBinding.model_validate_json(binding.model_dump_json(), strict=True)
+        if (
+            _normalize_evidence_path(selected.path) != selected.path
+            or selected.path in seen
+            or selected.size > max_bytes
+        ):
+            raise ValueError("release evidence batch requires distinct bounded normalized paths")
+        seen.add(selected.path)
+        snapshots.append(selected)
+    return tuple(snapshots)
+
+
+def _require_evidence_binding_batch_root(
+    root: _RootHandle, ancestry: tuple[tuple[Path, tuple[int, int, int]], ...]
+) -> None:
+    """Reobserve lexical ancestry without reopening an already held root descriptor."""
+
+    for path, identity in ancestry:
+        metadata = path.lstat()
+        if (
+            not stat.S_ISDIR(metadata.st_mode)
+            or _is_link_or_reparse(metadata)
+            or path.is_junction()
+            or _directory_identity(metadata) != identity
+            or (path == root.path and identity != root.identity)
+        ):
+            raise ValueError("release evidence root ancestry changed during batch observation")
+    if _directory_identity(os.fstat(root.descriptor)) != root.identity:
+        raise ValueError("release evidence held root changed during batch observation")
+
+
 def _observe_file_twice(
     *,
     evidence_root: Path,
@@ -817,10 +916,37 @@ def _read_file_once(
     max_bytes: int,
 ) -> _FileObservation:
     root = _open_root(evidence_root)
+    try:
+        observed = _read_file_at_root(root=root, relative_path=relative_path, max_bytes=max_bytes)
+    finally:
+        os.close(root.descriptor)
+    _require_same_root(evidence_root, root.identity)
+    return observed
+
+
+def _read_file_at_root(
+    *, root: _RootHandle, relative_path: str, max_bytes: int
+) -> _FileObservation:
+    """Read once from a held root; the caller must validate its live lexical ancestry."""
+
     parent_descriptor: int | None = None
-    descriptor: int | None = None
     try:
         parent_descriptor, leaf = _open_parent(root, relative_path)
+        return _read_file_at_parent(
+            parent_descriptor=parent_descriptor, leaf=leaf, max_bytes=max_bytes
+        )
+    except OSError as exc:
+        raise ValueError("release evidence file could not be read safely") from exc
+    finally:
+        if parent_descriptor is not None:
+            os.close(parent_descriptor)
+
+
+def _read_file_at_parent(*, parent_descriptor: int, leaf: str, max_bytes: int) -> _FileObservation:
+    """Reopen one file; the caller owns and validates the held parent descriptor."""
+
+    descriptor: int | None = None
+    try:
         try:
             before = os.stat(leaf, dir_fd=parent_descriptor, follow_symlinks=False)
         except OSError as exc:
@@ -871,10 +997,6 @@ def _read_file_once(
     finally:
         if descriptor is not None:
             os.close(descriptor)
-        if parent_descriptor is not None:
-            os.close(parent_descriptor)
-        os.close(root.descriptor)
-    _require_same_root(evidence_root, root.identity)
     return _FileObservation(content=content, identity=_stat_identity(after))
 
 

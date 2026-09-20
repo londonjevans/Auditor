@@ -20,12 +20,23 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Self, cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+import mmaudit.models.route_cost_reservations as reservation_module
+from mmaudit.models.route_cost_reservations import (
+    ExactRouteCostReservation,
+    OperatorRouteCostAttemptEvidence,
+    RouteCostReservationPlanningEnvelope,
+    RouteCostReservationRate,
+    operator_cost_attempts_from_usage,
+    require_route_cost_reservation_request,
+    route_cost_reservation_pricing_sha256,
+)
 from mmaudit.orchestration.cost_ledger import (
     AtomicCostLedger,
     CostBudgetExceededError,
     CostEntryStatus,
     CostLedgerSnapshot,
     CostPortfolioReservation,
+    CostPriorBillingUnknownError,
     CostReservation,
     CostReservationOverrunError,
     CostReservationStateError,
@@ -43,6 +54,10 @@ if TYPE_CHECKING:
 
 class BudgetExhaustedError(RuntimeError):
     """Raised before a request that could exceed the hard run budget."""
+
+
+class BudgetPriorBillingUnknownError(BudgetExhaustedError):
+    """Prior unknown billing prevents an actual-billing-policy reservation."""
 
 
 class BudgetReservationStateError(RuntimeError):
@@ -87,6 +102,8 @@ _TRUSTED_PATH_TYPE: Final = type(Path("/"))
 _TRUSTED_ATOMIC_COST_LEDGER_TYPE: Final = AtomicCostLedger
 _TRUSTED_ATOMIC_LEDGER_SNAPSHOT: Final = AtomicCostLedger.snapshot
 _TRUSTED_ATOMIC_LEDGER_RESERVE: Final = AtomicCostLedger.reserve
+_TRUSTED_ATOMIC_LEDGER_COMMIT_FOR_TRANSPORT: Final = AtomicCostLedger.commit_for_transport
+_TRUSTED_ATOMIC_LEDGER_COMMIT_CODE: Final = AtomicCostLedger.commit_for_transport.__code__
 _TRUSTED_ATOMIC_LEDGER_RECONCILE: Final = AtomicCostLedger.reconcile
 _TRUSTED_ATOMIC_LEDGER_RELEASE: Final = AtomicCostLedger.release
 _TRUSTED_ATOMIC_LEDGER_ACTIVE_RESERVATION: Final = AtomicCostLedger.active_reservation
@@ -154,6 +171,7 @@ def _require_pristine_atomic_cost_ledger(ledger: AtomicCostLedger) -> None:
             for name in (
                 "snapshot",
                 "reserve",
+                "commit_for_transport",
                 "reconcile",
                 "release",
                 "active_reservation",
@@ -169,6 +187,8 @@ def _require_pristine_atomic_cost_ledger(ledger: AtomicCostLedger) -> None:
         )
         or AtomicCostLedger.snapshot is not _TRUSTED_ATOMIC_LEDGER_SNAPSHOT
         or AtomicCostLedger.reserve is not _TRUSTED_ATOMIC_LEDGER_RESERVE
+        or AtomicCostLedger.commit_for_transport is not _TRUSTED_ATOMIC_LEDGER_COMMIT_FOR_TRANSPORT
+        or AtomicCostLedger.commit_for_transport.__code__ is not _TRUSTED_ATOMIC_LEDGER_COMMIT_CODE
         or AtomicCostLedger.reconcile is not _TRUSTED_ATOMIC_LEDGER_RECONCILE
         or AtomicCostLedger.release is not _TRUSTED_ATOMIC_LEDGER_RELEASE
         or (AtomicCostLedger.active_reservation is not _TRUSTED_ATOMIC_LEDGER_ACTIVE_RESERVATION)
@@ -933,6 +953,10 @@ class EndpointRequestCostBound:
     and components so a bound cannot be silently reused with different pricing.
     ``request_material_sha256`` binds the caller's canonical semantic JSON form;
     it is deliberately not a claim about an HTTP library's equivalent wire encoding.
+
+    An explicit ``operator_reservation`` instead identifies conservative reservation
+    accounting, not a provider-guaranteed total. Its complete contract is retained
+    and validated; the legacy constructor never infers or selects this relaxation.
     """
 
     exact_model_id: str
@@ -940,6 +964,7 @@ class EndpointRequestCostBound:
     request_material_sha256: str
     pricing_snapshot_sha256: str
     components: tuple[EndpointPriceComponent, ...]
+    operator_reservation: ExactRouteCostReservation | None = None
 
     def __post_init__(self) -> None:
         if not _MODEL_ID_PATTERN.fullmatch(self.exact_model_id):
@@ -959,6 +984,11 @@ class EndpointRequestCostBound:
             self.exact_model_id,
             self.provider_endpoint,
             self.components,
+            operator_reservation_pricing_sha256=(
+                route_cost_reservation_pricing_sha256(self.operator_reservation)
+                if self.operator_reservation is not None
+                else None
+            ),
         )
         if self.pricing_snapshot_sha256 != expected_hash:
             raise ValueError("endpoint pricing snapshot hash does not match the bound")
@@ -1011,6 +1041,51 @@ class EndpointRequestCostBound:
             components=components,
         )
 
+    @classmethod
+    def from_route_cost_reservation(
+        cls,
+        reservation: ExactRouteCostReservation,
+        *,
+        request_material: str,
+        selection_plan_sha256: str,
+        route_predicate_profile_sha256: str,
+        route_constraint_sha256: str,
+        endpoint_snapshot_sha256: str,
+    ) -> EndpointRequestCostBound:
+        """Consume an explicit reservation without calling it a provider cap proof."""
+
+        _require_pristine_endpoint_cost_bound_types()
+        current = require_route_cost_reservation_request(
+            reservation,
+            request_material=request_material,
+            selection_plan_sha256=selection_plan_sha256,
+            route_predicate_profile_sha256=route_predicate_profile_sha256,
+            route_constraint_sha256=route_constraint_sha256,
+            endpoint_snapshot_sha256=endpoint_snapshot_sha256,
+        )
+        route = current.request_token_plan.route_intersection.routes[0]
+        components = tuple(
+            EndpointPriceComponent(
+                pricing_field=item.component.value,
+                unit_price_usd=Decimal(item.reserved_unit_price_usd_exact),
+                maximum_units=item.maximum_units,
+            )
+            for item in current.components
+        )
+        return cls(
+            exact_model_id=route.exact_model_id,
+            provider_endpoint=route.provider_endpoint,
+            request_material_sha256=current.request_material_sha256,
+            pricing_snapshot_sha256=_pricing_snapshot_hash(
+                route.exact_model_id,
+                route.provider_endpoint,
+                components,
+                operator_reservation_pricing_sha256=route_cost_reservation_pricing_sha256(current),
+            ),
+            components=components,
+            operator_reservation=current,
+        )
+
     @property
     def maximum_cost_usd(self) -> Decimal:
         """Return the exact component total rounded upward to ledger precision."""
@@ -1055,6 +1130,26 @@ _TRUSTED_ENDPOINT_REQUEST_FROM_PRICING: Final = cast(
     _classmethod_function(EndpointRequestCostBound, "from_endpoint_pricing"),
 )
 _TRUSTED_ENDPOINT_REQUEST_MAXIMUM_UNITS_FOR: Final = EndpointRequestCostBound.maximum_units_for
+_TRUSTED_ENDPOINT_REQUEST_FROM_RESERVATION: Final = _classmethod_function(
+    EndpointRequestCostBound, "from_route_cost_reservation"
+)
+_TRUSTED_REQUIRE_ROUTE_COST_RESERVATION_REQUEST: Final = require_route_cost_reservation_request
+_TRUSTED_REQUIRE_ROUTE_COST_RESERVATION_REQUEST_CODE: Final = (
+    require_route_cost_reservation_request.__code__
+)
+_TRUSTED_ROUTE_COST_RESERVATION_PRICING: Final = route_cost_reservation_pricing_sha256
+_TRUSTED_ROUTE_COST_RESERVATION_PRICING_CODE: Final = route_cost_reservation_pricing_sha256.__code__
+_TRUSTED_OPERATOR_COST_ATTEMPTS: Final = operator_cost_attempts_from_usage
+_TRUSTED_OPERATOR_COST_ATTEMPTS_CODE: Final = operator_cost_attempts_from_usage.__code__
+_TRUSTED_OPERATOR_COST_TYPES: Final = tuple(
+    (kind, kind.__pydantic_validator__, kind.__pydantic_serializer__)
+    for kind in (
+        ExactRouteCostReservation,
+        OperatorRouteCostAttemptEvidence,
+        RouteCostReservationPlanningEnvelope,
+        RouteCostReservationRate,
+    )
+)
 
 
 def _require_pristine_endpoint_cost_bound_types() -> None:
@@ -1071,8 +1166,61 @@ def _require_pristine_endpoint_cost_bound_types() -> None:
         is not _TRUSTED_ENDPOINT_REQUEST_FROM_PRICING
         or EndpointRequestCostBound.maximum_units_for
         is not _TRUSTED_ENDPOINT_REQUEST_MAXIMUM_UNITS_FOR
+        or _classmethod_function(EndpointRequestCostBound, "from_route_cost_reservation")
+        is not _TRUSTED_ENDPOINT_REQUEST_FROM_RESERVATION
+        or require_route_cost_reservation_request
+        is not _TRUSTED_REQUIRE_ROUTE_COST_RESERVATION_REQUEST
+        or require_route_cost_reservation_request.__code__
+        is not _TRUSTED_REQUIRE_ROUTE_COST_RESERVATION_REQUEST_CODE
+        or route_cost_reservation_pricing_sha256 is not _TRUSTED_ROUTE_COST_RESERVATION_PRICING
+        or route_cost_reservation_pricing_sha256.__code__
+        is not _TRUSTED_ROUTE_COST_RESERVATION_PRICING_CODE
+        or operator_cost_attempts_from_usage is not _TRUSTED_OPERATOR_COST_ATTEMPTS
+        or reservation_module.operator_cost_attempts_from_usage
+        is not _TRUSTED_OPERATOR_COST_ATTEMPTS
+        or operator_cost_attempts_from_usage.__code__ is not _TRUSTED_OPERATOR_COST_ATTEMPTS_CODE
+        or (
+            ExactRouteCostReservation,
+            OperatorRouteCostAttemptEvidence,
+            RouteCostReservationPlanningEnvelope,
+            RouteCostReservationRate,
+        )
+        != tuple(state[0] for state in _TRUSTED_OPERATOR_COST_TYPES)
+        or any(
+            getattr(reservation_module, kind.__name__, None) is not kind
+            or kind.__pydantic_validator__ is not validator
+            or kind.__pydantic_serializer__ is not serializer
+            for kind, validator, serializer in _TRUSTED_OPERATOR_COST_TYPES
+        )
     ):
         raise BudgetReservationStateError("endpoint cost-bound callable provenance is invalid")
+
+
+def operator_reservation_planning_cost(
+    envelope: RouteCostReservationPlanningEnvelope,
+) -> tuple[Decimal, str]:
+    """Join task planning to request pricing without constructing a request bound."""
+
+    _require_pristine_endpoint_cost_bound_types()
+    if type(envelope) is not RouteCostReservationPlanningEnvelope:
+        raise BudgetReservationStateError("operator planning requires the exact envelope type")
+    current = RouteCostReservationPlanningEnvelope.model_validate_json(envelope.model_dump_json())
+    if current != envelope:
+        raise BudgetReservationStateError("operator planning envelope changed")
+    components = tuple(
+        EndpointPriceComponent(
+            pricing_field=item.component.value,
+            unit_price_usd=Decimal(item.reserved_unit_price_usd_exact),
+            maximum_units=item.maximum_units,
+        )
+        for item in current.components
+    )
+    return Decimal(current.reserved_cost_usd_exact), _pricing_snapshot_hash(
+        current.route.exact_model_id,
+        current.route.provider_endpoint,
+        components,
+        operator_reservation_pricing_sha256=route_cost_reservation_pricing_sha256(current),
+    )
 
 
 def _trusted_endpoint_request_maximum_cost_usd(
@@ -1087,10 +1235,38 @@ def _trusted_endpoint_request_maximum_cost_usd(
         raise BudgetReservationStateError("endpoint request cost-bound components are invalid")
     if not {"prompt", "completion"}.issubset(fields):
         raise BudgetReservationStateError("endpoint request cost-bound pricing is incomplete")
+    operator = bound.operator_reservation
+    if operator is not None:
+        if type(operator) is not ExactRouteCostReservation:
+            raise BudgetReservationStateError("operator cost reservation has an invalid type")
+        canonical = ExactRouteCostReservation.model_validate_json(operator.model_dump_json())
+        route = canonical.request_token_plan.route_intersection.routes[0]
+        if (
+            canonical != operator
+            or route.exact_model_id != bound.exact_model_id
+            or route.provider_endpoint != bound.provider_endpoint
+            or canonical.request_material_sha256 != bound.request_material_sha256
+            or tuple(
+                (
+                    item.component.value,
+                    Decimal(item.reserved_unit_price_usd_exact),
+                    item.maximum_units,
+                )
+                for item in canonical.components
+            )
+            != tuple(
+                (item.pricing_field, item.unit_price_usd, item.maximum_units)
+                for item in bound.components
+            )
+        ):
+            raise BudgetReservationStateError("operator cost reservation differs from its bound")
     if bound.pricing_snapshot_sha256 != _pricing_snapshot_hash(
         bound.exact_model_id,
         bound.provider_endpoint,
         bound.components,
+        operator_reservation_pricing_sha256=(
+            route_cost_reservation_pricing_sha256(operator) if operator is not None else None
+        ),
     ):
         raise BudgetReservationStateError("endpoint request cost-bound pricing hash changed")
     with localcontext() as context:
@@ -1099,7 +1275,12 @@ def _trusted_endpoint_request_maximum_cost_usd(
             _trusted_endpoint_component_maximum_cost_usd(component)
             for component in bound.components
         )
-        return total.quantize(_USD_QUANTUM, rounding=ROUND_CEILING)
+        maximum = total.quantize(_USD_QUANTUM, rounding=ROUND_CEILING)
+        if operator is not None and maximum != Decimal(operator.reserved_cost_usd_exact):
+            raise BudgetReservationStateError(
+                "operator cost reservation total differs from its bound"
+            )
+        return maximum
 
 
 def _trusted_endpoint_request_maximum_units_for(
@@ -2630,6 +2811,27 @@ class BudgetManager:
                         "persistent model-cost ledger omits a recovered provider attempt"
                     )
                 exact_entries = tuple(entry for entry in attempt_entries if entry is not None)
+                _require_pristine_endpoint_cost_bound_types()
+                try:
+                    cost_attempts = _TRUSTED_OPERATOR_COST_ATTEMPTS(record)
+                except (TypeError, ValueError) as exc:
+                    raise BudgetReservationStateError(
+                        "budget recovery has inconsistent operator cost evidence"
+                    ) from exc
+                if cost_attempts and (
+                    len(cost_attempts) != len(exact_entries)
+                    or any(
+                        item.ledger_entry_sha256 != cost_entry_sha256(entry)
+                        or item.ledger_reservation_id != entry.reservation_id
+                        or item.attempt_request_id != entry.request_id
+                        or Decimal(item.reservation.policy.ledger_ceiling_usd_exact)
+                        != snapshot.cap_usd
+                        for item, entry in zip(cost_attempts, exact_entries, strict=True)
+                    )
+                ):
+                    raise BudgetReservationStateError(
+                        "budget recovery operator cost evidence differs from its durable ledger"
+                    )
                 for token_item, request_item, entry in zip(
                     token_evidence,
                     request_evidence,
@@ -3130,6 +3332,35 @@ class BudgetManager:
                 raise BudgetReservationStateError(
                     "persistent budget counters require exact usage recovery before dispatch"
                 )
+            operator = (
+                endpoint_cost_bound.operator_reservation
+                if endpoint_cost_bound is not None
+                else None
+            )
+            if operator is not None:
+                ledger = self._current_atomic_ledger()
+                ceiling = Decimal(operator.policy.ledger_ceiling_usd_exact)
+                plan = operator.request_token_plan
+                if (
+                    not self.require_endpoint_cost_bound
+                    or ledger is None
+                    or ledger.cap_usd != ceiling
+                    or self._effective_total_usd_exact > ceiling
+                    or identifier
+                    not in (
+                        plan.request_id,
+                        *(f"{plan.request_id}:attempt:{ordinal}" for ordinal in range(2, 33)),
+                    )
+                    or role != plan.role
+                    or resolved_plan_sha256 != plan.plan_sha256
+                    or resolved_prompt_tokens != plan.prompt_byte_upper_bound_tokens
+                    or resolved_visible_output_tokens != plan.reserved_output_tokens
+                    or resolved_reasoning_tokens != plan.reserved_reasoning_tokens
+                    or resolved_completion_tokens != plan.requested_completion_tokens
+                ):
+                    raise BudgetReservationStateError(
+                        "operator cost reservation requires its exact ledger, request and token plan"
+                    )
             if identifier in self._issued:
                 raise BudgetReservationStateError(
                     "request reservation identifier was already issued"
@@ -3400,6 +3631,12 @@ class BudgetManager:
                     persistent = _TRUSTED_ATOMIC_LEDGER_ACTIVE_RESERVATION(
                         ledger,
                         identifier,
+                        legacy_uncertain_allowance=(
+                            operator.policy.legacy_uncertain_allowance
+                            if operator is not None
+                            else None
+                        ),
+                        **({"require_known_prior_costs": True} if operator is not None else {}),
                     )
                     if (
                         persistent is None
@@ -3420,14 +3657,34 @@ class BudgetManager:
                         active_portfolio.persistent,
                         identifier,
                         maximum_cost,
+                        legacy_uncertain_allowance=(
+                            operator.policy.legacy_uncertain_allowance
+                            if operator is not None
+                            else None
+                        ),
+                        **({"require_known_prior_costs": True} if operator is not None else {}),
                     )
                 else:
                     ledger = self._current_atomic_ledger()
-                    persistent = (
-                        _TRUSTED_ATOMIC_LEDGER_RESERVE(ledger, identifier, maximum_cost)
-                        if ledger is not None
-                        else None
-                    )
+                    if ledger is not None and operator is not None:
+                        persistent = _TRUSTED_ATOMIC_LEDGER_RESERVE(
+                            ledger,
+                            identifier,
+                            maximum_cost,
+                            require_known_prior_costs=True,
+                            legacy_uncertain_allowance=operator.policy.legacy_uncertain_allowance,
+                        )
+                    else:
+                        persistent = (
+                            _TRUSTED_ATOMIC_LEDGER_RESERVE(ledger, identifier, maximum_cost)
+                            if ledger is not None
+                            else None
+                        )
+            except CostPriorBillingUnknownError:
+                raise BudgetPriorBillingUnknownError(
+                    "UNKNOWN_PRIOR_BILLING: active cost policy requires actual prior bills; "
+                    "unknown billing blocks new work"
+                ) from None
             except CostBudgetExceededError:
                 raise BudgetExhaustedError(
                     f"request for {role} exceeds the persistent model-cost budget"
@@ -3818,6 +4075,17 @@ class BudgetManager:
             return Decimal(str(self.estimate_request_cost(request_material)))
 
         material_hash = hashlib.sha256(request_material.encode("utf-8")).hexdigest()
+        operator = endpoint_cost_bound.operator_reservation
+        if operator is not None:
+            _require_pristine_endpoint_cost_bound_types()
+            _TRUSTED_REQUIRE_ROUTE_COST_RESERVATION_REQUEST(
+                operator,
+                request_material=request_material,
+                selection_plan_sha256=operator.selection_plan_sha256,
+                route_predicate_profile_sha256=operator.route_predicate_profile_sha256,
+                route_constraint_sha256=operator.route_constraint_sha256,
+                endpoint_snapshot_sha256=operator.endpoint_snapshot_sha256,
+            )
         if endpoint_cost_bound.request_material_sha256 != material_hash:
             raise UnprovenCostBoundError(
                 "endpoint cost bound does not match the serialized request"
@@ -4058,7 +4326,7 @@ class BudgetManager:
             return reconciliation.accounted_cost_usd_exact
 
     async def commit_active_reservation_for_transport(self, reservation: Reservation) -> None:
-        """Atomically account the full bound before provider transport can begin."""
+        """Recheck the shared spending stop and account once before transport."""
 
         async with self._lock:
             _require_trusted_budget_accounting_state(self)
@@ -4101,7 +4369,18 @@ class BudgetManager:
                 raise BudgetReservationStateError(
                     "active transport reservation lacks exact persistent ledger custody"
                 )
-            entry = _TRUSTED_ATOMIC_LEDGER_RECONCILE(ledger, persistent, None)
+            entry = (
+                _TRUSTED_ATOMIC_LEDGER_COMMIT_FOR_TRANSPORT(
+                    ledger,
+                    persistent,
+                    require_known_prior_costs=True,
+                    legacy_uncertain_allowance=(
+                        bound.operator_reservation.policy.legacy_uncertain_allowance
+                    ),
+                )
+                if bound is not None and bound.operator_reservation is not None
+                else _TRUSTED_ATOMIC_LEDGER_COMMIT_FOR_TRANSPORT(ledger, persistent)
+            )
             snapshot = _TRUSTED_ATOMIC_LEDGER_SNAPSHOT(ledger)
             durable_matches = tuple(
                 current
@@ -5446,8 +5725,10 @@ def _pricing_snapshot_hash(
     exact_model_id: str,
     provider_endpoint: str,
     components: tuple[EndpointPriceComponent, ...],
+    *,
+    operator_reservation_pricing_sha256: str | None = None,
 ) -> str:
-    payload = {
+    payload: dict[str, Any] = {
         "exact_model_id": exact_model_id,
         "provider_endpoint": provider_endpoint,
         "pricing": {
@@ -5455,6 +5736,8 @@ def _pricing_snapshot_hash(
             for component in components
         },
     }
+    if operator_reservation_pricing_sha256 is not None:
+        payload["operator_reservation_pricing_sha256"] = operator_reservation_pricing_sha256
     material = json.dumps(
         payload,
         sort_keys=True,

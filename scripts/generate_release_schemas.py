@@ -33,7 +33,11 @@ from mmaudit.benchmark.development_corpus_stability import (
 )
 from mmaudit.benchmark.development_ensemble import DevelopmentEnsembleScore
 from mmaudit.benchmark.engine import BenchmarkReport
+from mmaudit.benchmark.mutation_discovery import PortfolioMutationDiscovery
+from mmaudit.benchmark.mutation_portfolio import PortfolioSourceMutationSpec, SecurityMutationClass
+from mmaudit.benchmark.mutations import MutationApplicabilityPlan, MutationKind, MutationScorecard
 from mmaudit.config import ModelsConfig
+from mmaudit.constants import SPECIALIST_INVESTIGATOR_ROLES
 from mmaudit.forensic_export import ForensicDeliveryDescriptor
 from mmaudit.models.actor_model import ActorModel, ActorModelEvaluation
 from mmaudit.models.authenticated_calibration import AuthenticatedModelCalibrationArtifact
@@ -55,6 +59,7 @@ from mmaudit.models.autonomous_benchmark_verdict import (
     EvidenceSealVerdictProjection,
 )
 from mmaudit.models.calibration import ModelCalibrationArtifact
+from mmaudit.models.calibration_checkpoint import CalibrationCheckpointSubject
 from mmaudit.models.candidate_revocation import CandidateSelectionRevocationRegistry
 from mmaudit.models.candidate_selection import CandidateSelectionPlan
 from mmaudit.models.coverage_planning import (
@@ -75,7 +80,9 @@ from mmaudit.models.development_corpus import (
     DevelopmentCorpusPlan,
     DevelopmentCorpusResponse,
     DevelopmentCorpusShardObservation,
+    DevelopmentCorpusTreeEvidence,
 )
+from mmaudit.models.development_corpus_coverage import DevelopmentCorpusCoverage
 from mmaudit.models.development_corpus_ensemble import (
     DevelopmentCorpusEnsembleObservation,
     DevelopmentCorpusEnsemblePlan,
@@ -86,6 +93,7 @@ from mmaudit.models.development_corpus_judgment import (
     DevelopmentCorpusJudgmentResponse,
     DevelopmentCorpusJudgmentShardObservation,
 )
+from mmaudit.models.development_corpus_partition import DevelopmentCorpusPartition
 from mmaudit.models.development_corpus_repeats import (
     DevelopmentCorpusRepeatsObservation,
     DevelopmentCorpusRepeatsPlan,
@@ -116,6 +124,12 @@ from mmaudit.models.development_review import (
     DevelopmentScoredReviewResponse,
 )
 from mmaudit.models.development_routing import DevelopmentRoutingEvidence
+from mmaudit.models.development_tree_execution import (
+    DevelopmentTreeExecutionProgress,
+    DevelopmentTreeStageEnd,
+    DevelopmentTreeStageStart,
+)
+from mmaudit.models.development_tree_plan import DevelopmentTreePlan, DevelopmentTreePlanPolicy
 from mmaudit.models.endpoint_inventory import OpenRouterEndpointInventoryDiagnostic
 from mmaudit.models.evidence_seal_authority import EvidenceSealedAuthorityEvidence
 from mmaudit.models.frozen_lineage_authority import FrozenModelLineageProvenance
@@ -150,6 +164,7 @@ from mmaudit.models.prepurchase_quote import (
     PrepurchaseQuote,
     PrepurchaseQuoteReconciliation,
 )
+from mmaudit.models.provisional_findings import ProvisionalFindingInventory
 from mmaudit.models.public_lineage_authority import (
     PUBLIC_MODEL_LINEAGE_CAPTURE_OBSERVATIONS_FILENAME,
     PublicModelLineageEvidenceBundle,
@@ -167,6 +182,12 @@ from mmaudit.models.refresh_runtime import (
     AuditModelRefreshPricingEvidence,
 )
 from mmaudit.models.refresh_staging import ModelRefreshWorkflowStatus
+from mmaudit.models.route_cost_reservations import (
+    ExactRouteCostReservation,
+    OperatorRouteCostAttemptEvidence,
+    RouteCostReservationPlanningEnvelope,
+    RouteCostReservationPolicy,
+)
 from mmaudit.models.route_runtime_evidence import RouteRuntimeEvidenceArtifact
 from mmaudit.models.scheduler import SchedulerArtifact, SchedulerRetainedJournalReference
 from mmaudit.models.schemas import (
@@ -189,10 +210,27 @@ from mmaudit.models.sharding import (
     SolidityGraphsArtifact,
     SolidityShardsArtifact,
 )
+from mmaudit.orchestration.authenticated_calibration_config import (
+    AuthenticatedCalibrationConfigProposal,
+)
+from mmaudit.orchestration.authenticated_calibration_measurement import (
+    RegisteredCalibrationMeasurementReceipt,
+)
 from mmaudit.orchestration.autonomy_gate_inventory import (
     AUTONOMY_INVENTORY_PATH,
     AutonomyGateInventory,
     render_autonomy_gate_inventory,
+)
+from mmaudit.orchestration.calibration_calendar_publication import (
+    CalibrationCalendarPublicationBinding,
+)
+from mmaudit.orchestration.calibration_checkpoint_publication import (
+    CalibrationCheckpointCalendarBinding,
+)
+from mmaudit.orchestration.calibration_population import CalibrationPopulationEvent
+from mmaudit.orchestration.calibration_publication import (
+    CalibrationPublicationComparison,
+    CalibrationPublicationSubject,
 )
 from mmaudit.orchestration.context_manifest import ContextManifest
 from mmaudit.orchestration.managed_host_tools import ManagedHostToolManifest
@@ -218,6 +256,9 @@ from mmaudit.orchestration.manifest import (
     LANGUAGE_CAPABILITY_ARTIFACT_PATH,
     MODEL_REVIEW_ARTIFACT_INVENTORY_PATH,
 )
+from mmaudit.orchestration.mutation_pipeline import MutationPipelineArtifact
+from mmaudit.orchestration.mutation_reconstruction import RetainedMutationCompilerManifest
+from mmaudit.orchestration.opentimestamps_calendar_journal import CalendarJournalEvent
 from mmaudit.privacy import PrivacyRetentionConsent
 from mmaudit.release_candidate import ReleaseCandidateObservation
 from mmaudit.release_gates import ReleaseGateEvidenceBundle
@@ -239,11 +280,24 @@ from mmaudit.reporting.run_authority import (
     RunTerminalReportAuthority,
 )
 from mmaudit.scanners.offline_fork_rpc import OfflineForkRpcArchive
+from mmaudit.solidity.dependency_calls import DependencyCallContext
+from mmaudit.solidity.dependency_closure import DevelopmentDependencyClosure
+from mmaudit.solidity.dependency_scopes import DependencyScopedContext
+from mmaudit.solidity.dependency_static_closure import DevelopmentStaticCallClosure
+from mmaudit.solidity.dependency_syntax import DependencySyntaxContext
+from mmaudit.solidity.dependency_targets import DependencyTargetContext
 
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMA_ROOT = ROOT / "schemas"
 SCHEMA_BASE = "https://mmaudit.local/schemas"
 MODELS: dict[str, type[BaseModel]] = {
+    "portfolio_source_mutation.schema.json": PortfolioSourceMutationSpec,
+    "portfolio_mutation_discovery.schema.json": PortfolioMutationDiscovery,
+    "mutation_applicability_plan.schema.json": MutationApplicabilityPlan,
+    "mutation_scorecard.schema.json": MutationScorecard,
+    "source_local_mutation_pipeline.schema.json": MutationPipelineArtifact,
+    "retained_mutation_compiler_inputs.schema.json": RetainedMutationCompilerManifest,
+    "provisional_truncated_findings.schema.json": ProvisionalFindingInventory,
     "actor_model.schema.json": ActorModel,
     "actor_model_baseline.schema.json": ActorModelBaselineArtifact,
     "actor_model_evaluation.schema.json": ActorModelEvaluation,
@@ -252,6 +306,15 @@ MODELS: dict[str, type[BaseModel]] = {
         AuthenticatedCrossLineageRunnerEvidence
     ),
     "authenticated_model_calibration.schema.json": AuthenticatedModelCalibrationArtifact,
+    "calibration_population_event.schema.json": CalibrationPopulationEvent,
+    "registered_calibration_measurement.schema.json": RegisteredCalibrationMeasurementReceipt,
+    "authenticated_calibration_config_proposal.schema.json": AuthenticatedCalibrationConfigProposal,
+    "calibration_publication_subject.schema.json": CalibrationPublicationSubject,
+    "calibration_publication_comparison.schema.json": CalibrationPublicationComparison,
+    "calendar_journal_event.schema.json": CalendarJournalEvent,
+    "calibration_calendar_publication_binding.schema.json": CalibrationCalendarPublicationBinding,
+    "calibration_checkpoint_subject.schema.json": CalibrationCheckpointSubject,
+    "calibration_checkpoint_calendar_binding.schema.json": CalibrationCheckpointCalendarBinding,
     "authenticated_runner_durable_evidence_bundle.schema.json": (
         AuthenticatedRunnerDurableEvidenceBundle
     ),
@@ -299,6 +362,20 @@ MODELS: dict[str, type[BaseModel]] = {
     "development_ensemble_observation.schema.json": DevelopmentEnsembleObservation,
     "development_ensemble_score.schema.json": DevelopmentEnsembleScore,
     "development_corpus_manifest.schema.json": DevelopmentCorpusManifest,
+    "development_corpus_coverage.schema.json": DevelopmentCorpusCoverage,
+    "development_corpus_partition.schema.json": DevelopmentCorpusPartition,
+    "development_tree_plan_policy.schema.json": DevelopmentTreePlanPolicy,
+    "development_tree_plan.schema.json": DevelopmentTreePlan,
+    "development_tree_execution_progress.schema.json": DevelopmentTreeExecutionProgress,
+    "development_tree_stage_start.schema.json": DevelopmentTreeStageStart,
+    "development_tree_stage_end.schema.json": DevelopmentTreeStageEnd,
+    "development_dependency_closure.schema.json": DevelopmentDependencyClosure,
+    "development_dependency_target_context.schema.json": DependencyTargetContext,
+    "development_dependency_scoped_context.schema.json": DependencyScopedContext,
+    "development_dependency_call_context.schema.json": DependencyCallContext,
+    "development_dependency_syntax_context.schema.json": DependencySyntaxContext,
+    "development_static_call_closure.schema.json": DevelopmentStaticCallClosure,
+    "development_corpus_tree_evidence.schema.json": DevelopmentCorpusTreeEvidence,
     "development_corpus_material.schema.json": DevelopmentCorpusMaterial,
     "development_corpus_response.schema.json": DevelopmentCorpusResponse,
     "development_corpus_plan.schema.json": DevelopmentCorpusPlan,
@@ -390,6 +467,10 @@ MODELS: dict[str, type[BaseModel]] = {
     "release_run_verification_binding.schema.json": ReleaseRunVerificationBinding,
     "release_static_evidence.schema.json": StaticReleaseEvidence,
     "route_runtime_evidence_artifact.schema.json": RouteRuntimeEvidenceArtifact,
+    "route_cost_reservation.schema.json": ExactRouteCostReservation,
+    "route_cost_reservation_planning_envelope.schema.json": RouteCostReservationPlanningEnvelope,
+    "operator_route_cost_attempt_evidence.schema.json": OperatorRouteCostAttemptEvidence,
+    "route_cost_reservation_policy.schema.json": RouteCostReservationPolicy,
     "run_terminal_report_authority.schema.json": RunTerminalReportAuthority,
     "scanner_source_evidence.schema.json": ScannerSourceEvidenceArtifact,
     "scheduler_state.schema.json": SchedulerArtifact,
@@ -1298,8 +1379,31 @@ def _strengthen_scheduler_recovery_contract(schema: dict[str, Any]) -> None:
                     ]
                 }
             },
-        }
+        },
+        {
+            "if": {
+                "properties": {"schema_version": {"const": "1.2"}},
+                "required": ["schema_version"],
+            },
+            "then": {
+                "properties": {"full_tree_binding": {"not": {"type": "null"}}},
+                "required": ["full_tree_binding"],
+            },
+            "else": {"not": {"required": ["full_tree_binding"]}},
+        },
     ]
+
+    full_tree = schema["$defs"]["SchedulerTruncationRecoveryFullTreeBinding"]
+    for field_name in (
+        "family_root_sha256s",
+        "family_closure_sha256s",
+        "child_result_sha256s",
+        "bridge_result_sha256s",
+        "leaf_result_sha256s",
+    ):
+        inventory = full_tree["properties"][field_name]
+        inventory["uniqueItems"] = True
+        inventory["items"]["pattern"] = r"^[0-9a-f]{64}$"
 
     request = schema["$defs"]["SchedulerTruncationRecoveryModelRequestEvidence"]
     request["allOf"] = [
@@ -1326,7 +1430,7 @@ def _strengthen_scheduler_recovery_contract(schema: dict[str, Any]) -> None:
         },
         {
             "if": {
-                "properties": {"schema_version": {"const": "1.2"}},
+                "properties": {"schema_version": {"enum": ["1.2", "1.4"]}},
                 "required": ["schema_version"],
             },
             "then": {
@@ -1429,7 +1533,7 @@ def _strengthen_scheduler_recovery_contract(schema: dict[str, Any]) -> None:
                 "allOf": [
                     {
                         "not": {
-                            "properties": {"schema_version": {"const": "1.2"}},
+                            "properties": {"schema_version": {"enum": ["1.2", "1.4"]}},
                             "required": ["schema_version"],
                         }
                     },
@@ -1440,6 +1544,33 @@ def _strengthen_scheduler_recovery_contract(schema: dict[str, Any]) -> None:
                 ]
             },
             "then": {"not": {"required": ["promotion_entry_sha256"]}},
+        },
+        {
+            "if": {
+                "properties": {"schema_version": {"const": "1.4"}},
+                "required": ["schema_version"],
+            },
+            "then": {
+                "properties": {
+                    "role": {
+                        "enum": sorted(
+                            f"specialist:{role}" for role in SPECIALIST_INVESTIGATOR_ROLES
+                        )
+                    },
+                },
+                "required": ["role", "terminal_status"],
+                "if": {
+                    "properties": {"terminal_status": {"const": "SUCCEEDED"}},
+                    "required": ["terminal_status"],
+                },
+                "then": {
+                    "properties": {
+                        "specialist_accepted_outcome_sha256": {"not": {"type": "null"}},
+                    },
+                    "required": ["specialist_accepted_outcome_sha256"],
+                },
+                "else": {"not": {"required": ["specialist_accepted_outcome_sha256"]}},
+            },
         },
     ]
 
@@ -2114,10 +2245,666 @@ def _strengthen_authenticated_runner_contract(
     )
 
 
+def _strengthen_mutation_portfolio_contract(schema: dict[str, Any]) -> None:
+    """Keep legacy and eleven-class inventories distinct in exported schemas too."""
+
+    nodes = {schema.get("title", ""): schema, **schema.get("$defs", {})}
+    plan = nodes.get("MutationApplicabilityPlan")
+    classes = sorted(kind.value for kind in SecurityMutationClass)
+    discovery = nodes.get("PortfolioMutationDiscovery")
+    if discovery is not None:
+        discovery["properties"]["limitations"]["const"] = list(
+            PortfolioMutationDiscovery.model_fields["limitations"].default
+        )
+        discovery["properties"]["source_classes"]["allOf"] = [
+            {
+                "contains": {"properties": {"kind": {"const": kind}}, "required": ["kind"]},
+                "minContains": 1,
+            }
+            for kind in classes
+        ]
+        discovery["$comment"] = (
+            "Runtime validation retains every selected source/class pair, candidate, unsupported "
+            "attempt and exact compiler/source hash. This artifact is not execution authority."
+        )
+    if plan is not None:
+        rules = []
+        for version, scope, specification, kinds in (
+            (
+                "1.1",
+                "implemented_five_class_subset",
+                "SourceMutationSpec",
+                sorted(k.value for k in MutationKind),
+            ),
+            ("2.0", "required_eleven_class", "PortfolioSourceMutationSpec", classes),
+        ):
+            rules.append(
+                {
+                    "if": {
+                        "properties": {"schema_version": {"const": version}},
+                        **({"required": ["schema_version"]} if version == "2.0" else {}),
+                    },
+                    "then": {
+                        "properties": {
+                            "portfolio_scope": {"const": scope},
+                            "specifications": {"items": {"$ref": "#/$defs/" + specification}},
+                            "kind_accounting": {
+                                "minItems": len(kinds),
+                                "maxItems": len(kinds),
+                                "allOf": [
+                                    {
+                                        "contains": {
+                                            "properties": {"kind": {"const": kind}},
+                                            "required": ["kind"],
+                                        },
+                                        "minContains": 1,
+                                        "maxContains": 1,
+                                    }
+                                    for kind in kinds
+                                ],
+                            },
+                        },
+                        **({"required": ["portfolio_scope"]} if version == "2.0" else {}),
+                    },
+                }
+            )
+        if "discovery" in plan.get("properties", {}):
+            rules.append(
+                {
+                    "if": {
+                        "properties": {"discovery": {"not": {"type": "null"}}},
+                        "required": ["discovery"],
+                    },
+                    "then": {
+                        "properties": {"schema_version": {"const": "2.0"}},
+                        "required": ["schema_version"],
+                    },
+                }
+            )
+        if "compiler_inventory" in plan.get("properties", {}):
+            rules.append(
+                {
+                    "if": {
+                        "properties": {"compiler_inventory": {"not": {"type": "null"}}},
+                        "required": ["compiler_inventory"],
+                    },
+                    "then": {
+                        "properties": {
+                            "schema_version": {"const": "2.0"},
+                            "discovery": {"not": {"type": "null"}},
+                            "compiler_inventory": {
+                                "properties": {"phase": {"const": "pre_execution"}},
+                            },
+                        },
+                        "required": ["schema_version", "discovery"],
+                    },
+                }
+            )
+        if "property_tests" in plan.get("properties", {}):
+            rules.append(
+                {
+                    "if": {
+                        "properties": {"property_tests": {"not": {"type": "null"}}},
+                        "required": ["property_tests"],
+                    },
+                    "then": {
+                        "properties": {
+                            "schema_version": {"const": "2.0"},
+                            "discovery": {"not": {"type": "null"}},
+                            "compiler_inventory": {"not": {"type": "null"}},
+                        },
+                        "required": ["schema_version", "discovery", "compiler_inventory"],
+                    },
+                    "else": {"properties": {"bindings": {"minItems": 1}}},
+                }
+            )
+        plan["allOf"] = rules
+        plan["$comment"] = (
+            "Runtime validation additionally binds every source hash, exact property/mutation pair, "
+            "candidate ID and explicit non-applicability record. Attached compiler inventory must "
+            "match the selected project, compiler/build/repository identities and all declared test IDs. "
+            "Automatic property mappings bind complete generated assertions and retain unresolved "
+            "candidate/property pairs as inconclusive score denominator members, not exclusions. "
+            "JSON does not grant execution authority."
+        )
+    score = nodes.get("MutationScorecard")
+    if score is not None:
+        score["allOf"] = [
+            {
+                "if": {
+                    "properties": {"schema_version": {"const": "2.0"}},
+                    "required": ["schema_version"],
+                },
+                "then": {
+                    "required": ["portfolio_scope", "class_scores", "applicability_plan_sha256"],
+                    "properties": {
+                        "portfolio_scope": {"const": "required_eleven_class"},
+                        "applicability_plan_sha256": {"type": "string"},
+                        "evidence_origin": {
+                            "enum": ["planned_unattested", "process_local_comparison"]
+                        },
+                        "class_scores": {
+                            "type": "array",
+                            "minItems": 11,
+                            "maxItems": 11,
+                            "allOf": [
+                                {
+                                    "contains": {
+                                        "properties": {"mutation_class": {"const": kind}},
+                                        "required": ["mutation_class"],
+                                    },
+                                    "minContains": 1,
+                                    "maxContains": 1,
+                                }
+                                for kind in classes
+                            ],
+                        },
+                    },
+                },
+                "else": {
+                    "properties": {
+                        "portfolio_scope": {"type": "null"},
+                        "class_scores": {"type": "null"},
+                    }
+                },
+            }
+        ]
+        score["$comment"] = (
+            "Runtime reconstructs per-property and per-class arithmetic and requires every gate. "
+            "Missing classes cannot pass. Neither serialization nor local comparison grants "
+            "admitted campaign, benchmark, qualification or release authority."
+        )
+
+
+def _strengthen_development_dependency_contract(schema: dict[str, Any]) -> None:
+    """Versioned evidence is required for new claims; old manifests retain their old meaning."""
+
+    for node in (schema, *schema.get("$defs", {}).values()):
+        if node.get("title") == "DevelopmentDependencyClosure":
+            node.setdefault("allOf", []).extend(
+                [
+                    {
+                        "if": {"properties": {"schema_version": {"const": "1.0"}}},
+                        "then": {"properties": {"target_context": {"type": "null"}}},
+                        "else": {
+                            "required": ["schema_version", "target_context"],
+                            "properties": {
+                                "schema_version": {
+                                    "enum": ["1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7"]
+                                },
+                                "target_context": {"$ref": "#/$defs/DependencyTargetContext"},
+                            },
+                        },
+                    },
+                    {
+                        "if": {
+                            "required": ["schema_version"],
+                            "properties": {
+                                "schema_version": {
+                                    "enum": ["1.2", "1.3", "1.4", "1.5", "1.6", "1.7"]
+                                }
+                            },
+                        },
+                        "then": {
+                            "required": ["scoped_context"],
+                            "properties": {
+                                "scoped_context": {"$ref": "#/$defs/DependencyScopedContext"},
+                            },
+                        },
+                        "else": {"properties": {"scoped_context": {"type": "null"}}},
+                    },
+                    {
+                        "if": {
+                            "required": ["schema_version"],
+                            "properties": {
+                                "schema_version": {"enum": ["1.3", "1.4", "1.5", "1.6", "1.7"]}
+                            },
+                        },
+                        "then": {
+                            "required": ["call_context"],
+                            "properties": {
+                                "call_context": {"$ref": "#/$defs/DependencyCallContext"},
+                            },
+                        },
+                        "else": {"properties": {"call_context": {"type": "null"}}},
+                    },
+                    {
+                        "if": {
+                            "required": ["schema_version"],
+                            "properties": {
+                                "schema_version": {"enum": ["1.4", "1.5", "1.6", "1.7"]}
+                            },
+                        },
+                        "then": {
+                            "required": ["syntax_context"],
+                            "properties": {
+                                "syntax_context": {"$ref": "#/$defs/DependencySyntaxContext"},
+                            },
+                        },
+                        "else": {"properties": {"syntax_context": {"type": "null"}}},
+                    },
+                    {
+                        "if": {
+                            "required": ["schema_version"],
+                            "properties": {"schema_version": {"const": "1.7"}},
+                        },
+                        "then": {
+                            "required": ["static_call_closure"],
+                            "properties": {
+                                "static_call_closure": {
+                                    "$ref": "#/$defs/DevelopmentStaticCallClosure"
+                                },
+                                "dependency_closure": {"enum": ["NOT_ESTABLISHED", "CALL_CLOSED"]},
+                                "primaries": {
+                                    "items": {
+                                        "required": ["call_members"],
+                                        "properties": {
+                                            "call_members": {"type": "array", "minItems": 1}
+                                        },
+                                    }
+                                },
+                            },
+                        },
+                        "else": {
+                            "properties": {
+                                "static_call_closure": {"type": "null"},
+                                "dependency_closure": {
+                                    "enum": ["NOT_ESTABLISHED", "IMPORT_CLOSED"]
+                                },
+                                "primaries": {
+                                    "items": {
+                                        "properties": {
+                                            "call_closure": {"const": "NOT_ESTABLISHED"},
+                                            "call_members": {"type": "null"},
+                                            "call_shortfall": {
+                                                "const": "COMPLETE_STATIC_TARGET_AND_IMPLEMENTER_RESOLUTION_UNAVAILABLE"
+                                            },
+                                        }
+                                    }
+                                },
+                            }
+                        },
+                    },
+                ]
+            )
+            for status in ("CALL_CLOSED", "NOT_ESTABLISHED"):
+                node["allOf"].append(
+                    {
+                        "if": {
+                            "required": ["dependency_closure"],
+                            "properties": {"dependency_closure": {"const": status}},
+                        },
+                        "then": {
+                            "properties": {
+                                "static_call_closure": {
+                                    "properties": {"call_closure": {"const": status}}
+                                }
+                            }
+                        },
+                    }
+                )
+            for field, old_policy, new_policy, constructor_policy in (
+                (
+                    "scoped_context",
+                    "MODERN_LEXICAL_VALUES_AND_NOMINAL_MEMBERS_V1",
+                    "MODERN_LEXICAL_VALUES_AND_MODIFIER_HEADERS_V2",
+                    "MODERN_LEXICAL_VALUES_AND_CONSTRUCTOR_HEADERS_V3",
+                ),
+                (
+                    "call_context",
+                    "SOURCE_ARGUMENT_RETURN_CALL_RESOLUTION_V1",
+                    "SOURCE_CALL_AND_MODIFIER_RESOLUTION_V2",
+                    "SOURCE_CALL_MODIFIER_AND_CONSTRUCTOR_RESOLUTION_V3",
+                ),
+                (
+                    "syntax_context",
+                    "SOURCE_GRAMMAR_AND_TYPED_CALL_CENSUS_V1",
+                    "SOURCE_GRAMMAR_AND_MODIFIER_CENSUS_V2",
+                    "SOURCE_GRAMMAR_AND_CONSTRUCTOR_CENSUS_V3",
+                ),
+            ):
+                node["allOf"].append(
+                    {
+                        "if": {
+                            "required": ["schema_version"],
+                            "properties": {"schema_version": {"const": "1.5"}},
+                        },
+                        "then": {
+                            "properties": {
+                                field: {
+                                    "required": ["policy"],
+                                    "properties": {"policy": {"const": new_policy}},
+                                }
+                            }
+                        },
+                        "else": {
+                            "if": {
+                                "required": ["schema_version"],
+                                "properties": {"schema_version": {"enum": ["1.6", "1.7"]}},
+                            },
+                            "then": {
+                                "properties": {
+                                    field: {
+                                        "required": ["policy"],
+                                        "properties": {"policy": {"const": constructor_policy}},
+                                    }
+                                }
+                            },
+                            "else": {
+                                "properties": {
+                                    field: {"properties": {"policy": {"const": old_policy}}}
+                                }
+                            },
+                        },
+                    }
+                )
+        if node.get("title") in {"DevelopmentStaticCallClosure", "DependencyStaticPrimary"}:
+            gap_field = (
+                "shortfalls"
+                if node["title"] == "DevelopmentStaticCallClosure"
+                else "shortfall_indices"
+            )
+            node.setdefault("allOf", []).append(
+                {
+                    "if": {
+                        "required": ["call_closure"],
+                        "properties": {"call_closure": {"const": "CALL_CLOSED"}},
+                    },
+                    "then": {"properties": {gap_field: {"maxItems": 0}}},
+                    "else": {"properties": {gap_field: {"minItems": 1}}},
+                }
+            )
+        if node.get("title") == "DependencyCallContext":
+            node.setdefault("allOf", []).append(
+                {
+                    "if": {
+                        "required": ["policy"],
+                        "properties": {
+                            "policy": {
+                                "const": "SOURCE_CALL_MODIFIER_AND_CONSTRUCTOR_RESOLUTION_V3"
+                            }
+                        },
+                    },
+                    "else": {
+                        "properties": {
+                            "calls": {
+                                "items": {
+                                    "properties": {
+                                        "dispatch": {
+                                            "not": {"enum": ["CREATION", "BASE_CONSTRUCTOR"]}
+                                        },
+                                        "constructor_binding": {"type": "null"},
+                                    }
+                                }
+                            }
+                        }
+                    },
+                }
+            )
+        if node.get("title") == "DependencyTypedCall":
+            node.setdefault("allOf", []).extend(
+                [
+                    {
+                        "if": {
+                            "properties": {
+                                "dispatch": {"enum": ["CREATION", "BASE_CONSTRUCTOR"]},
+                                "resolution": {"const": "STATIC_DECLARATIONS_BOUND"},
+                            },
+                            "required": ["dispatch", "resolution"],
+                        },
+                        "then": {
+                            "required": ["constructor_binding"],
+                            "properties": {
+                                "constructor_binding": {
+                                    "$ref": "#/$defs/DependencyConstructorBinding"
+                                }
+                            },
+                        },
+                    },
+                    {
+                        "if": {
+                            "properties": {
+                                "dispatch": {"not": {"enum": ["CREATION", "BASE_CONSTRUCTOR"]}}
+                            },
+                            "required": ["dispatch"],
+                        },
+                        "then": {"properties": {"constructor_binding": {"type": "null"}}},
+                    },
+                ]
+            )
+        if node.get("title") == "DevelopmentCorpusSourcePartition":
+            for field_name in ("primary_filenames", "context_filenames"):
+                node["properties"][field_name]["uniqueItems"] = True
+            node["$comment"] = (
+                "Runtime requires canonical disjoint primary/context roles whose union exactly equals retained sources."
+            )
+        if (
+            node.get("properties", {}).get("artifact_kind", {}).get("const")
+            == "development_corpus_partition"
+        ):
+            node.setdefault("allOf", []).append(
+                {
+                    "properties": {
+                        "manifest": {
+                            "properties": {
+                                "schema_version": {"const": "1.11"},
+                                "dependency_closure": {"const": "CALL_CLOSED"},
+                            },
+                            "required": [
+                                "schema_version",
+                                "source_origin",
+                                "source_partition",
+                                "source_tree_evidence",
+                            ],
+                        }
+                    },
+                }
+            )
+            node["$comment"] = (
+                "Runtime replays original full-tree closure and exact minimal member selection; both roots remain mandatory custody inputs."
+            )
+        if (
+            node.get("properties", {}).get("artifact_kind", {}).get("const")
+            == "development_corpus_coverage"
+        ):
+            node.setdefault("allOf", []).append(
+                {
+                    "if": {
+                        "required": ["schema_version"],
+                        "properties": {"schema_version": {"const": "1.1"}},
+                    },
+                    "then": {
+                        "required": ["partitions"],
+                        "properties": {
+                            "partitions": {
+                                "type": "array",
+                                "minItems": 1,
+                                "maxItems": 256,
+                                "items": {"$ref": "#/$defs/DevelopmentCorpusPartition"},
+                            }
+                        },
+                    },
+                    "else": {"properties": {"partitions": {"type": "null"}}},
+                }
+            )
+        if (
+            node.get("properties", {}).get("artifact_kind", {}).get("const")
+            != "development_corpus_manifest"
+        ):
+            continue
+        node.setdefault("allOf", []).append(
+            {
+                "if": {
+                    "required": ["schema_version"],
+                    "properties": {"schema_version": {"enum": ["1.9", "1.10", "1.11"]}},
+                },
+                "then": {
+                    "properties": {
+                        "dependency_closure": {"enum": ["NOT_ESTABLISHED", "CALL_CLOSED"]}
+                    }
+                },
+                "else": {
+                    "properties": {
+                        "dependency_closure": {"enum": ["NOT_ESTABLISHED", "IMPORT_CLOSED"]}
+                    }
+                },
+            }
+        )
+        for status in ("NOT_ESTABLISHED", "IMPORT_CLOSED", "CALL_CLOSED"):
+            node["allOf"].append(
+                {
+                    "if": {
+                        "required": ["dependency_closure"],
+                        "properties": {"dependency_closure": {"const": status}},
+                    },
+                    "then": {
+                        "properties": {
+                            "dependency_evidence": {
+                                "properties": {"dependency_closure": {"const": status}}
+                            }
+                        }
+                    },
+                }
+            )
+        node.setdefault("allOf", []).append(
+            {
+                "if": {"properties": {"schema_version": {"const": "1.0"}}},
+                "then": {
+                    "properties": {
+                        "dependency_closure": {"const": "NOT_ESTABLISHED"},
+                        "dependency_evidence": {"type": "null"},
+                    },
+                },
+                "else": {
+                    "required": ["schema_version", "dependency_evidence"],
+                    "properties": {
+                        "schema_version": {
+                            "enum": [
+                                "1.1",
+                                "1.2",
+                                "1.3",
+                                "1.4",
+                                "1.5",
+                                "1.6",
+                                "1.7",
+                                "1.8",
+                                "1.9",
+                                "1.10",
+                                "1.11",
+                            ]
+                        },
+                        "dependency_evidence": {"$ref": "#/$defs/DevelopmentDependencyClosure"},
+                    },
+                },
+            }
+        )
+        for manifest_version, witness_version in (
+            ("1.1", "1.0"),
+            ("1.2", "1.1"),
+            ("1.3", "1.1"),
+            ("1.4", "1.2"),
+            ("1.5", "1.3"),
+            ("1.6", "1.4"),
+            ("1.7", "1.5"),
+            ("1.8", "1.6"),
+            ("1.9", "1.7"),
+            ("1.10", "1.7"),
+            ("1.11", "1.7"),
+        ):
+            witness: dict[str, Any] = {"properties": {"schema_version": {"const": witness_version}}}
+            if witness_version != "1.0":
+                witness["required"] = ["schema_version"]
+            node["allOf"].append(
+                {
+                    "if": {
+                        "required": ["schema_version"],
+                        "properties": {"schema_version": {"const": manifest_version}},
+                    },
+                    "then": {"properties": {"dependency_evidence": witness}},
+                }
+            )
+        node["allOf"].append(
+            {
+                "if": {
+                    "anyOf": [
+                        {
+                            "required": ["schema_version"],
+                            "properties": {
+                                "schema_version": {"enum": ["1.3", "1.9", "1.10", "1.11"]}
+                            },
+                        },
+                        {
+                            "required": ["schema_version", "source_tree_evidence"],
+                            "properties": {
+                                "schema_version": {"enum": ["1.4", "1.5", "1.6", "1.7", "1.8"]},
+                                "source_tree_evidence": {"not": {"type": "null"}},
+                            },
+                        },
+                    ],
+                },
+                "then": {
+                    "required": ["source_tree_evidence", "inventory_scope"],
+                    "properties": {
+                        "source_tree_evidence": {"$ref": "#/$defs/DevelopmentCorpusTreeEvidence"},
+                        "inventory_scope": {"const": "LOCAL_TREE_SNAPSHOT_REQUIRES_ROOT_REPLAY"},
+                    },
+                },
+                "else": {
+                    "properties": {
+                        "source_tree_evidence": {"type": "null"},
+                        "inventory_scope": {"const": "EXPLICIT_MANIFEST_ONLY"},
+                    },
+                },
+            }
+        )
+        node["allOf"].append(
+            {
+                "if": {
+                    "required": ["schema_version"],
+                    "properties": {"schema_version": {"enum": ["1.10", "1.11"]}},
+                },
+                "then": {
+                    "required": ["source_partition"],
+                    "properties": {
+                        "source_partition": {"$ref": "#/$defs/DevelopmentCorpusSourcePartition"}
+                    },
+                },
+                "else": {"properties": {"source_partition": {"type": "null"}}},
+            }
+        )
+        node["allOf"].append(
+            {
+                "if": {
+                    "required": ["schema_version"],
+                    "properties": {"schema_version": {"const": "1.11"}},
+                },
+                "then": {
+                    "required": ["source_origin"],
+                    "properties": {
+                        "source_origin": {"$ref": "#/$defs/DevelopmentCorpusPartitionOrigin"},
+                    },
+                },
+                "else": {"properties": {"source_origin": {"type": "null"}}},
+            }
+        )
+        node["$comment"] = (
+            "Runtime consumers recompute the entire versioned dependency, argument/return and lexical member "
+            "context from exact retained source bytes. Import or declaration bindings are not "
+            "complete static call closure, filesystem custody, deployment, compilation or audit "
+            "completeness. Any tree receipt requires actual root replay. Version1.9 requires a "
+            "complete tree receipt and source-recomputed graph/syntax/typed-call composition; "
+            "Version1.10 additionally requires exact disjoint primary/context membership over all retained sources. "
+            "Version1.11 additionally binds the original complete tree; a derived bundle cannot detach original-root custody. "
+            "CALL_CLOSED is only the recorded static supplied-tree dependency relation, not audit authority."
+        )
+
+
 def rendered_schema(filename: str, model: type[BaseModel]) -> str:
     """Return one deterministic draft-2020-12 schema."""
 
     schema = model.model_json_schema()
+    _strengthen_development_dependency_contract(schema)
+    _strengthen_mutation_portfolio_contract(schema)
     _strengthen_minimum_floor_recovery_contract(schema)
     if filename == "authenticated_model_calibration.schema.json":
         runner = schema["$defs"]["AuthenticatedCrossLineageRunnerEvidence"]

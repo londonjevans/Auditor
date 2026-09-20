@@ -1,5 +1,110 @@
 {
   "$defs": {
+    "ContextOmissionCategory": {
+      "description": "Typed omitted-content category without raw source or path material.",
+      "enum": [
+        "context_package",
+        "framework",
+        "graph",
+        "invariant",
+        "metadata",
+        "prior_audit",
+        "protocol",
+        "scanner",
+        "schema",
+        "source",
+        "system",
+        "workflow"
+      ],
+      "title": "ContextOmissionCategory",
+      "type": "string"
+    },
+    "ContextOmissionCommitmentMethod": {
+      "description": "Bounded commitment construction used for one omission aggregate.",
+      "enum": [
+        "MMAUDIT_SINGLE_OMISSION_ITEM_SHA256_V1",
+        "MMAUDIT_ORDERED_OMISSION_EVENT_STREAM_SHA256_V1"
+      ],
+      "title": "ContextOmissionCommitmentMethod",
+      "type": "string"
+    },
+    "ContextOmissionItem": {
+      "additionalProperties": false,
+      "description": "One bounded category/reason aggregate over omitted item identities.",
+      "properties": {
+        "category": {
+          "$ref": "#/$defs/ContextOmissionCategory"
+        },
+        "evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evidence Sha256",
+          "type": "string"
+        },
+        "inventory_commitment_method": {
+          "$ref": "#/$defs/ContextOmissionCommitmentMethod"
+        },
+        "omitted_item_count": {
+          "maximum": 2147483647,
+          "minimum": 1,
+          "title": "Omitted Item Count",
+          "type": "integer"
+        },
+        "omitted_item_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Omitted Item Sha256",
+          "type": "string"
+        },
+        "reason": {
+          "$ref": "#/$defs/ContextOmissionReason"
+        },
+        "sampled_item_sha256s": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 8,
+          "minItems": 1,
+          "title": "Sampled Item Sha256S",
+          "type": "array"
+        },
+        "samples_truncated": {
+          "title": "Samples Truncated",
+          "type": "boolean"
+        },
+        "schema_version": {
+          "const": "1.1",
+          "default": "1.1",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "category",
+        "reason",
+        "inventory_commitment_method",
+        "omitted_item_sha256",
+        "omitted_item_count",
+        "sampled_item_sha256s",
+        "samples_truncated",
+        "evidence_sha256"
+      ],
+      "title": "ContextOmissionItem",
+      "type": "object"
+    },
+    "ContextOmissionReason": {
+      "description": "Host-defined reason one category or item was not included.",
+      "enum": [
+        "BLIND_DISCOVERY_WITHHELD",
+        "CONTEXT_BUDGET_EXCLUDED",
+        "LOGICAL_BLOCK_EXCEEDS_LIMIT",
+        "METADATA_BUDGET_EXCLUDED",
+        "REVIEW_CONTRACT_WITHHELD",
+        "SHARD_SCOPE_WITHHELD",
+        "SERIALIZED_BUDGET_EXCLUDED",
+        "SOURCE_BUDGET_EXCLUDED"
+      ],
+      "title": "ContextOmissionReason",
+      "type": "string"
+    },
     "EndpointRequestCostComponentEvidence": {
       "additionalProperties": false,
       "description": "Durable exact projection of one request cost-bound component.",
@@ -27,6 +132,279 @@
         "maximum_units"
       ],
       "title": "EndpointRequestCostComponentEvidence",
+      "type": "object"
+    },
+    "EndpointRouteIntersection": {
+      "additionalProperties": false,
+      "description": "Conservative capacity intersection across every possible request route.",
+      "properties": {
+        "context_tokens": {
+          "exclusiveMinimum": 0,
+          "maximum": 2147483647,
+          "title": "Context Tokens",
+          "type": "integer"
+        },
+        "exact_model_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 256,
+          "minItems": 1,
+          "title": "Exact Model Ids",
+          "type": "array"
+        },
+        "intersection_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Intersection Sha256",
+          "type": "string"
+        },
+        "max_completion_tokens": {
+          "exclusiveMinimum": 0,
+          "maximum": 2147483647,
+          "title": "Max Completion Tokens",
+          "type": "integer"
+        },
+        "max_prompt_tokens": {
+          "exclusiveMinimum": 0,
+          "maximum": 2147483647,
+          "title": "Max Prompt Tokens",
+          "type": "integer"
+        },
+        "provider_endpoints": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 256,
+          "minItems": 1,
+          "title": "Provider Endpoints",
+          "type": "array"
+        },
+        "routes": {
+          "items": {
+            "$ref": "#/$defs/EndpointRouteTokenCapacity"
+          },
+          "maxItems": 256,
+          "minItems": 1,
+          "title": "Routes",
+          "type": "array"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "routes",
+        "exact_model_ids",
+        "provider_endpoints",
+        "context_tokens",
+        "max_prompt_tokens",
+        "max_completion_tokens",
+        "intersection_sha256"
+      ],
+      "title": "EndpointRouteIntersection",
+      "type": "object"
+    },
+    "EndpointRouteTokenCapacity": {
+      "additionalProperties": false,
+      "description": "Frozen token capacities for one exact model and provider endpoint route.",
+      "properties": {
+        "context_tokens": {
+          "exclusiveMinimum": 0,
+          "maximum": 2147483647,
+          "title": "Context Tokens",
+          "type": "integer"
+        },
+        "endpoint_snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Endpoint Snapshot Sha256",
+          "type": "string"
+        },
+        "exact_model_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}/[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$",
+          "title": "Exact Model Id",
+          "type": "string"
+        },
+        "max_completion_tokens": {
+          "exclusiveMinimum": 0,
+          "maximum": 2147483647,
+          "title": "Max Completion Tokens",
+          "type": "integer"
+        },
+        "max_completion_tokens_source": {
+          "enum": [
+            "metadata",
+            "context_limit"
+          ],
+          "title": "Max Completion Tokens Source",
+          "type": "string"
+        },
+        "max_prompt_tokens": {
+          "exclusiveMinimum": 0,
+          "maximum": 2147483647,
+          "title": "Max Prompt Tokens",
+          "type": "integer"
+        },
+        "max_prompt_tokens_source": {
+          "enum": [
+            "metadata",
+            "context_limit"
+          ],
+          "title": "Max Prompt Tokens Source",
+          "type": "string"
+        },
+        "provider_endpoint": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$",
+          "title": "Provider Endpoint",
+          "type": "string"
+        },
+        "route_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Route Sha256",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "exact_model_id",
+        "provider_endpoint",
+        "endpoint_snapshot_sha256",
+        "context_tokens",
+        "max_prompt_tokens",
+        "max_prompt_tokens_source",
+        "max_completion_tokens",
+        "max_completion_tokens_source",
+        "route_sha256"
+      ],
+      "title": "EndpointRouteTokenCapacity",
+      "type": "object"
+    },
+    "ExactRouteCostReservation": {
+      "additionalProperties": false,
+      "description": "Hash-only request binding plus complete prices, units and reserved liability.\n\nSerialized data is nonauthorizing. The request consumer must rederive this\ncontract against the actual request and its own exact plan/profile/snapshot.\nThe capped subset is not a ProviderPriceCapProof for the complete price vector.",
+      "properties": {
+        "components": {
+          "items": {
+            "$ref": "#/$defs/RouteCostReservationComponent"
+          },
+          "maxItems": 8,
+          "minItems": 2,
+          "title": "Components",
+          "type": "array"
+        },
+        "endpoint_snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Endpoint Snapshot Sha256",
+          "type": "string"
+        },
+        "exact_pricing": {
+          "items": {
+            "$ref": "#/$defs/ExactRoutePrice"
+          },
+          "maxItems": 8,
+          "minItems": 2,
+          "title": "Exact Pricing",
+          "type": "array"
+        },
+        "policy": {
+          "$ref": "#/$defs/RouteCostReservationPolicy"
+        },
+        "pricing_schedule": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExactRoutePricingSchedule"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "provider_capped_subset": {
+          "items": {
+            "$ref": "#/$defs/ProviderPriceCap"
+          },
+          "maxItems": 4,
+          "minItems": 2,
+          "title": "Provider Capped Subset",
+          "type": "array"
+        },
+        "request_material_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Request Material Sha256",
+          "type": "string"
+        },
+        "request_material_utf8_bytes": {
+          "exclusiveMinimum": 0,
+          "maximum": 64000000,
+          "title": "Request Material Utf8 Bytes",
+          "type": "integer"
+        },
+        "request_token_plan": {
+          "$ref": "#/$defs/RequestTokenPlan"
+        },
+        "reservation_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Reservation Sha256",
+          "type": "string"
+        },
+        "reserved_cost_usd_exact": {
+          "maxLength": 49,
+          "pattern": "^(?:0|[1-9][0-9]{0,11})(?:\\.[0-9]{0,35}[1-9])?$",
+          "title": "Reserved Cost Usd Exact",
+          "type": "string"
+        },
+        "route_constraint_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Route Constraint Sha256",
+          "type": "string"
+        },
+        "route_predicate_profile_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Route Predicate Profile Sha256",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "selection_plan_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Selection Plan Sha256",
+          "type": "string"
+        },
+        "status": {
+          "const": "NONAUTHORIZING_COST_RESERVATION",
+          "default": "NONAUTHORIZING_COST_RESERVATION",
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "policy",
+        "selection_plan_sha256",
+        "route_predicate_profile_sha256",
+        "route_constraint_sha256",
+        "endpoint_snapshot_sha256",
+        "request_material_sha256",
+        "request_material_utf8_bytes",
+        "request_token_plan",
+        "exact_pricing",
+        "provider_capped_subset",
+        "components",
+        "reserved_cost_usd_exact",
+        "reservation_sha256"
+      ],
+      "title": "ExactRouteCostReservation",
       "type": "object"
     },
     "ExactRoutePrice": {
@@ -147,6 +525,211 @@
       "title": "ExactRoutePricingSchedule",
       "type": "object"
     },
+    "GlobalTokenBudgetEvidence": {
+      "additionalProperties": false,
+      "description": "Immutable input/output reservation proof against global token limits.",
+      "properties": {
+        "evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evidence Sha256",
+          "type": "string"
+        },
+        "global_input_token_budget": {
+          "exclusiveMinimum": 0,
+          "maximum": 2147483647,
+          "title": "Global Input Token Budget",
+          "type": "integer"
+        },
+        "global_output_token_budget": {
+          "exclusiveMinimum": 0,
+          "maximum": 2147483647,
+          "title": "Global Output Token Budget",
+          "type": "integer"
+        },
+        "input_tokens_remaining_after": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Input Tokens Remaining After",
+          "type": "integer"
+        },
+        "input_tokens_reserved_after": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Input Tokens Reserved After",
+          "type": "integer"
+        },
+        "input_tokens_reserved_before": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Input Tokens Reserved Before",
+          "type": "integer"
+        },
+        "output_tokens_remaining_after": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Output Tokens Remaining After",
+          "type": "integer"
+        },
+        "output_tokens_reserved_after": {
+          "exclusiveMinimum": 0,
+          "maximum": 2147483647,
+          "title": "Output Tokens Reserved After",
+          "type": "integer"
+        },
+        "output_tokens_reserved_before": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Output Tokens Reserved Before",
+          "type": "integer"
+        },
+        "request_input_tokens": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Request Input Tokens",
+          "type": "integer"
+        },
+        "request_output_tokens": {
+          "exclusiveMinimum": 0,
+          "maximum": 2147483647,
+          "title": "Request Output Tokens",
+          "type": "integer"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "global_input_token_budget",
+        "global_output_token_budget",
+        "input_tokens_reserved_before",
+        "output_tokens_reserved_before",
+        "request_input_tokens",
+        "request_output_tokens",
+        "input_tokens_reserved_after",
+        "output_tokens_reserved_after",
+        "input_tokens_remaining_after",
+        "output_tokens_remaining_after",
+        "evidence_sha256"
+      ],
+      "title": "GlobalTokenBudgetEvidence",
+      "type": "object"
+    },
+    "LegacyUncertainCostAllowance": {
+      "additionalProperties": false,
+      "description": "Explicit operator relaxation for two exact rows, with no general carry mechanism.",
+      "properties": {
+        "allowance_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Allowance Sha256",
+          "type": "string"
+        },
+        "entries": {
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "$ref": "#/$defs/LegacyUncertainCostEntry"
+            },
+            {
+              "$ref": "#/$defs/LegacyUncertainCostEntry"
+            }
+          ],
+          "title": "Entries",
+          "type": "array"
+        },
+        "operator_decision_id": {
+          "const": "OP-COSTLEGACY-2026-09-11",
+          "default": "OP-COSTLEGACY-2026-09-11",
+          "title": "Operator Decision Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "entries",
+        "allowance_sha256"
+      ],
+      "title": "LegacyUncertainCostAllowance",
+      "type": "object"
+    },
+    "LegacyUncertainCostEntry": {
+      "additionalProperties": false,
+      "description": "Bind every immutable identity and retained liability field of one approved row.",
+      "properties": {
+        "accounted_cost_usd_exact": {
+          "enum": [
+            "0.18105",
+            "0.05225616"
+          ],
+          "title": "Accounted Cost Usd Exact",
+          "type": "string"
+        },
+        "actual_cost_usd": {
+          "default": null,
+          "title": "Actual Cost Usd",
+          "type": "null"
+        },
+        "created_at": {
+          "maxLength": 32,
+          "minLength": 25,
+          "title": "Created At",
+          "type": "string"
+        },
+        "release_reason": {
+          "default": null,
+          "title": "Release Reason",
+          "type": "null"
+        },
+        "request_id": {
+          "pattern": "^authrunner\\.smoke\\.(?:r17\\.judge\\.replay|r2\\.candidate\\.primary):[0-9a-f]{64}$",
+          "title": "Request Id",
+          "type": "string"
+        },
+        "reservation_id": {
+          "pattern": "^[0-9a-f]{32}$",
+          "title": "Reservation Id",
+          "type": "string"
+        },
+        "reserved_usd_exact": {
+          "enum": [
+            "0.18105",
+            "0.05225616"
+          ],
+          "title": "Reserved Usd Exact",
+          "type": "string"
+        },
+        "status": {
+          "const": "uncertain_accounted",
+          "default": "uncertain_accounted",
+          "title": "Status",
+          "type": "string"
+        },
+        "updated_at": {
+          "maxLength": 32,
+          "minLength": 25,
+          "title": "Updated At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "request_id",
+        "reservation_id",
+        "created_at",
+        "updated_at",
+        "reserved_usd_exact",
+        "accounted_cost_usd_exact"
+      ],
+      "title": "LegacyUncertainCostEntry",
+      "type": "object"
+    },
     "OpenRouterPricingOverrideTier": {
       "additionalProperties": false,
       "description": "One ordered, threshold-conditional partial endpoint price replacement.",
@@ -188,6 +771,147 @@
       "title": "OpenRouterPricingOverrideTier",
       "type": "object"
     },
+    "OutputAllocationCategory": {
+      "description": "Visible-output partitions required for a substantive review response.",
+      "enum": [
+        "coverage",
+        "findings",
+        "summary"
+      ],
+      "title": "OutputAllocationCategory",
+      "type": "string"
+    },
+    "OutputTokenAllocation": {
+      "additionalProperties": false,
+      "description": "One self-hashed visible-output reservation without response content.",
+      "properties": {
+        "allocation_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Allocation Sha256",
+          "type": "string"
+        },
+        "category": {
+          "$ref": "#/$defs/OutputAllocationCategory"
+        },
+        "minimum_reserved_tokens": {
+          "exclusiveMinimum": 0,
+          "maximum": 2147483647,
+          "title": "Minimum Reserved Tokens",
+          "type": "integer"
+        },
+        "minimum_tokens_per_surface": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Minimum Tokens Per Surface",
+          "type": "integer"
+        },
+        "requested_surface_count": {
+          "maximum": 10000,
+          "minimum": 0,
+          "title": "Requested Surface Count",
+          "type": "integer"
+        },
+        "reserved_tokens": {
+          "exclusiveMinimum": 0,
+          "maximum": 2147483647,
+          "title": "Reserved Tokens",
+          "type": "integer"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "category",
+        "reserved_tokens",
+        "minimum_reserved_tokens",
+        "requested_surface_count",
+        "minimum_tokens_per_surface",
+        "allocation_sha256"
+      ],
+      "title": "OutputTokenAllocation",
+      "type": "object"
+    },
+    "PromptAllocationCategory": {
+      "description": "Complete prompt allocation inventory retained by every request plan.",
+      "enum": [
+        "framework",
+        "graph",
+        "invariant",
+        "metadata",
+        "prior_audit",
+        "protocol",
+        "scanner",
+        "schema",
+        "source",
+        "system",
+        "workflow"
+      ],
+      "title": "PromptAllocationCategory",
+      "type": "string"
+    },
+    "PromptTokenAllocation": {
+      "additionalProperties": false,
+      "description": "One explicit prompt category without raw text.",
+      "properties": {
+        "allocation_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Allocation Sha256",
+          "type": "string"
+        },
+        "category": {
+          "$ref": "#/$defs/PromptAllocationCategory"
+        },
+        "estimate": {
+          "$ref": "#/$defs/Utf8TokenEstimate"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "category",
+        "estimate",
+        "allocation_sha256"
+      ],
+      "title": "PromptTokenAllocation",
+      "type": "object"
+    },
+    "ProviderMaxPriceComponent": {
+      "enum": [
+        "completion",
+        "image",
+        "prompt",
+        "request"
+      ],
+      "title": "ProviderMaxPriceComponent",
+      "type": "string"
+    },
+    "ProviderPriceCap": {
+      "additionalProperties": false,
+      "properties": {
+        "component": {
+          "$ref": "#/$defs/ProviderMaxPriceComponent"
+        },
+        "value": {
+          "minimum": 0,
+          "title": "Value",
+          "type": "number"
+        }
+      },
+      "required": [
+        "component",
+        "value"
+      ],
+      "title": "ProviderPriceCap",
+      "type": "object"
+    },
     "ProviderPriceCapAlgorithm": {
       "enum": [
         "MMAUDIT_OPENROUTER_MAX_PRICE_CEILING_V1",
@@ -196,6 +920,665 @@
       ],
       "title": "ProviderPriceCapAlgorithm",
       "type": "string"
+    },
+    "ReasoningControlProfile": {
+      "additionalProperties": false,
+      "description": "One effective reasoning control with an explicit token reservation.",
+      "properties": {
+        "effort": {
+          "anyOf": [
+            {
+              "enum": [
+                "none",
+                "minimal",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Effort"
+        },
+        "exclude": {
+          "default": false,
+          "title": "Exclude",
+          "type": "boolean"
+        },
+        "max_tokens": {
+          "anyOf": [
+            {
+              "maximum": 65536,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Tokens"
+        },
+        "mode": {
+          "enum": [
+            "disabled",
+            "default",
+            "effort",
+            "max_tokens"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "profile_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Profile Sha256",
+          "type": "string"
+        },
+        "reserved_reasoning_tokens": {
+          "maximum": 65536,
+          "minimum": 0,
+          "title": "Reserved Reasoning Tokens",
+          "type": "integer"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "mode",
+        "reserved_reasoning_tokens",
+        "profile_sha256"
+      ],
+      "title": "ReasoningControlProfile",
+      "type": "object"
+    },
+    "ReasoningRequestPlanEvidence": {
+      "additionalProperties": false,
+      "description": "Exact role, control, capability, and qualification joins for one request plan.",
+      "properties": {
+        "binding_state": {
+          "enum": [
+            "policy_only",
+            "capability_bound",
+            "qualification_bound"
+          ],
+          "title": "Binding State",
+          "type": "string"
+        },
+        "control_profile": {
+          "$ref": "#/$defs/ReasoningControlProfile"
+        },
+        "endpoint_capability_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Endpoint Capability Sha256"
+        },
+        "evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evidence Sha256",
+          "type": "string"
+        },
+        "policy_artifact_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Policy Artifact Sha256",
+          "type": "string"
+        },
+        "policy_role_binding_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Policy Role Binding Sha256",
+          "type": "string"
+        },
+        "qualification_binding_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Qualification Binding Sha256"
+        },
+        "resolution": {
+          "$ref": "#/$defs/ReasoningRequestRoleResolution"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "resolution",
+        "control_profile",
+        "policy_artifact_sha256",
+        "policy_role_binding_sha256",
+        "binding_state",
+        "evidence_sha256"
+      ],
+      "title": "ReasoningRequestPlanEvidence",
+      "type": "object"
+    },
+    "ReasoningRequestRoleResolution": {
+      "additionalProperties": false,
+      "description": "Exact host request-role meaning, policy routing, and qualification role.",
+      "properties": {
+        "configured_policy_role": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Configured Policy Role",
+          "type": "string"
+        },
+        "mapping_kind": {
+          "enum": [
+            "base_exact",
+            "specialist_investigator",
+            "specialist_auxiliary",
+            "dedicated_exploit_test",
+            "fallback_exploit_test",
+            "falsifier_fallback",
+            "candidate_cross_examination_context",
+            "candidate_cross_examination",
+            "whole_protocol_indexed",
+            "prequalification_benchmark",
+            "prequalification_role_benchmark"
+          ],
+          "title": "Mapping Kind",
+          "type": "string"
+        },
+        "qualification_role": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Qualification Role",
+          "type": "string"
+        },
+        "request_role": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Request Role",
+          "type": "string"
+        },
+        "resolution_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Resolution Sha256",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "semantic_role": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Semantic Role",
+          "type": "string"
+        }
+      },
+      "required": [
+        "request_role",
+        "semantic_role",
+        "configured_policy_role",
+        "qualification_role",
+        "mapping_kind",
+        "resolution_sha256"
+      ],
+      "title": "ReasoningRequestRoleResolution",
+      "type": "object"
+    },
+    "RequestTokenPlan": {
+      "additionalProperties": false,
+      "description": "Self-hashed endpoint-bound input, reasoning, and output request plan.",
+      "properties": {
+        "allocations": {
+          "items": {
+            "$ref": "#/$defs/PromptTokenAllocation"
+          },
+          "maxItems": 11,
+          "minItems": 11,
+          "title": "Allocations",
+          "type": "array"
+        },
+        "context_omission_sha256s": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 64,
+          "title": "Context Omission Sha256S",
+          "type": "array"
+        },
+        "context_omissions": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ContextOmissionItem"
+          },
+          "maxItems": 64,
+          "title": "Context Omissions",
+          "type": "array"
+        },
+        "context_utilization": {
+          "anyOf": [
+            {
+              "maximum": 0.75,
+              "minimum": 0.65,
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "title": "Context Utilization"
+        },
+        "estimated_prompt_tokens": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Estimated Prompt Tokens",
+          "type": "integer"
+        },
+        "global_budget": {
+          "$ref": "#/$defs/GlobalTokenBudgetEvidence"
+        },
+        "hard_prompt_tokens": {
+          "exclusiveMinimum": 0,
+          "maximum": 2147483647,
+          "title": "Hard Prompt Tokens",
+          "type": "integer"
+        },
+        "output_allocations": {
+          "items": {
+            "$ref": "#/$defs/OutputTokenAllocation"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "title": "Output Allocations",
+          "type": "array"
+        },
+        "plan_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Plan Sha256",
+          "type": "string"
+        },
+        "prompt_byte_upper_bound_tokens": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Prompt Byte Upper Bound Tokens",
+          "type": "integer"
+        },
+        "prompt_content_byte_upper_bound_tokens": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Prompt Content Byte Upper Bound Tokens",
+          "type": "integer"
+        },
+        "prompt_framing_reserve_tokens": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Prompt Framing Reserve Tokens",
+          "type": "integer"
+        },
+        "prompt_upper_bound_method": {
+          "const": "MMAUDIT_UTF8_BYTES_PLUS_FRAMING_V1",
+          "default": "MMAUDIT_UTF8_BYTES_PLUS_FRAMING_V1",
+          "title": "Prompt Upper Bound Method",
+          "type": "string"
+        },
+        "reasoning_plan": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReasoningRequestPlanEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "request_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$",
+          "title": "Request Id",
+          "type": "string"
+        },
+        "requested_completion_tokens": {
+          "exclusiveMinimum": 0,
+          "maximum": 2147483647,
+          "title": "Requested Completion Tokens",
+          "type": "integer"
+        },
+        "requested_surface_count": {
+          "maximum": 10000,
+          "minimum": 0,
+          "title": "Requested Surface Count",
+          "type": "integer"
+        },
+        "required_output_tokens": {
+          "exclusiveMinimum": 0,
+          "maximum": 2147483647,
+          "title": "Required Output Tokens",
+          "type": "integer"
+        },
+        "reserved_output_tokens": {
+          "exclusiveMinimum": 0,
+          "maximum": 2147483647,
+          "title": "Reserved Output Tokens",
+          "type": "integer"
+        },
+        "reserved_protocol_tokens": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Reserved Protocol Tokens",
+          "type": "integer"
+        },
+        "reserved_reasoning_tokens": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Reserved Reasoning Tokens",
+          "type": "integer"
+        },
+        "reserved_schema_tokens": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Reserved Schema Tokens",
+          "type": "integer"
+        },
+        "reserved_system_tokens": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Reserved System Tokens",
+          "type": "integer"
+        },
+        "reserved_workflow_tokens": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Reserved Workflow Tokens",
+          "type": "integer"
+        },
+        "role": {
+          "pattern": "^[a-z][a-z0-9_:.-]{0,127}$",
+          "title": "Role",
+          "type": "string"
+        },
+        "route_intersection": {
+          "$ref": "#/$defs/EndpointRouteIntersection"
+        },
+        "schema_version": {
+          "default": "2.0",
+          "enum": [
+            "1.0",
+            "2.0",
+            "3.0"
+          ],
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "source_budget": {
+          "$ref": "#/$defs/SourceTokenBudgetEvidence"
+        },
+        "token_detail_accounting_method": {
+          "anyOf": [
+            {
+              "const": "MMAUDIT_INDEPENDENT_REASONING_COMPONENT_ENVELOPE_V1",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Token Detail Accounting Method"
+        },
+        "usable_prompt_tokens": {
+          "exclusiveMinimum": 0,
+          "maximum": 2147483647,
+          "title": "Usable Prompt Tokens",
+          "type": "integer"
+        },
+        "wire_max_tokens": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "maximum": 2147483647,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Wire Max Tokens"
+        }
+      },
+      "required": [
+        "request_id",
+        "role",
+        "route_intersection",
+        "context_utilization",
+        "allocations",
+        "requested_surface_count",
+        "output_allocations",
+        "required_output_tokens",
+        "reserved_output_tokens",
+        "reserved_reasoning_tokens",
+        "requested_completion_tokens",
+        "hard_prompt_tokens",
+        "usable_prompt_tokens",
+        "estimated_prompt_tokens",
+        "prompt_content_byte_upper_bound_tokens",
+        "prompt_framing_reserve_tokens",
+        "prompt_byte_upper_bound_tokens",
+        "reserved_system_tokens",
+        "reserved_schema_tokens",
+        "reserved_protocol_tokens",
+        "reserved_workflow_tokens",
+        "source_budget",
+        "global_budget",
+        "plan_sha256"
+      ],
+      "title": "RequestTokenPlan",
+      "type": "object"
+    },
+    "ReservationRateBasis": {
+      "enum": [
+        "PROVIDER_CAPPED_RATE",
+        "OPERATOR_RESERVED_UNCAPPABLE_RATE"
+      ],
+      "title": "ReservationRateBasis",
+      "type": "string"
+    },
+    "RouteCostReservationComponent": {
+      "additionalProperties": false,
+      "properties": {
+        "component": {
+          "$ref": "#/$defs/RoutePriceComponent"
+        },
+        "maximum_observed_unit_price_usd_exact": {
+          "maxLength": 49,
+          "pattern": "^(?:0|[1-9][0-9]{0,11})(?:\\.[0-9]{0,35}[1-9])?$",
+          "title": "Maximum Observed Unit Price Usd Exact",
+          "type": "string"
+        },
+        "maximum_units": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Maximum Units",
+          "type": "integer"
+        },
+        "rate_basis": {
+          "$ref": "#/$defs/ReservationRateBasis"
+        },
+        "reserved_unit_price_usd_exact": {
+          "maxLength": 49,
+          "pattern": "^(?:0|[1-9][0-9]{0,11})(?:\\.[0-9]{0,35}[1-9])?$",
+          "title": "Reserved Unit Price Usd Exact",
+          "type": "string"
+        }
+      },
+      "required": [
+        "component",
+        "maximum_observed_unit_price_usd_exact",
+        "reserved_unit_price_usd_exact",
+        "maximum_units",
+        "rate_basis"
+      ],
+      "title": "RouteCostReservationComponent",
+      "type": "object"
+    },
+    "RouteCostReservationPolicy": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "schema_version": {
+                "const": "1.0"
+              }
+            }
+          },
+          "then": {
+            "not": {
+              "required": [
+                "legacy_uncertain_allowance"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "schema_version": {
+                "const": "1.1"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "legacy_uncertain_allowance": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "legacy_uncertain_allowance"
+            ]
+          }
+        }
+      ],
+      "description": "An explicit cost-only relaxation, never inferred from endpoint metadata.",
+      "properties": {
+        "automatic_ceiling_increase": {
+          "const": false,
+          "default": false,
+          "title": "Automatic Ceiling Increase",
+          "type": "boolean"
+        },
+        "enforcement_basis": {
+          "const": "MMAUDIT_OPERATOR_RESERVE_THEN_RECONCILE_V1",
+          "default": "MMAUDIT_OPERATOR_RESERVE_THEN_RECONCILE_V1",
+          "title": "Enforcement Basis",
+          "type": "string"
+        },
+        "ledger_ceiling_usd_exact": {
+          "default": "250",
+          "maxLength": 49,
+          "pattern": "^(?:0|[1-9][0-9]{0,11})(?:\\.[0-9]{0,35}[1-9])?$",
+          "title": "Ledger Ceiling Usd Exact",
+          "type": "string"
+        },
+        "legacy_uncertain_allowance": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LegacyUncertainCostAllowance"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "maximum_request_bytes": {
+          "default": 4000000,
+          "maximum": 64000000,
+          "minimum": 1024,
+          "title": "Maximum Request Bytes",
+          "type": "integer"
+        },
+        "operator_decision_id": {
+          "const": "OP-COST-2026-09-09",
+          "default": "OP-COST-2026-09-09",
+          "title": "Operator Decision Id",
+          "type": "string"
+        },
+        "policy_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Policy Sha256",
+          "type": "string"
+        },
+        "provider_enforced_total_ceiling": {
+          "const": false,
+          "default": false,
+          "title": "Provider Enforced Total Ceiling",
+          "type": "boolean"
+        },
+        "require_actual_billed_cost": {
+          "const": true,
+          "default": true,
+          "title": "Require Actual Billed Cost",
+          "type": "boolean"
+        },
+        "reservation_overrun_blocks_new_work": {
+          "const": true,
+          "default": true,
+          "title": "Reservation Overrun Blocks New Work",
+          "type": "boolean"
+        },
+        "schema_version": {
+          "default": "1.0",
+          "enum": [
+            "1.0",
+            "1.1"
+          ],
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "uncappable_rate_multiplier": {
+          "const": "2",
+          "default": "2",
+          "title": "Uncappable Rate Multiplier",
+          "type": "string"
+        },
+        "unknown_billing_blocks_new_work": {
+          "const": true,
+          "default": true,
+          "title": "Unknown Billing Blocks New Work",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "policy_sha256"
+      ],
+      "title": "RouteCostReservationPolicy",
+      "type": "object"
     },
     "RoutePredicateDisposition": {
       "enum": [
@@ -237,13 +1620,238 @@
         "REGISTRY_SELECTION_HASH_CUSTODY",
         "REGISTRY_CONSTRAINT_HASH_CUSTODY",
         "EMPIRICAL_SCHEMA_CONFORMANCE",
-        "TOKEN_DETAIL_REPORTING_CONVENTION"
+        "TOKEN_DETAIL_REPORTING_CONVENTION",
+        "RESERVATION_PRICING_AVAILABLE",
+        "PROVIDER_CAPPED_SUBSET_BOUND"
       ],
       "title": "RoutePredicateId",
       "type": "string"
     },
     "RoutePredicateProfile": {
       "additionalProperties": false,
+      "allOf": [
+        {
+          "else": {
+            "not": {
+              "required": [
+                "operator_reservation_policy"
+              ]
+            },
+            "properties": {
+              "predicate_ids": {
+                "prefixItems": [
+                  {
+                    "const": "EXACT_MODEL_IDENTITY"
+                  },
+                  {
+                    "const": "EXACT_PROVIDER_ENDPOINT"
+                  },
+                  {
+                    "const": "PROVIDER_DISPLAY_NAME_INJECTIVITY"
+                  },
+                  {
+                    "const": "OPERATIONAL_STATUS"
+                  },
+                  {
+                    "const": "ZDR_ELIGIBILITY"
+                  },
+                  {
+                    "const": "EMITS_MAX_TOKENS"
+                  },
+                  {
+                    "const": "EMITS_TEMPERATURE"
+                  },
+                  {
+                    "const": "EMITS_RESPONSE_FORMAT"
+                  },
+                  {
+                    "const": "EMITS_REASONING"
+                  },
+                  {
+                    "const": "MODEL_STRUCTURED_OUTPUT_MARKER"
+                  },
+                  {
+                    "const": "ENDPOINT_STRUCTURED_OUTPUT_MARKER"
+                  },
+                  {
+                    "const": "NATIVE_STRUCTURED_OUTPUT_MODE"
+                  },
+                  {
+                    "const": "SINGLETON_EXACT_ROUTE"
+                  },
+                  {
+                    "const": "AUTOMATIC_FALLBACK_DISABLED"
+                  },
+                  {
+                    "const": "REASONING_POLICY_BINDING"
+                  },
+                  {
+                    "const": "REASONING_CONTROL_BINDING"
+                  },
+                  {
+                    "const": "REASONING_CONTROL_VALUES"
+                  },
+                  {
+                    "const": "REASONING_EFFORT_SUPPORT"
+                  },
+                  {
+                    "const": "PROMPT_CAPACITY_ENVELOPE"
+                  },
+                  {
+                    "const": "OUTPUT_CAPACITY_ENVELOPE"
+                  },
+                  {
+                    "const": "CONTEXT_CAPACITY_ENVELOPE"
+                  },
+                  {
+                    "const": "METADATA_COMPLETION_CAPACITY"
+                  },
+                  {
+                    "const": "PRICE_CAP_EXPRESSIBILITY"
+                  },
+                  {
+                    "const": "PRICE_CAP_NO_WEAKER"
+                  },
+                  {
+                    "const": "FROZEN_LIVE_EQUIVALENCE"
+                  },
+                  {
+                    "const": "REGISTRY_SELECTION_HASH_CUSTODY"
+                  },
+                  {
+                    "const": "REGISTRY_CONSTRAINT_HASH_CUSTODY"
+                  },
+                  {
+                    "const": "EMPIRICAL_SCHEMA_CONFORMANCE"
+                  },
+                  {
+                    "const": "TOKEN_DETAIL_REPORTING_CONVENTION"
+                  }
+                ]
+              }
+            }
+          },
+          "if": {
+            "properties": {
+              "schema_version": {
+                "const": "1.3"
+              }
+            },
+            "required": [
+              "schema_version"
+            ]
+          },
+          "then": {
+            "not": {
+              "required": [
+                "price_component_unit_envelopes"
+              ]
+            },
+            "properties": {
+              "operator_reservation_policy": {
+                "type": "object"
+              },
+              "predicate_ids": {
+                "prefixItems": [
+                  {
+                    "const": "EXACT_MODEL_IDENTITY"
+                  },
+                  {
+                    "const": "EXACT_PROVIDER_ENDPOINT"
+                  },
+                  {
+                    "const": "PROVIDER_DISPLAY_NAME_INJECTIVITY"
+                  },
+                  {
+                    "const": "OPERATIONAL_STATUS"
+                  },
+                  {
+                    "const": "ZDR_ELIGIBILITY"
+                  },
+                  {
+                    "const": "EMITS_MAX_TOKENS"
+                  },
+                  {
+                    "const": "EMITS_TEMPERATURE"
+                  },
+                  {
+                    "const": "EMITS_RESPONSE_FORMAT"
+                  },
+                  {
+                    "const": "EMITS_REASONING"
+                  },
+                  {
+                    "const": "MODEL_STRUCTURED_OUTPUT_MARKER"
+                  },
+                  {
+                    "const": "ENDPOINT_STRUCTURED_OUTPUT_MARKER"
+                  },
+                  {
+                    "const": "NATIVE_STRUCTURED_OUTPUT_MODE"
+                  },
+                  {
+                    "const": "SINGLETON_EXACT_ROUTE"
+                  },
+                  {
+                    "const": "AUTOMATIC_FALLBACK_DISABLED"
+                  },
+                  {
+                    "const": "REASONING_POLICY_BINDING"
+                  },
+                  {
+                    "const": "REASONING_CONTROL_BINDING"
+                  },
+                  {
+                    "const": "REASONING_CONTROL_VALUES"
+                  },
+                  {
+                    "const": "REASONING_EFFORT_SUPPORT"
+                  },
+                  {
+                    "const": "PROMPT_CAPACITY_ENVELOPE"
+                  },
+                  {
+                    "const": "OUTPUT_CAPACITY_ENVELOPE"
+                  },
+                  {
+                    "const": "CONTEXT_CAPACITY_ENVELOPE"
+                  },
+                  {
+                    "const": "METADATA_COMPLETION_CAPACITY"
+                  },
+                  {
+                    "const": "RESERVATION_PRICING_AVAILABLE"
+                  },
+                  {
+                    "const": "PROVIDER_CAPPED_SUBSET_BOUND"
+                  },
+                  {
+                    "const": "FROZEN_LIVE_EQUIVALENCE"
+                  },
+                  {
+                    "const": "REGISTRY_SELECTION_HASH_CUSTODY"
+                  },
+                  {
+                    "const": "REGISTRY_CONSTRAINT_HASH_CUSTODY"
+                  },
+                  {
+                    "const": "EMPIRICAL_SCHEMA_CONFORMANCE"
+                  },
+                  {
+                    "const": "TOKEN_DETAIL_REPORTING_CONVENTION"
+                  }
+                ]
+              },
+              "price_cap_algorithm": {
+                "const": "MMAUDIT_OPENROUTER_MAX_PRICE_CEILING_V1"
+              }
+            },
+            "required": [
+              "operator_reservation_policy"
+            ]
+          }
+        }
+      ],
       "description": "Shared requirements for every exact AUTHRUNNER route.",
       "properties": {
         "accepted_operational_status": {
@@ -284,6 +1892,17 @@
           "const": "structured_outputs",
           "title": "Native Capability Marker",
           "type": "string"
+        },
+        "operator_reservation_policy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RouteCostReservationPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "predicate_ids": {
           "items": {
@@ -430,7 +2049,8 @@
           "enum": [
             "1.0",
             "1.1",
-            "1.2"
+            "1.2",
+            "1.3"
           ],
           "title": "Schema Version",
           "type": "string"
@@ -548,11 +2168,240 @@
       ],
       "title": "RoutePriceComponentUnitEnvelope",
       "type": "object"
+    },
+    "SourceTokenBudgetEvidence": {
+      "additionalProperties": false,
+      "description": "Conservation proof for the maximum source allocation in one request.",
+      "properties": {
+        "configured_maximum_source_tokens_per_request": {
+          "exclusiveMinimum": 0,
+          "maximum": 2147483647,
+          "title": "Configured Maximum Source Tokens Per Request",
+          "type": "integer"
+        },
+        "context_package_source_byte_ceiling": {
+          "anyOf": [
+            {
+              "maximum": 2147483647,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Context Package Source Byte Ceiling"
+        },
+        "evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evidence Sha256",
+          "type": "string"
+        },
+        "maximum_source_byte_upper_bound_tokens": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Maximum Source Byte Upper Bound Tokens",
+          "type": "integer"
+        },
+        "maximum_source_tokens_per_request": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Maximum Source Tokens Per Request",
+          "type": "integer"
+        },
+        "non_source_prompt_tokens": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Non Source Prompt Tokens",
+          "type": "integer"
+        },
+        "planned_source_byte_upper_bound_tokens": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Planned Source Byte Upper Bound Tokens",
+          "type": "integer"
+        },
+        "planned_source_tokens": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Planned Source Tokens",
+          "type": "integer"
+        },
+        "remaining_source_byte_upper_bound_tokens": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Remaining Source Byte Upper Bound Tokens",
+          "type": "integer"
+        },
+        "remaining_source_tokens": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Remaining Source Tokens",
+          "type": "integer"
+        },
+        "reserved_non_source_prompt_tokens": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Reserved Non Source Prompt Tokens",
+          "type": "integer"
+        },
+        "schema_version": {
+          "const": "1.1",
+          "default": "1.1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "unallocated_prompt_tokens": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Unallocated Prompt Tokens",
+          "type": "integer"
+        },
+        "usable_prompt_tokens": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Usable Prompt Tokens",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "usable_prompt_tokens",
+        "non_source_prompt_tokens",
+        "reserved_non_source_prompt_tokens",
+        "configured_maximum_source_tokens_per_request",
+        "maximum_source_tokens_per_request",
+        "maximum_source_byte_upper_bound_tokens",
+        "planned_source_tokens",
+        "planned_source_byte_upper_bound_tokens",
+        "remaining_source_tokens",
+        "remaining_source_byte_upper_bound_tokens",
+        "unallocated_prompt_tokens",
+        "evidence_sha256"
+      ],
+      "title": "SourceTokenBudgetEvidence",
+      "type": "object"
+    },
+    "Utf8TokenEstimate": {
+      "additionalProperties": false,
+      "description": "Deterministic local estimate with a separate conservative byte upper bound.",
+      "properties": {
+        "byte_upper_bound_tokens": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Byte Upper Bound Tokens",
+          "type": "integer"
+        },
+        "content_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Content Sha256",
+          "type": "string"
+        },
+        "estimated_tokens": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Estimated Tokens",
+          "type": "integer"
+        },
+        "estimator": {
+          "const": "MMAUDIT_UTF8_BYTES_DIV3_V1",
+          "default": "MMAUDIT_UTF8_BYTES_DIV3_V1",
+          "title": "Estimator",
+          "type": "string"
+        },
+        "evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evidence Sha256",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "utf8_bytes": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Utf8 Bytes",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "content_sha256",
+        "utf8_bytes",
+        "estimated_tokens",
+        "byte_upper_bound_tokens",
+        "evidence_sha256"
+      ],
+      "title": "Utf8TokenEstimate",
+      "type": "object"
     }
   },
   "$id": "https://mmaudit.local/schemas/audit_model_refresh_pricing_attempt_evidence.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
+  "allOf": [
+    {
+      "else": {
+        "not": {
+          "required": [
+            "operator_cost_reservation"
+          ]
+        }
+      },
+      "if": {
+        "properties": {
+          "schema_version": {
+            "const": "1.2"
+          }
+        },
+        "required": [
+          "schema_version"
+        ]
+      },
+      "then": {
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "price_cap_algorithm"
+              ]
+            },
+            {
+              "required": [
+                "price_component_unit_envelopes"
+              ]
+            }
+          ]
+        },
+        "properties": {
+          "operator_cost_reservation": {
+            "type": "object"
+          },
+          "route_predicate_profile": {
+            "properties": {
+              "schema_version": {
+                "const": "1.3"
+              }
+            },
+            "required": [
+              "schema_version"
+            ],
+            "type": "object"
+          },
+          "route_predicate_profile_sha256": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "operator_cost_reservation",
+          "route_predicate_profile",
+          "route_predicate_profile_sha256"
+        ]
+      }
+    }
+  ],
   "description": "Non-authorizing price and cost-bound custody for one provider attempt.\n\nThe record is safe to retain in usage and report artifacts. Its hashes prove\nstructural consistency only; they cannot recreate the live refresh or pricing\ncapabilities required at the transport boundary.",
   "properties": {
     "attempt_index": {
@@ -704,6 +2553,17 @@
       "pattern": "^(?:0|[1-9][0-9]{0,11})(?:\\.[0-9]{1,18})?$",
       "title": "Maximum Cost Usd Exact",
       "type": "string"
+    },
+    "operator_cost_reservation": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ExactRouteCostReservation"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "price_cap_algorithm": {
       "anyOf": [
@@ -862,7 +2722,8 @@
       "default": "1.0",
       "enum": [
         "1.0",
-        "1.1"
+        "1.1",
+        "1.2"
       ],
       "title": "Schema Version",
       "type": "string"

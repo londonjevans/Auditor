@@ -1,0 +1,281 @@
+{
+  "$defs": {
+    "CoveragePath": {
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^(?:[A-Za-z0-9][A-Za-z0-9._-]*/)*[A-Za-z0-9][A-Za-z0-9._-]*\\.sol$",
+      "type": "string"
+    },
+    "CoveragePaths": {
+      "items": {
+        "$ref": "#/$defs/CoveragePath"
+      },
+      "maxItems": 256,
+      "type": "array"
+    },
+    "DevelopmentCorpusCoverageSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "context_only_paths": {
+          "$ref": "#/$defs/CoveragePaths"
+        },
+        "context_paths": {
+          "$ref": "#/$defs/CoveragePaths"
+        },
+        "failed_primary_paths": {
+          "$ref": "#/$defs/CoveragePaths"
+        },
+        "invalidated_primary_paths": {
+          "$ref": "#/$defs/CoveragePaths"
+        },
+        "missing_primary_paths": {
+          "$ref": "#/$defs/CoveragePaths"
+        },
+        "not_successfully_observed_paths": {
+          "$ref": "#/$defs/CoveragePaths"
+        },
+        "original_first_attempt_complete": {
+          "title": "Original First Attempt Complete",
+          "type": "boolean"
+        },
+        "original_successful_primary_paths": {
+          "$ref": "#/$defs/CoveragePaths"
+        },
+        "selected_primary_paths": {
+          "$ref": "#/$defs/CoveragePaths"
+        },
+        "source_drift_paths": {
+          "items": {
+            "$ref": "#/$defs/CoveragePath"
+          },
+          "maxItems": 65536,
+          "title": "Source Drift Paths",
+          "type": "array"
+        },
+        "status": {
+          "enum": [
+            "ALL_PRIMARY_RESPONSES_OBSERVED",
+            "INCOMPLETE"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "successful_primary_paths": {
+          "$ref": "#/$defs/CoveragePaths"
+        },
+        "unobserved_primary_paths": {
+          "$ref": "#/$defs/CoveragePaths"
+        },
+        "unselected_paths": {
+          "$ref": "#/$defs/CoveragePaths"
+        }
+      },
+      "required": [
+        "status",
+        "original_first_attempt_complete",
+        "selected_primary_paths",
+        "original_successful_primary_paths",
+        "successful_primary_paths",
+        "context_paths",
+        "context_only_paths",
+        "failed_primary_paths",
+        "missing_primary_paths",
+        "unobserved_primary_paths",
+        "unselected_paths",
+        "not_successfully_observed_paths",
+        "invalidated_primary_paths",
+        "source_drift_paths"
+      ],
+      "title": "DevelopmentCorpusCoverageSummary",
+      "type": "object"
+    },
+    "DevelopmentTreePrimaryProgress": {
+      "additionalProperties": false,
+      "properties": {
+        "completed_attempt_count": {
+          "maximum": 3,
+          "minimum": 0,
+          "title": "Completed Attempt Count",
+          "type": "integer"
+        },
+        "elapsed_seconds": {
+          "minimum": 0,
+          "title": "Elapsed Seconds",
+          "type": "number"
+        },
+        "filename": {
+          "$ref": "#/$defs/CoveragePath"
+        },
+        "status": {
+          "enum": [
+            "PENDING",
+            "CANDIDATE_INCOMPLETE",
+            "NO_CANDIDATES",
+            "REVIEW_INCOMPLETE",
+            "OBSERVED_ALL_STAGES"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "filename",
+        "status",
+        "completed_attempt_count",
+        "elapsed_seconds"
+      ],
+      "title": "DevelopmentTreePrimaryProgress",
+      "type": "object"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/development_tree_execution_progress.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Derived from the original durable children; response coverage is not security assurance.",
+  "properties": {
+    "active_reserved_usd": {
+      "anyOf": [
+        {
+          "minimum": 0.0,
+          "type": "number"
+        },
+        {
+          "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+          "type": "string"
+        }
+      ],
+      "title": "Active Reserved Usd"
+    },
+    "artifact_kind": {
+      "const": "development_tree_execution_progress",
+      "default": "development_tree_execution_progress",
+      "title": "Artifact Kind",
+      "type": "string"
+    },
+    "audit_complete": {
+      "const": false,
+      "default": false,
+      "title": "Audit Complete",
+      "type": "boolean"
+    },
+    "completed_attempt_count": {
+      "maximum": 768,
+      "minimum": 0,
+      "title": "Completed Attempt Count",
+      "type": "integer"
+    },
+    "coverage": {
+      "$ref": "#/$defs/DevelopmentCorpusCoverageSummary"
+    },
+    "elapsed_active_seconds": {
+      "minimum": 0,
+      "title": "Elapsed Active Seconds",
+      "type": "number"
+    },
+    "elapsed_scope": {
+      "const": "SUM_OF_RETAINED_ACTIVE_STAGE_INTERVALS_EXCLUDES_OFFLINE_PREPARATION",
+      "default": "SUM_OF_RETAINED_ACTIVE_STAGE_INTERVALS_EXCLUDES_OFFLINE_PREPARATION",
+      "title": "Elapsed Scope",
+      "type": "string"
+    },
+    "findings_validated": {
+      "const": false,
+      "default": false,
+      "title": "Findings Validated",
+      "type": "boolean"
+    },
+    "primary_statuses": {
+      "items": {
+        "$ref": "#/$defs/DevelopmentTreePrimaryProgress"
+      },
+      "maxItems": 256,
+      "minItems": 1,
+      "title": "Primary Statuses",
+      "type": "array"
+    },
+    "qualification_eligible": {
+      "const": false,
+      "default": false,
+      "title": "Qualification Eligible",
+      "type": "boolean"
+    },
+    "release_eligible": {
+      "const": false,
+      "default": false,
+      "title": "Release Eligible",
+      "type": "boolean"
+    },
+    "reported_actual_cost_usd": {
+      "anyOf": [
+        {
+          "minimum": 0.0,
+          "type": "number"
+        },
+        {
+          "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+          "type": "string"
+        }
+      ],
+      "title": "Reported Actual Cost Usd"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "OBSERVED_ALL_AVAILABLE_STAGES",
+        "INCOMPLETE"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "total_accounted_cost_usd": {
+      "anyOf": [
+        {
+          "minimum": 0.0,
+          "type": "number"
+        },
+        {
+          "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+          "type": "string"
+        }
+      ],
+      "title": "Total Accounted Cost Usd"
+    },
+    "tree_plan_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Tree Plan Sha256",
+      "type": "string"
+    },
+    "uncertain_accounted_cost_usd": {
+      "anyOf": [
+        {
+          "minimum": 0.0,
+          "type": "number"
+        },
+        {
+          "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+          "type": "string"
+        }
+      ],
+      "title": "Uncertain Accounted Cost Usd"
+    }
+  },
+  "required": [
+    "tree_plan_sha256",
+    "status",
+    "primary_statuses",
+    "coverage",
+    "completed_attempt_count",
+    "total_accounted_cost_usd",
+    "reported_actual_cost_usd",
+    "uncertain_accounted_cost_usd",
+    "active_reserved_usd",
+    "elapsed_active_seconds"
+  ],
+  "title": "DevelopmentTreeExecutionProgress",
+  "type": "object"
+}

@@ -1,0 +1,26 @@
+{
+  "purpose": "Synthetic, local-only schema dispatch/reference equivalence; no deployed target or credentials.",
+  "cases": [
+    {"id": "integer", "schema": {"type": "int", "ge": 0}, "direct": true},
+    {"id": "string", "schema": {"type": "str", "min_length": 1, "max_length": 20}, "direct": true},
+    {"id": "boolean", "schema": {"type": "bool"}, "direct": true},
+    {"id": "float", "schema": {"type": "float", "le": 10}, "direct": true},
+    {"id": "literal", "schema": {"type": "literal", "expected": ["synthetic", "local"]}, "direct": true},
+    {"id": "nullable", "schema": {"type": "nullable", "schema": {"type": "int"}}, "direct": true},
+    {"id": "default", "schema": {"type": "default", "schema": {"type": "int"}, "default": 7}, "direct": true},
+    {"id": "list", "schema": {"type": "list", "items_schema": {"type": "str"}, "max_length": 3}, "direct": true},
+    {"id": "set", "schema": {"type": "set", "items_schema": {"type": "int"}}, "direct": true},
+    {"id": "tuple", "schema": {"type": "tuple", "items_schema": [{"type": "int"}, {"type": "str"}]}, "direct": true},
+    {"id": "union", "schema": {"type": "union", "choices": [{"type": "int"}, {"type": "str"}]}, "direct": true},
+    {"id": "dictionary", "schema": {"type": "dict", "keys_schema": {"type": "str"}, "values_schema": {"type": "int"}}, "direct": true},
+    {"id": "model-field", "schema": {"type": "model-field", "schema": {"type": "int"}}, "direct": true},
+    {"id": "typed-field", "schema": {"type": "typed-dict-field", "schema": {"type": "str"}, "required": true}, "direct": true},
+    {"id": "updates", "schema": {"type": "int", "metadata": {"pydantic_js_updates": {"title": "Synthetic integer", "examples": [1, 2]}}}, "direct": true},
+    {"id": "empty-updates", "schema": {"type": "bool", "metadata": {"pydantic_js_updates": {}}}, "direct": true},
+    {"id": "reference", "schema": {"type": "int", "ref": "synthetic.Counter:1"}, "direct": false},
+    {"id": "definitions", "schema": {"type": "definitions", "schema": {"type": "definition-ref", "schema_ref": "synthetic.Counter:1"}, "definitions": [{"type": "int", "ref": "synthetic.Counter:1"}]}, "direct": true},
+    {"id": "serialization", "schema": {"type": "int", "serialization": {"type": "to-string"}}, "direct": false},
+    {"id": "extra", "schema": {"type": "str", "metadata": {"pydantic_js_extra": {"description": "Synthetic extra"}}}, "direct": false},
+    {"id": "unknown-metadata", "schema": {"type": "bool", "metadata": {"synthetic_unknown": true}}, "direct": false}
+  ]
+}

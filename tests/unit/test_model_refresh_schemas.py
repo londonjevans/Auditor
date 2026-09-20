@@ -102,7 +102,7 @@ def test_pricing_attempt_schema_reserves_v3_without_publishing_a_v3_attempt() ->
     properties = attempt["properties"]
     definitions = attempt["$defs"]
 
-    assert properties["schema_version"]["enum"] == ["1.0", "1.1"]
+    assert properties["schema_version"]["enum"] == ["1.0", "1.1", "1.2"]
     assert {
         "route_predicate_profile_sha256",
         "route_predicate_profile",
@@ -123,6 +123,36 @@ def test_pricing_attempt_schema_reserves_v3_without_publishing_a_v3_attempt() ->
     assert envelope["emitted_request_parameters"]["maxItems"] == 4
     assert envelope["prohibited_request_fields"]["minItems"] == 5
     assert envelope["prohibited_request_fields"]["maxItems"] == 5
+
+
+def test_operator_reservation_attempt_schema_keeps_cost_modes_separate() -> None:
+    attempt = _published("audit_model_refresh_pricing_attempt_evidence.schema.json")
+    (mode,) = attempt["allOf"]
+    assert mode["if"] == {
+        "properties": {"schema_version": {"const": "1.2"}},
+        "required": ["schema_version"],
+    }
+    assert set(mode["then"]["required"]) == {
+        "operator_cost_reservation",
+        "route_predicate_profile",
+        "route_predicate_profile_sha256",
+    }
+    assert mode["then"]["properties"] == {
+        "operator_cost_reservation": {"type": "object"},
+        "route_predicate_profile": {
+            "type": "object",
+            "properties": {"schema_version": {"const": "1.3"}},
+            "required": ["schema_version"],
+        },
+        "route_predicate_profile_sha256": {"type": "string"},
+    }
+    assert mode["then"]["not"] == {
+        "anyOf": [
+            {"required": ["price_cap_algorithm"]},
+            {"required": ["price_component_unit_envelopes"]},
+        ]
+    }
+    assert mode["else"] == {"not": {"required": ["operator_cost_reservation"]}}
 
 
 def _published(filename: str) -> dict[str, Any]:

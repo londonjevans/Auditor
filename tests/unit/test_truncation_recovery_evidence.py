@@ -228,11 +228,12 @@ def _real_creditable(usage: UsageRecord) -> UsageRecord:
     )
 
 
-def _recursive_tree_fixture() -> _RecursiveTreeFixture:
+def _recursive_tree_fixture(*, bridge_retained_count: int = 0) -> _RecursiveTreeFixture:
     """Build the exact five-request live tree shared by recursive consumer tests."""
 
-    requests = _requests()
-    parent_context = _context(requests)
+    source_count = 4 + 2 * bridge_retained_count
+    requests = _requests(source_count)
+    parent_context = _context(requests, source_count=source_count)
     root_projection, root_response_sha256 = _truncated_projection(
         requests,
         retained_count=1,
@@ -315,7 +316,9 @@ def _recursive_tree_fixture() -> _RecursiveTreeFixture:
         child_completion_tokens=100,
     )
     root_plan = plan_truncation_recovery(parent=root_parent, resources=root_resources)
-    bridge_plan = next(child for child in root_plan.children if len(child.surface_ids) == 2)
+    bridge_plan = next(
+        child for child in root_plan.children if len(child.surface_ids) == 2 + bridge_retained_count
+    )
     direct_plan = next(child for child in root_plan.children if child != bridge_plan)
     request_limit_binding = SchedulerTruncationRecoveryRequestLimitBinding.build(
         campaign_id=root_parent.campaign_id,
@@ -467,7 +470,7 @@ def _recursive_tree_fixture() -> _RecursiveTreeFixture:
             child_requests = tuple(requests_by_id[item] for item in child.surface_ids)
             bridge_projection, bridge_response_sha256 = _truncated_projection(
                 child_requests,
-                retained_count=0,
+                retained_count=bridge_retained_count,
                 findings=(_candidate("recursive-bridge-candidate"),),
             )
             raw_bridge_usage = _usage(
@@ -550,12 +553,14 @@ def _recursive_tree_fixture() -> _RecursiveTreeFixture:
         truncation_projection_sha256=bridge_projection.evidence_sha256,
         requested_surface_manifest_sha256=manifest.requested_surface_manifest_sha256,
         requested_surface_ids=bridge_plan.surface_ids,
-        retained_surface_ids=(),
+        retained_surface_ids=tuple(
+            record.surface_id for record in bridge_projection.surface_reviews
+        ),
         channel_bindings=(
             _channel_binding(
                 TruncationRecoveryChannel.COVERAGE,
                 TruncationRecoveryChannelState.INCOMPLETE,
-                0,
+                bridge_retained_count,
             ),
             _channel_binding(
                 TruncationRecoveryChannel.FINDINGS,

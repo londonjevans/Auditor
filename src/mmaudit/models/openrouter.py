@@ -167,7 +167,19 @@ from mmaudit.models.route_constraints import (
     normalize_exact_route_pricing,
     project_provider_price_cap,
     project_route_emitted_request_parameters,
+    project_route_profile_provider_caps,
     route_constraint_callables_are_pristine,
+)
+from mmaudit.models.route_cost_reservations import (
+    ExactRouteCostReservation,
+    OperatorRouteCostAttemptEvidence,
+    RouteCostReservationComponent,
+    RouteCostReservationError,
+    RouteCostReservationPlanningEnvelope,
+    RouteCostReservationRate,
+    operator_cost_attempts_from_usage,
+    project_route_reserved_rates,
+    route_cost_reservation_pricing_sha256,
 )
 
 if TYPE_CHECKING:
@@ -286,6 +298,7 @@ from mmaudit.orchestration.budgets import (
     _trusted_endpoint_request_maximum_cost_usd,
     _trusted_endpoint_request_maximum_units_for,
     _TrustedRequestLimitScope,
+    operator_reservation_planning_cost,
 )
 from mmaudit.orchestration.context_manifest import (
     ContextPlanningSnapshot,
@@ -1317,6 +1330,8 @@ class _AuditModelRefreshPricingRequestControl:
     routing_max_price: tuple[tuple[str, float], ...]
     cost_bound_pricing: tuple[tuple[str, str], ...]
     control_sha256: str
+    exact_route_constraint: ExactRouteConstraint | None = None
+    selection_plan_sha256: str | None = None
 
 
 def _canonical_audit_model_refresh_binding(
@@ -1619,6 +1634,8 @@ class _RegisteredEndpointPricing:
     structured_output_mode: StructuredOutputMode
     pricing_schedule: ExactRoutePricingSchedule | None = None
     route_predicate_profile: RoutePredicateProfile | None = None
+    exact_route_constraint: ExactRouteConstraint | None = None
+    selection_plan_sha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -2300,6 +2317,38 @@ def _candidate_review_request_material_projection(
     )
 
 
+def _operator_cost_reservation_projection_sha256(
+    reservation: ExactRouteCostReservation,
+    *,
+    request_material_projection_sha256: str,
+) -> str:
+    """Normalize only live token-budget position; retain every cost and route binding."""
+
+    if type(reservation) is not ExactRouteCostReservation:
+        raise OpenRouterCostControlError("operator reservation projection has an invalid type")
+    current = ExactRouteCostReservation.model_validate_json(
+        reservation.model_dump_json(), strict=True
+    )
+    if (
+        current != reservation
+        or _SHA256_PATTERN.fullmatch(request_material_projection_sha256) is None
+    ):
+        raise OpenRouterCostControlError("operator reservation projection is inconsistent")
+    return _canonical_sha256(
+        {
+            "domain": "mmaudit.operator-reservation-request-projection.v1",
+            **current.model_dump(
+                mode="json",
+                exclude={"reservation_sha256", "request_material_sha256", "request_token_plan"},
+            ),
+            "request_material_projection_sha256": request_material_projection_sha256,
+            "request_token_plan_projection_sha256": (
+                _TRUSTED_CANDIDATE_REVIEW_TOKEN_PLAN_PROJECTION_SHA256(current.request_token_plan)
+            ),
+        }
+    )
+
+
 def _endpoint_request_cost_bound_projection_sha256(
     bound: EndpointRequestCostBound,
     *,
@@ -2320,7 +2369,23 @@ def _endpoint_request_cost_bound_projection_sha256(
         maximum_cost_text = maximum_cost_text.rstrip("0").rstrip(".")
     material = _TRUSTED_CANDIDATE_REVIEW_CANONICAL_JSON_DUMPS(
         {
-            "domain": "mmaudit.openrouter.endpoint-request-cost-bound.v1",
+            "domain": (
+                "mmaudit.openrouter.operator-reservation-cost-bound.v1"
+                if bound.operator_reservation is not None
+                else "mmaudit.openrouter.endpoint-request-cost-bound.v1"
+            ),
+            **(
+                {
+                    "operator_reservation_projection_sha256": (
+                        _operator_cost_reservation_projection_sha256(
+                            bound.operator_reservation,
+                            request_material_projection_sha256=request_material_projection_sha256,
+                        )
+                    )
+                }
+                if bound.operator_reservation is not None
+                else {}
+            ),
             "exact_model_id": bound.exact_model_id,
             "provider_endpoint": bound.provider_endpoint,
             "request_material_projection_sha256": request_material_projection_sha256,
@@ -2772,6 +2837,29 @@ class OpenRouterRequestCostComponentPreview(BaseModel):
         return _canonical_cost_decimal_text(value, label="request-cost preview unit price")
 
 
+def _request_cost_preview_schema_extra(schema: dict[str, Any]) -> None:
+    schema["allOf"] = [
+        {
+            "if": {"properties": {"schema_version": {"const": "1.4"}}},
+            "then": {
+                "required": [
+                    "operator_cost_reservation",
+                    "route_predicate_profile",
+                    "route_predicate_profile_sha256",
+                ],
+                "properties": {
+                    "operator_cost_reservation": {"type": "object"},
+                    "route_predicate_profile": {"type": "object"},
+                    "route_predicate_profile_sha256": {"type": "string"},
+                    "price_cap_algorithm": {"type": "null"},
+                    "price_component_unit_envelopes": {"type": "null"},
+                },
+            },
+            "else": {"not": {"required": ["operator_cost_reservation"]}},
+        }
+    ]
+
+
 class OpenRouterStructuredRequestCostPreview(BaseModel):
     """Frozen, non-authorizing exact cost preview for one singleton request route."""
 
@@ -2780,12 +2868,13 @@ class OpenRouterStructuredRequestCostPreview(BaseModel):
         frozen=True,
         strict=True,
         revalidate_instances="always",
+        json_schema_extra=_request_cost_preview_schema_extra,
     )
 
     artifact_kind: Literal["openrouter_structured_request_cost_preview"] = (
         "openrouter_structured_request_cost_preview"
     )
-    schema_version: Literal["1.0", "1.1", "1.2"] = "1.0"
+    schema_version: Literal["1.0", "1.1", "1.2", "1.4"] = "1.0"
     logical_request_id: str = Field(min_length=1, max_length=128)
     role: str = Field(min_length=1, max_length=128)
     exact_model_id: str = Field(min_length=3, max_length=384)
@@ -2813,6 +2902,10 @@ class OpenRouterStructuredRequestCostPreview(BaseModel):
         exclude_if=lambda value: value is None,
     )
     route_predicate_profile: RoutePredicateProfile | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    operator_cost_reservation: ExactRouteCostReservation | None = Field(
         default=None,
         exclude_if=lambda value: value is None,
     )
@@ -2919,6 +3012,11 @@ class OpenRouterStructuredRequestCostPreview(BaseModel):
 
     @model_validator(mode="after")
     def exact_units_cost_and_hash_are_consistent(self) -> Self:
+        if self.schema_version == "1.4":
+            self._require_operator_reservation_consistency()
+            return self
+        if "operator_cost_reservation" in self.model_fields_set:
+            raise ValueError("legacy request-cost preview cannot carry operator reservations")
         component_policy = (
             self.route_predicate_profile_sha256,
             self.route_predicate_profile,
@@ -3041,6 +3139,152 @@ class OpenRouterStructuredRequestCostPreview(BaseModel):
         if self.preview_sha256 != expected_hash:
             raise ValueError("request-cost preview hash does not match its exact evidence")
         return self
+
+    def _require_operator_reservation_consistency(self) -> None:
+        """Validate the distinct cost basis without asserting a provider total ceiling."""
+
+        reservation = self.operator_cost_reservation
+        profile = self.route_predicate_profile
+        if (
+            reservation is None
+            or profile is None
+            or profile.schema_version != "1.3"
+            or profile.operator_reservation_policy != reservation.policy
+            or self.route_predicate_profile_sha256 != profile.profile_sha256
+            or reservation.route_predicate_profile_sha256 != profile.profile_sha256
+            or self.price_cap_algorithm is not None
+            or self.price_component_unit_envelopes is not None
+            or self.structured_output_mode is not StructuredOutputMode.NATIVE_JSON_SCHEMA
+        ):
+            raise ValueError("operator request-cost preview lacks its distinct exact policy")
+        plan = reservation.request_token_plan
+        route = plan.route_intersection.routes[0]
+        reasoning = plan.reasoning_plan
+        if (
+            plan.schema_version != "3.0"
+            or plan.request_id != self.logical_request_id
+            or plan.role != self.role
+            or route.exact_model_id != self.exact_model_id
+            or route.provider_endpoint != self.provider_endpoint
+            or route.endpoint_snapshot_sha256 != self.endpoint_record_snapshot_sha256
+            or reservation.request_material_utf8_bytes
+            != self.request_material_projection_utf8_bytes
+            or plan.prompt_byte_upper_bound_tokens != self.prompt_byte_upper_bound_tokens
+            or plan.requested_completion_tokens != self.requested_completion_tokens
+            or plan.reserved_output_tokens != self.reserved_output_tokens
+            or plan.reserved_reasoning_tokens != self.reserved_reasoning_tokens
+            or plan.token_detail_accounting_method != self.token_detail_accounting_method
+            or plan.wire_max_tokens != self.wire_max_tokens
+            or self.request_token_plan_projection_sha256
+            != _TRUSTED_CANDIDATE_REVIEW_TOKEN_PLAN_PROJECTION_SHA256(plan)
+            or reasoning is None
+            or reasoning.evidence_sha256 != self.reasoning_plan_sha256
+            or reasoning.qualification_binding_sha256 is not None
+            or self.reasoning_qualification_sha256 is not None
+            or (self.context_request_evidence_sha256 is None)
+            != (self.rendered_context_sha256 is None)
+        ):
+            raise ValueError("operator request-cost preview differs from its exact request plan")
+        components = tuple(
+            OpenRouterRequestCostComponentPreview(
+                pricing_field=item.component.value,
+                unit_price_usd_exact=item.reserved_unit_price_usd_exact,
+                maximum_units=item.maximum_units,
+            )
+            for item in reservation.components
+        )
+        if self.cost_components != components or self.maximum_priced_prompt_units != max(
+            self.request_material_projection_utf8_bytes, self.prompt_byte_upper_bound_tokens
+        ):
+            raise ValueError("operator request-cost preview has inconsistent rates or units")
+        bound = EndpointRequestCostBound(
+            exact_model_id=self.exact_model_id,
+            provider_endpoint=self.provider_endpoint,
+            request_material_sha256=reservation.request_material_sha256,
+            pricing_snapshot_sha256=self.endpoint_cost_bound_pricing_sha256,
+            components=tuple(
+                EndpointPriceComponent(
+                    pricing_field=item.pricing_field,
+                    unit_price_usd=Decimal(item.unit_price_usd_exact),
+                    maximum_units=item.maximum_units,
+                )
+                for item in components
+            ),
+            operator_reservation=reservation,
+        )
+        total = _trusted_endpoint_request_maximum_cost_usd(bound)
+        if (
+            _format_cost_decimal(total) != self.maximum_cost_usd_per_attempt_exact
+            or _multiply_cost_decimal(total, self.maximum_attempts)
+            != self.maximum_cost_usd_all_attempts_exact
+            or self.endpoint_cost_bound_projection_sha256
+            != _endpoint_request_cost_bound_projection_sha256(
+                bound,
+                request_material_projection_sha256=self.request_material_projection_sha256,
+            )
+            or self.preview_sha256
+            != _canonical_sha256(self.model_dump(mode="json", exclude={"preview_sha256"}))
+        ):
+            raise ValueError("operator request-cost preview has inconsistent cost or hashes")
+
+
+def require_operator_cost_preview_usage(
+    usage: UsageRecord,
+    preview: OpenRouterStructuredRequestCostPreview,
+) -> tuple[OperatorRouteCostAttemptEvidence, ...]:
+    """Join retained reservations and bills without issuing transport or ledger authority."""
+
+    if (
+        type(usage) is not UsageRecord
+        or type(preview) is not OpenRouterStructuredRequestCostPreview
+    ):
+        raise ValueError("operator preview usage requires exact evidence types")
+    current = OpenRouterStructuredRequestCostPreview.model_validate_json(preview.model_dump_json())
+    attempts = operator_cost_attempts_from_usage(usage)
+    expected = current.operator_cost_reservation
+    if expected is None:
+        if attempts or {
+            "operator_cost_request_material_projection_sha256",
+            "operator_cost_bound_projection_sha256",
+        }.intersection(usage.routing):
+            raise ValueError("legacy preview cannot consume operator-reservation usage")
+        return ()
+    if not _openrouter_client_callables_are_pristine():
+        raise ValueError("operator preview usage boundary changed")
+    usage = UsageRecord.model_validate_json(usage.model_dump_json())
+    actual_projection = usage.routing.get("operator_cost_request_material_projection_sha256")
+    if (
+        current.schema_version != "1.4"
+        or not attempts
+        or type(actual_projection) is not str
+        or actual_projection != current.request_material_projection_sha256
+        or usage.routing.get("operator_cost_bound_projection_sha256")
+        != current.endpoint_cost_bound_projection_sha256
+        or usage.request_id != current.logical_request_id
+        or usage.role != current.role
+        or usage.requested_model != current.exact_model_id
+        or not 1 <= usage.attempts <= current.maximum_attempts
+        or tuple(usage.configured_provider_endpoints) != (current.provider_endpoint,)
+        or usage.actual_provider_endpoint != current.provider_endpoint
+        or usage.routing.get("request_cost_preview_sha256") != current.preview_sha256
+    ):
+        raise ValueError("operator preview usage lacks its exact request projection")
+    expected_projection = _operator_cost_reservation_projection_sha256(
+        expected,
+        request_material_projection_sha256=current.request_material_projection_sha256,
+    )
+    expected_pricing = route_cost_reservation_pricing_sha256(expected)
+    if any(
+        _operator_cost_reservation_projection_sha256(
+            item.reservation,
+            request_material_projection_sha256=actual_projection,
+        )
+        != expected_projection
+        or route_cost_reservation_pricing_sha256(item.reservation) != expected_pricing
+        for item in attempts
+    ):
+        raise ValueError("operator preview usage differs from complete reservation custody")
+    return attempts
 
 
 @dataclass(frozen=True, slots=True, order=True)
@@ -3640,6 +3884,132 @@ def _structured_request_pricing_unit_ceilings(
     }
 
 
+def _operator_route_request_cost_bound(
+    *,
+    endpoint_policy: _RegisteredEndpointPolicy,
+    request_material: str,
+    request_token_plan: RequestTokenPlan,
+) -> EndpointRequestCostBound:
+    """Derive the explicit reservation from independently retained discovery bindings."""
+
+    if not _openrouter_client_callables_are_pristine():
+        raise UnprovenCostBoundError("operator reservation request boundary changed")
+    _require_pristine_endpoint_cost_bound_types()
+    if (
+        type(endpoint_policy) is not _RegisteredEndpointPolicy
+        or len(endpoint_policy.endpoints) != 1
+    ):
+        raise UnprovenCostBoundError("operator reservation requires singleton endpoint custody")
+    endpoint = endpoint_policy.endpoints[0]
+    profile = endpoint.route_predicate_profile
+    constraint = endpoint.exact_route_constraint
+    selection_hash = endpoint.selection_plan_sha256
+    if (
+        profile is None
+        or profile.operator_reservation_policy is None
+        or constraint is None
+        or selection_hash is None
+        or _SHA256_PATTERN.fullmatch(selection_hash) is None
+        or constraint.profile_sha256 != profile.profile_sha256
+        or constraint.provider_endpoint != endpoint.provider_endpoint
+        or request_token_plan.route_intersection.exact_model_ids != (constraint.exact_model_id,)
+        or request_token_plan.route_intersection.provider_endpoints != (endpoint.provider_endpoint,)
+    ):
+        raise UnprovenCostBoundError("operator reservation lacks exact plan/profile/route custody")
+    try:
+        reservation = ExactRouteCostReservation.build(
+            policy=profile.operator_reservation_policy,
+            selection_plan_sha256=selection_hash,
+            route_predicate_profile_sha256=profile.profile_sha256,
+            route_constraint_sha256=constraint.constraint_sha256,
+            endpoint_snapshot_sha256=endpoint.snapshot_sha256,
+            request_material=request_material,
+            request_token_plan=request_token_plan,
+            pricing=dict(endpoint.pricing),
+            pricing_schedule=endpoint.pricing_schedule,
+        )
+        if {
+            item.component.value: item.value for item in reservation.provider_capped_subset
+        } != dict(endpoint_policy.routing_max_price):
+            raise RouteCostReservationError(
+                "operator reservation capped subset differs from routing"
+            )
+        return EndpointRequestCostBound.from_route_cost_reservation(
+            reservation,
+            request_material=request_material,
+            selection_plan_sha256=selection_hash,
+            route_predicate_profile_sha256=profile.profile_sha256,
+            route_constraint_sha256=constraint.constraint_sha256,
+            endpoint_snapshot_sha256=endpoint.snapshot_sha256,
+        )
+    except (RouteCostReservationError, ValueError, TypeError) as exc:
+        raise UnprovenCostBoundError("exact operator request reservation is unavailable") from exc
+
+
+def _operator_route_planning_envelope(
+    *,
+    endpoint_policy: _RegisteredEndpointPolicy,
+    route: EndpointRouteIntersection,
+    maximum_request_bytes: int,
+    maximum_prompt_tokens: int,
+    maximum_completion_tokens: int,
+) -> RouteCostReservationPlanningEnvelope:
+    """Keep conservative task planning separate from exact request reservations."""
+
+    if not _openrouter_client_callables_are_pristine():
+        raise UnprovenCostBoundError("operator reservation planning boundary changed")
+    if (
+        type(endpoint_policy) is not _RegisteredEndpointPolicy
+        or len(endpoint_policy.endpoints) != 1
+        or type(route) is not EndpointRouteIntersection
+        or len(route.routes) != 1
+    ):
+        raise UnprovenCostBoundError("operator planning requires singleton endpoint custody")
+    endpoint = endpoint_policy.endpoints[0]
+    profile = endpoint.route_predicate_profile
+    constraint = endpoint.exact_route_constraint
+    selection_hash = endpoint.selection_plan_sha256
+    if (
+        profile is None
+        or profile.operator_reservation_policy is None
+        or constraint is None
+        or selection_hash is None
+        or constraint.profile_sha256 != profile.profile_sha256
+        or constraint.provider_endpoint != endpoint.provider_endpoint
+        or route.exact_model_ids != (constraint.exact_model_id,)
+        or route.provider_endpoints != (endpoint.provider_endpoint,)
+        or route.routes[0].endpoint_snapshot_sha256 != endpoint.snapshot_sha256
+    ):
+        raise UnprovenCostBoundError("operator planning lacks exact plan/profile/route custody")
+    policy = profile.operator_reservation_policy
+    byte_ceiling = min(
+        maximum_request_bytes,
+        policy.maximum_request_bytes,
+        route.max_prompt_tokens,
+        route.context_tokens - maximum_completion_tokens,
+    )
+    try:
+        envelope = RouteCostReservationPlanningEnvelope.build(
+            policy=policy,
+            selection_plan_sha256=selection_hash,
+            route_predicate_profile_sha256=profile.profile_sha256,
+            route_constraint_sha256=constraint.constraint_sha256,
+            route=route.routes[0],
+            maximum_request_bytes=byte_ceiling,
+            maximum_prompt_tokens=max(maximum_prompt_tokens, byte_ceiling),
+            maximum_completion_tokens=maximum_completion_tokens,
+            pricing=dict(endpoint.pricing),
+            pricing_schedule=endpoint.pricing_schedule,
+        )
+        if {item.component.value: item.value for item in envelope.provider_capped_subset} != dict(
+            endpoint_policy.routing_max_price
+        ):
+            raise RouteCostReservationError("operator planning capped subset differs from routing")
+        return envelope
+    except (ValueError, TypeError) as exc:
+        raise UnprovenCostBoundError("exact operator planning reservation is unavailable") from exc
+
+
 def _provider_free_registered_endpoint_policy(
     *,
     evidence: OpenRouterModelDiscoveryEvidence,
@@ -3718,6 +4088,12 @@ def _provider_free_registered_endpoint_policy(
         structured_output_mode=endpoint.structured_output_mode,
         pricing_schedule=pricing_schedule,
         route_predicate_profile=endpoint_snapshot.route_predicate_profile,
+        exact_route_constraint=endpoint_snapshot.exact_route_constraint,
+        selection_plan_sha256=(
+            endpoint_snapshot.normalized_route_facts.expected_selection_plan_sha256
+            if endpoint_snapshot.normalized_route_facts is not None
+            else None
+        ),
     )
     selected = _registered_endpoints_for_output_mode(
         (registered,),
@@ -3809,7 +4185,9 @@ def _build_structured_request_cost_preview(
     values: dict[str, Any] = {
         "artifact_kind": "openrouter_structured_request_cost_preview",
         "schema_version": (
-            "1.2"
+            "1.4"
+            if endpoint_cost_bound.operator_reservation is not None
+            else "1.2"
             if component_unit_profile is not None
             else ("1.1" if request_token_plan.schema_version == "3.0" else "1.0")
         ),
@@ -3887,7 +4265,19 @@ def _build_structured_request_cost_preview(
         "grants_review_credit": False,
         "grants_completion_credit": False,
     }
-    if component_unit_profile is not None:
+    if endpoint_cost_bound.operator_reservation is not None:
+        if route_profile is None:
+            raise OpenRouterRequestCostPreviewError("operator reservation lacks its route profile")
+        values.update(
+            {
+                "route_predicate_profile_sha256": route_profile.profile_sha256,
+                "route_predicate_profile": route_profile.model_dump(mode="python"),
+                "operator_cost_reservation": endpoint_cost_bound.operator_reservation.model_dump(
+                    mode="python"
+                ),
+            }
+        )
+    elif component_unit_profile is not None:
         values.update(
             {
                 "route_predicate_profile_sha256": component_unit_profile.profile_sha256,
@@ -4207,19 +4597,29 @@ def preview_openrouter_structured_request_cost(
         request_token_plan=request_token_plan,
         endpoint_policy=endpoint_policy,
     )
-    bounded_pricing = dict(
-        _TRUSTED_PROVIDER_CAPPED_COST_BOUND_PRICING(
-            endpoint,
-            dict(endpoint_policy.routing_max_price),
+    if (
+        endpoint.route_predicate_profile is not None
+        and endpoint.route_predicate_profile.operator_reservation_policy is not None
+    ):
+        endpoint_cost_bound = _operator_route_request_cost_bound(
+            endpoint_policy=endpoint_policy,
+            request_material=request_material,
+            request_token_plan=request_token_plan,
         )
-    )
-    endpoint_cost_bound = _trusted_endpoint_request_cost_bound_from_pricing(
-        exact_model_id=sealed_evidence.exact_model_id,
-        provider_endpoint=endpoint.provider_endpoint,
-        request_material=request_material,
-        pricing=bounded_pricing,
-        maximum_units={field: ceilings[field] for field in bounded_pricing},
-    )
+    else:
+        bounded_pricing = dict(
+            _TRUSTED_PROVIDER_CAPPED_COST_BOUND_PRICING(
+                endpoint,
+                dict(endpoint_policy.routing_max_price),
+            )
+        )
+        endpoint_cost_bound = _trusted_endpoint_request_cost_bound_from_pricing(
+            exact_model_id=sealed_evidence.exact_model_id,
+            provider_endpoint=endpoint.provider_endpoint,
+            request_material=request_material,
+            pricing=bounded_pricing,
+            maximum_units={field: ceilings[field] for field in bounded_pricing},
+        )
     if endpoint_cost_bound.request_material_sha256 != request_body_sha256:
         raise OpenRouterRequestCostPreviewError(
             "provider-free request-cost preview request material changed during construction"
@@ -4298,6 +4698,13 @@ def _require_matching_structured_request_cost_preview(
         context_request_evidence.rendered_sha256 if context_request_evidence is not None else None
     )
     actual_fields: dict[str, object] = {
+        "schema_version": (
+            "1.4"
+            if endpoint_cost_bound.operator_reservation is not None
+            else "1.2"
+            if component_unit_profile is not None
+            else ("1.1" if request_token_plan.schema_version == "3.0" else "1.0")
+        ),
         "logical_request_id": request_token_plan.request_id,
         "role": request_token_plan.role,
         "exact_model_id": endpoint_cost_bound.exact_model_id,
@@ -4319,9 +4726,19 @@ def _require_matching_structured_request_cost_preview(
         "endpoint_policy_pricing_sha256": endpoint_policy.policy_pricing_sha256,
         "endpoint_pricing_sha256": endpoint.pricing_sha256,
         "route_predicate_profile_sha256": (
-            component_unit_profile.profile_sha256 if component_unit_profile is not None else None
+            route_profile.profile_sha256
+            if route_profile is not None
+            and (
+                component_unit_profile is not None
+                or endpoint_cost_bound.operator_reservation is not None
+            )
+            else None
         ),
-        "route_predicate_profile": component_unit_profile,
+        "route_predicate_profile": (
+            route_profile
+            if endpoint_cost_bound.operator_reservation is not None
+            else component_unit_profile
+        ),
         "price_cap_algorithm": (
             component_unit_profile.price_cap_algorithm
             if component_unit_profile is not None
@@ -4395,6 +4812,21 @@ def _require_matching_structured_request_cost_preview(
     )
     if expected.cost_components != actual_components:
         mismatched_fields = (*mismatched_fields, "cost_components")
+    expected_operator = expected.operator_cost_reservation
+    actual_operator = endpoint_cost_bound.operator_reservation
+    if (expected_operator is None) != (actual_operator is None) or (
+        expected_operator is not None
+        and actual_operator is not None
+        and _operator_cost_reservation_projection_sha256(
+            expected_operator,
+            request_material_projection_sha256=expected.request_material_projection_sha256,
+        )
+        != _operator_cost_reservation_projection_sha256(
+            actual_operator,
+            request_material_projection_sha256=request_material_projection_sha256,
+        )
+    ):
+        mismatched_fields = (*mismatched_fields, "operator_cost_reservation")
     if mismatched_fields:
         raise OpenRouterRequestCostPreviewError(
             "provider request changed after exact cost preview: "
@@ -13287,6 +13719,12 @@ class OpenRouterClient:
                     structured_output_mode=endpoint.structured_output_mode,
                     pricing_schedule=pricing_schedule,
                     route_predicate_profile=evidence.route_predicate_profile,
+                    exact_route_constraint=evidence.exact_route_constraint,
+                    selection_plan_sha256=(
+                        evidence.normalized_route_facts.expected_selection_plan_sha256
+                        if evidence.normalized_route_facts is not None
+                        else None
+                    ),
                 )
             )
             pricing_hashes[endpoint.provider_endpoint] = endpoint.pricing_sha256
@@ -14095,6 +14533,13 @@ class OpenRouterClient:
                         "max_tokens",
                         "temperature",
                         *output_mode_request_parameters(live_route.structured_output_mode),
+                        *(
+                            ("reasoning",)
+                            if registered_endpoint.route_predicate_profile is not None
+                            and registered_endpoint.route_predicate_profile.operator_reservation_policy
+                            is not None
+                            else ()
+                        ),
                     }
                 )
             ),
@@ -14162,18 +14607,49 @@ class OpenRouterClient:
             )
         routing_max_price = tuple(_routing_max_price((registered_endpoint,)).items())
         route_predicate_profile = registered_endpoint.route_predicate_profile
-        if route_predicate_profile is not None and not _uses_component_unit_envelopes(
-            route_predicate_profile.price_cap_algorithm
+        operator_policy = (
+            route_predicate_profile.operator_reservation_policy
+            if route_predicate_profile is not None
+            else None
+        )
+        if operator_policy is not None:
+            constraint = registered_endpoint.exact_route_constraint
+            if (
+                constraint is None
+                or registered_endpoint.selection_plan_sha256 is None
+                or route_predicate_profile is None
+                or constraint.profile_sha256 != route_predicate_profile.profile_sha256
+                or constraint.exact_model_id != route.exact_model_id
+                or constraint.provider_endpoint != route.approved_provider_endpoint
+            ):
+                raise OpenRouterModelRefreshPricingError(
+                    "operator refreshed pricing lacks exact plan/profile/route custody"
+                )
+        if (
+            route_predicate_profile is not None
+            and operator_policy is None
+            and not _uses_component_unit_envelopes(route_predicate_profile.price_cap_algorithm)
         ):
             route_predicate_profile = None
         try:
-            cost_bound_pricing = _TRUSTED_PROVIDER_CAPPED_COST_BOUND_PRICING(
-                registered_endpoint,
-                dict(routing_max_price),
+            cost_bound_pricing = (
+                tuple(
+                    (rate.component.value, rate.reserved_unit_price_usd_exact)
+                    for rate in project_route_reserved_rates(
+                        policy=operator_policy,
+                        pricing=normalize_exact_route_pricing(dict(registered_endpoint.pricing)),
+                        schedule=registered_endpoint.pricing_schedule,
+                    )
+                )
+                if operator_policy is not None
+                else _TRUSTED_PROVIDER_CAPPED_COST_BOUND_PRICING(
+                    registered_endpoint,
+                    dict(routing_max_price),
+                )
             )
-        except OpenRouterCostControlError as exc:
+        except (OpenRouterCostControlError, RouteCostReservationError) as exc:
             raise OpenRouterModelRefreshPricingError(
-                "current endpoint price lacks an exact transmitted provider cap"
+                "current endpoint price lacks its selected exact cost enforcement"
             ) from exc
         values: dict[str, Any] = {
             "exact_model_id": route.exact_model_id,
@@ -14196,6 +14672,18 @@ class OpenRouterClient:
         if route_predicate_profile is not None:
             hashed_values["route_predicate_profile"] = route_predicate_profile.model_dump(
                 mode="json"
+            )
+        if operator_policy is not None:
+            constraint = registered_endpoint.exact_route_constraint
+            if constraint is None:
+                raise OpenRouterModelRefreshPricingError(
+                    "operator pricing lost its exact constraint"
+                )
+            values["exact_route_constraint"] = constraint
+            values["selection_plan_sha256"] = registered_endpoint.selection_plan_sha256
+            hashed_values.update(
+                exact_route_constraint=constraint.model_dump(mode="json"),
+                selection_plan_sha256=registered_endpoint.selection_plan_sha256,
             )
         return _AuditModelRefreshPricingRequestControl(
             **values,
@@ -15221,6 +15709,10 @@ class OpenRouterClient:
                         _TRUSTED_BUDGET_COMMIT_FOR_TRANSPORT,
                     ),
                     (
+                        BudgetManager.commit_active_reservation_for_transport.__code__,
+                        _TRUSTED_BUDGET_COMMIT_CODE,
+                    ),
+                    (
                         BudgetManager._current_atomic_ledger,
                         _TRUSTED_BUDGET_CURRENT_ATOMIC_LEDGER,
                     ),
@@ -15240,6 +15732,7 @@ class OpenRouterClient:
                 name in vars(current_ledger)
                 for name in (
                     "reserve",
+                    "commit_for_transport",
                     "reconcile",
                     "release",
                     "active_reservation",
@@ -15251,6 +15744,12 @@ class OpenRouterClient:
                 )
             )
             or AtomicCostLedger.reserve is not _TRUSTED_ATOMIC_LEDGER_RESERVE
+            or (
+                AtomicCostLedger.commit_for_transport
+                is not _TRUSTED_ATOMIC_LEDGER_COMMIT_FOR_TRANSPORT
+            )
+            or AtomicCostLedger.commit_for_transport.__code__
+            is not _TRUSTED_ATOMIC_LEDGER_COMMIT_CODE
             or AtomicCostLedger.reconcile is not _TRUSTED_ATOMIC_LEDGER_RECONCILE
             or AtomicCostLedger.release is not _TRUSTED_ATOMIC_LEDGER_RELEASE
             or (
@@ -15488,6 +15987,14 @@ class OpenRouterClient:
             if refresh_pricing_control.route_predicate_profile is not None:
                 refresh_pricing_control_values["route_predicate_profile"] = (
                     refresh_pricing_control.route_predicate_profile.model_dump(mode="json")
+                )
+            if refresh_pricing_control.exact_route_constraint is not None:
+                refresh_pricing_control_values["exact_route_constraint"] = (
+                    refresh_pricing_control.exact_route_constraint.model_dump(mode="json")
+                )
+            if refresh_pricing_control.selection_plan_sha256 is not None:
+                refresh_pricing_control_values["selection_plan_sha256"] = (
+                    refresh_pricing_control.selection_plan_sha256
                 )
             if (
                 refresh_pricing_control.exact_model_id != model
@@ -16306,52 +16813,69 @@ class OpenRouterClient:
             raise OpenRouterCostControlError(
                 "portfolio resource preview endpoint differs from pricing custody"
             )
-        bounded_pricing = dict(
-            _TRUSTED_PROVIDER_CAPPED_COST_BOUND_PRICING(
-                registered_endpoint,
-                dict(registered_policy.routing_max_price),
+        operator_envelope = None
+        profile = registered_endpoint.route_predicate_profile
+        if profile is not None and profile.operator_reservation_policy is not None:
+            operator_envelope = _operator_route_planning_envelope(
+                endpoint_policy=registered_policy,
+                route=route,
+                maximum_request_bytes=self.execution.max_request_bytes,
+                maximum_prompt_tokens=maximum_prompt_tokens,
+                maximum_completion_tokens=requested_completion_tokens,
             )
-        )
-        prompt_pricing_units = max(
-            self.execution.max_request_bytes,
-            maximum_prompt_tokens,
-        )
-        maximum_units = {
-            "completion": requested_completion_tokens,
-            "image": 0,
-            "input_cache_read": prompt_pricing_units,
-            "input_cache_write": prompt_pricing_units,
-            "internal_reasoning": reserved_reasoning_tokens,
-            "prompt": prompt_pricing_units,
-            "request": 1,
-            "web_search": 0,
-        }
-        cost_bound = _trusted_endpoint_request_cost_bound_from_pricing(
-            exact_model_id=model,
-            provider_endpoint=provider_endpoint,
-            request_material="mmaudit-preorientation-portfolio-envelope",
-            pricing=bounded_pricing,
-            maximum_units={field: maximum_units[field] for field in bounded_pricing},
-        )
-        maximum_cost = _format_cost_decimal(_trusted_endpoint_request_maximum_cost_usd(cost_bound))
-        envelope_recipe_sha256 = _canonical_sha256(
-            {
-                "domain": "mmaudit.model-portfolio-resource-envelope.v1",
-                "task_kind": task_kind,
-                "scheduler_task_plan_sha256": sealed_task.task_plan_sha256,
-                "campaign_manifest_sha256": sealed_manifest.manifest_sha256,
-                "route_intersection_sha256": route.intersection_sha256,
-                "endpoint_policy_snapshot_sha256": registered_policy.snapshot_sha256,
-                "endpoint_policy_pricing_sha256": registered_policy.policy_pricing_sha256,
-                "endpoint_pricing_snapshot_sha256": cost_bound.pricing_snapshot_sha256,
-                "maximum_prompt_tokens_per_attempt": maximum_prompt_tokens,
-                "maximum_visible_output_tokens_per_attempt": required_output_tokens,
-                "maximum_reasoning_tokens_per_attempt": reserved_reasoning_tokens,
-                "maximum_completion_tokens_per_attempt": requested_completion_tokens,
-                "maximum_priced_prompt_units": prompt_pricing_units,
-                "maximum_attempts": maximum_attempts,
+            maximum_cost_value, pricing_snapshot_sha256 = operator_reservation_planning_cost(
+                operator_envelope
+            )
+            # Portfolio prompt slots cover priced UTF-8 units as well as token plans.
+            # This does not change the actual request's usable-context restriction.
+            maximum_prompt_tokens = prompt_pricing_units = operator_envelope.maximum_prompt_tokens
+        else:
+            bounded_pricing = dict(
+                _TRUSTED_PROVIDER_CAPPED_COST_BOUND_PRICING(
+                    registered_endpoint,
+                    dict(registered_policy.routing_max_price),
+                )
+            )
+            prompt_pricing_units = max(self.execution.max_request_bytes, maximum_prompt_tokens)
+            maximum_units = {
+                "completion": requested_completion_tokens,
+                "image": 0,
+                "input_cache_read": prompt_pricing_units,
+                "input_cache_write": prompt_pricing_units,
+                "internal_reasoning": reserved_reasoning_tokens,
+                "prompt": prompt_pricing_units,
+                "request": 1,
+                "web_search": 0,
             }
-        )
+            cost_bound = _trusted_endpoint_request_cost_bound_from_pricing(
+                exact_model_id=model,
+                provider_endpoint=provider_endpoint,
+                request_material="mmaudit-preorientation-portfolio-envelope",
+                pricing=bounded_pricing,
+                maximum_units={field: maximum_units[field] for field in bounded_pricing},
+            )
+            maximum_cost_value = _trusted_endpoint_request_maximum_cost_usd(cost_bound)
+            pricing_snapshot_sha256 = cost_bound.pricing_snapshot_sha256
+        maximum_cost = _format_cost_decimal(maximum_cost_value)
+        recipe: dict[str, object] = {
+            "domain": "mmaudit.model-portfolio-resource-envelope.v1",
+            "task_kind": task_kind,
+            "scheduler_task_plan_sha256": sealed_task.task_plan_sha256,
+            "campaign_manifest_sha256": sealed_manifest.manifest_sha256,
+            "route_intersection_sha256": route.intersection_sha256,
+            "endpoint_policy_snapshot_sha256": registered_policy.snapshot_sha256,
+            "endpoint_policy_pricing_sha256": registered_policy.policy_pricing_sha256,
+            "endpoint_pricing_snapshot_sha256": pricing_snapshot_sha256,
+            "maximum_prompt_tokens_per_attempt": maximum_prompt_tokens,
+            "maximum_visible_output_tokens_per_attempt": required_output_tokens,
+            "maximum_reasoning_tokens_per_attempt": reserved_reasoning_tokens,
+            "maximum_completion_tokens_per_attempt": requested_completion_tokens,
+            "maximum_priced_prompt_units": prompt_pricing_units,
+            "maximum_attempts": maximum_attempts,
+        }
+        if operator_envelope is not None:
+            recipe["operator_cost_planning_envelope"] = operator_envelope.model_dump(mode="json")
+        envelope_recipe_sha256 = _canonical_sha256(recipe)
         attempt_request_ids = (
             sealed_task.logical_request_id,
             *(
@@ -16371,7 +16895,7 @@ class OpenRouterClient:
             endpoint_policy_snapshot_sha256=registered_policy.snapshot_sha256,
             endpoint_policy_pricing_sha256=registered_policy.policy_pricing_sha256,
             provider_endpoint=provider_endpoint,
-            endpoint_pricing_snapshot_sha256=cost_bound.pricing_snapshot_sha256,
+            endpoint_pricing_snapshot_sha256=pricing_snapshot_sha256,
             maximum_attempts=maximum_attempts,
             attempt_request_ids=attempt_request_ids,
             maximum_prompt_tokens_per_attempt=maximum_prompt_tokens,
@@ -17231,7 +17755,8 @@ class OpenRouterClient:
                             is not _authrunner_cleanup_call_roots
                             or _authrunner_cleanup_call_roots is None
                             or expected_request_cost_preview is None
-                            or expected_request_cost_preview.schema_version not in {"1.1", "1.2"}
+                            or expected_request_cost_preview.schema_version
+                            not in {"1.1", "1.2", "1.4"}
                             or expected_request_cost_preview.token_detail_accounting_method
                             != INDEPENDENT_REASONING_COMPONENT_ENVELOPE_METHOD
                         ):
@@ -18774,6 +19299,15 @@ class OpenRouterClient:
                 accounted_cost_usd = float(accounted_cost_usd_exact)
                 raise
 
+            if (
+                actual_cost is None
+                and reservation.endpoint_cost_bound is not None
+                and reservation.endpoint_cost_bound.operator_reservation is not None
+            ):
+                raise OpenRouterCostControlError(
+                    "operator reservation retained an unknown bill; further work is blocked"
+                )
+
         async def release_active() -> None:
             nonlocal active_reservation
             if active_reservation is None:
@@ -19577,6 +20111,19 @@ class OpenRouterClient:
                         ),
                     }
                 )
+                if (
+                    endpoint_cost_bound is not None
+                    and endpoint_cost_bound.operator_reservation is not None
+                ):
+                    routing.update(
+                        {
+                            "operator_cost_request_material_projection_sha256": request_material_projection_sha256,
+                            "operator_cost_bound_projection_sha256": _TRUSTED_ENDPOINT_REQUEST_COST_BOUND_PROJECTION_SHA256(
+                                endpoint_cost_bound,
+                                request_material_projection_sha256=request_material_projection_sha256,
+                            ),
+                        }
+                    )
             reasoning_execution_evidence = (
                 ReasoningExecutionEvidence.build(
                     request_plan=request_token_plan.reasoning_plan,
@@ -19663,8 +20210,13 @@ class OpenRouterClient:
                 },
             )
             return StructuredCompletion(value=parsed, usage_record=usage_record)
-        except Exception as exc:
-            terminal_error = exc
+        except (Exception, asyncio.CancelledError) as exc:
+            cancelled = isinstance(exc, asyncio.CancelledError)
+            terminal_error: Exception = (
+                OpenRouterCostControlError("request cancelled with retained cost liability")
+                if isinstance(exc, asyncio.CancelledError)
+                else exc
+            )
             if active_reservation is not None:
                 try:
                     if active_network_attempted or active_reservation_committed:
@@ -19967,6 +20519,8 @@ class OpenRouterClient:
                     "status": type(terminal_error).__name__,
                 },
             )
+            if cancelled:
+                raise exc
             if terminal_error is exc:
                 raise
             raise terminal_error from exc
@@ -20062,6 +20616,66 @@ class OpenRouterClient:
         request_token_plan: RequestTokenPlan,
         refresh_pricing_control: _AuditModelRefreshPricingRequestControl | None = None,
     ) -> EndpointRequestCostBound | None:
+        registered_cost_policy = self._endpoint_pricing.get(model)
+        if registered_cost_policy is not None and any(
+            item.route_predicate_profile is not None
+            and item.route_predicate_profile.operator_reservation_policy is not None
+            for item in registered_cost_policy.endpoints
+        ):
+            if not self.budget.require_endpoint_cost_bound:
+                raise UnprovenCostBoundError("operator reservation requires exact cost enforcement")
+            if refresh_pricing_control is not None:
+                if len(registered_cost_policy.endpoints) != 1:
+                    raise UnprovenCostBoundError("operator refreshed pricing requires one route")
+                endpoint = registered_cost_policy.endpoints[0]
+                if (
+                    type(refresh_pricing_control) is not _AuditModelRefreshPricingRequestControl
+                    or refresh_pricing_control.exact_model_id != model
+                    or refresh_pricing_control.provider_endpoint != endpoint.provider_endpoint
+                    or refresh_pricing_control.current_endpoint_snapshot_sha256
+                    != registered_cost_policy.snapshot_sha256
+                    or refresh_pricing_control.current_pricing != endpoint.pricing
+                    or refresh_pricing_control.current_pricing_sha256 != endpoint.pricing_sha256
+                    or refresh_pricing_control.current_pricing_schedule != endpoint.pricing_schedule
+                    or refresh_pricing_control.route_predicate_profile
+                    != endpoint.route_predicate_profile
+                    or refresh_pricing_control.exact_route_constraint
+                    != endpoint.exact_route_constraint
+                    or refresh_pricing_control.selection_plan_sha256
+                    != endpoint.selection_plan_sha256
+                    or refresh_pricing_control.routing_max_price
+                    != registered_cost_policy.routing_max_price
+                ):
+                    raise UnprovenCostBoundError(
+                        "operator refreshed pricing differs from exact selected route custody"
+                    )
+            bound = _operator_route_request_cost_bound(
+                endpoint_policy=registered_cost_policy,
+                request_material=request_material,
+                request_token_plan=request_token_plan,
+            )
+            if (
+                refresh_pricing_control is not None
+                and tuple(
+                    (component.pricing_field, format(component.unit_price_usd, "f"))
+                    for component in bound.components
+                )
+                != refresh_pricing_control.cost_bound_pricing
+            ):
+                raise UnprovenCostBoundError(
+                    "operator refreshed pricing differs from reserved rates"
+                )
+            return bound
+        if refresh_pricing_control is not None and (
+            refresh_pricing_control.exact_route_constraint is not None
+            or refresh_pricing_control.selection_plan_sha256 is not None
+            or (
+                refresh_pricing_control.route_predicate_profile is not None
+                and refresh_pricing_control.route_predicate_profile.operator_reservation_policy
+                is not None
+            )
+        ):
+            raise UnprovenCostBoundError("legacy request cannot adopt operator refreshed pricing")
         if not self.budget.require_endpoint_cost_bound:
             return None
         registered_policy = self._endpoint_pricing.get(model)
@@ -20253,6 +20867,55 @@ class OpenRouterClient:
         if context_request_evidence is not None:
             evidence["context_request_evidence"] = context_request_evidence.model_dump(mode="json")
             evidence["context_request_evidence_sha256"] = context_request_evidence.evidence_sha256
+        operator_bounds = tuple(
+            item.endpoint_cost_bound.operator_reservation
+            if item.endpoint_cost_bound is not None
+            else None
+            for item in reservations
+        )
+        if any(item is not None for item in operator_bounds):
+            _require_trusted_budget_accounting_state(self.budget)
+            ledger = _TRUSTED_BUDGET_CURRENT_ATOMIC_LEDGER(self.budget)
+            if ledger is None or any(item is None for item in operator_bounds):
+                raise OpenRouterCostControlError(
+                    "operator cost usage lacks complete ledger custody"
+                )
+            snapshot = _TRUSTED_ATOMIC_LEDGER_SNAPSHOT(ledger)
+            entries = {item.request_id: item for item in snapshot.entries}
+            cost_attempts = []
+            for index, (reserved, contract) in enumerate(
+                zip(reservations, operator_bounds, strict=True), start=1
+            ):
+                entry = entries.get(reserved.identifier)
+                if (
+                    contract is None
+                    or entry is None
+                    or reserved.persistent is None
+                    or self.budget._issued.get(reserved.identifier) != reserved
+                    or entry.reservation_id != reserved.persistent.reservation_id
+                    or entry.reserved_usd != reserved.persistent.reserved_usd
+                    or snapshot.cap_usd != Decimal(contract.policy.ledger_ceiling_usd_exact)
+                    or contract.request_material_sha256 != request_body_sha256
+                ):
+                    raise OpenRouterCostControlError(
+                        "operator cost usage differs from its ledger entry"
+                    )
+                cost_attempts.append(
+                    OperatorRouteCostAttemptEvidence.from_entry(
+                        reservation=contract, attempt_index=index, entry=entry
+                    )
+                )
+            evidence.update(
+                {
+                    "cost_enforcement_basis": "MMAUDIT_OPERATOR_RESERVE_THEN_RECONCILE_V1",
+                    "operator_cost_attempts": [
+                        item.model_dump(mode="json") for item in cost_attempts
+                    ],
+                    "operator_cost_attempt_sha256s": [
+                        item.evidence_sha256 for item in cost_attempts
+                    ],
+                }
+            )
         pricing_maps_present = bool(
             refresh_pricing_attempt_routes
             or refresh_pricing_reservation_checks
@@ -21734,20 +22397,12 @@ def _identity_snapshot_from_discovery(
             )
         try:
             exact_pricing = normalize_exact_route_pricing(endpoint.pricing)
-            project_provider_price_cap(
-                exact_pricing,
-                schedule=pricing_projection,
-                algorithm=(
-                    route_profile.price_cap_algorithm
-                    if route_profile is not None
-                    else ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_CEILING_V1
-                ),
-                price_component_unit_envelopes=(
-                    route_profile.price_component_unit_envelopes or ()
-                    if route_profile is not None
-                    else ()
-                ),
-            )
+            if route_profile is not None:
+                project_route_profile_provider_caps(
+                    route_profile, exact_pricing, schedule=pricing_projection
+                )
+            else:
+                project_provider_price_cap(exact_pricing, schedule=pricing_projection)
         except (RouteConstraintError, TypeError, ValueError) as exc:
             raise OpenRouterProviderPolicyError(
                 "conditional endpoint pricing lacks a valid shared maximum-rate projection"
@@ -22489,6 +23144,7 @@ _TRUSTED_BUDGET_RECONCILE = BudgetManager.reconcile
 _TRUSTED_BUDGET_RECONCILED_COST_USD_EXACT = BudgetManager.reconciled_cost_usd_exact
 _TRUSTED_BUDGET_RELEASE = BudgetManager.release
 _TRUSTED_BUDGET_COMMIT_FOR_TRANSPORT = BudgetManager.commit_active_reservation_for_transport
+_TRUSTED_BUDGET_COMMIT_CODE = BudgetManager.commit_active_reservation_for_transport.__code__
 _TRUSTED_BUDGET_CURRENT_ATOMIC_LEDGER = BudgetManager._current_atomic_ledger
 _TRUSTED_BUDGETS_MODULE = budgets_module
 _TRUSTED_ACCEPTED_QUOTE_REQUEST_GUARD = budgets_module._require_accepted_quote_request
@@ -22514,6 +23170,8 @@ _TRUSTED_TERMINAL_MODEL_RETRY_ATTEMPT_OUTCOME = _terminal_model_retry_attempt_ou
 _TRUSTED_MODEL_RETRY_ROUTING_EVIDENCE = _model_retry_routing_evidence
 _TRUSTED_ATOMIC_LEDGER_RESERVE = AtomicCostLedger.reserve
 _TRUSTED_ATOMIC_LEDGER_RECONCILE = AtomicCostLedger.reconcile
+_TRUSTED_ATOMIC_LEDGER_COMMIT_FOR_TRANSPORT = AtomicCostLedger.commit_for_transport
+_TRUSTED_ATOMIC_LEDGER_COMMIT_CODE = AtomicCostLedger.commit_for_transport.__code__
 _TRUSTED_ATOMIC_LEDGER_RELEASE = AtomicCostLedger.release
 _TRUSTED_ATOMIC_LEDGER_ACTIVE_RESERVATION = AtomicCostLedger.active_reservation
 _TRUSTED_ATOMIC_LEDGER_SNAPSHOT = AtomicCostLedger.snapshot
@@ -22808,6 +23466,18 @@ _provider_authority_graph_guard_attributes = _provider_authority_function_graph_
 _provider_authority_graph_guard_attribute_items = tuple(
     sorted(_provider_authority_graph_guard_attributes.items())
 )
+_OPERATOR_COST_TYPE_STATES = tuple(
+    (kind, kind.__pydantic_validator__, kind.__pydantic_serializer__, kind.__pydantic_core_schema__)
+    for kind in (
+        ExactRouteCostReservation,
+        OperatorRouteCostAttemptEvidence,
+        RouteCostReservationPlanningEnvelope,
+        RouteCostReservationRate,
+        AuditModelRefreshPricingAttemptEvidence,
+        RouteCostReservationComponent,
+        OpenRouterStructuredRequestCostPreview,
+    )
+)
 
 
 def _openrouter_client_callables_are_pristine(
@@ -22877,6 +23547,30 @@ def _openrouter_client_callables_are_pristine(
     _route_emitted_projection: Callable[..., object] = (project_route_emitted_request_parameters),
     _route_pricing_normalizer: Callable[..., object] = normalize_exact_route_pricing,
     _route_price_cap_projection: Callable[..., object] = project_provider_price_cap,
+    _route_profile_cap_projection: Callable[..., object] = project_route_profile_provider_caps,
+    _operator_reservation_bound: Callable[..., object] = _operator_route_request_cost_bound,
+    _operator_planning_envelope: Callable[..., object] = _operator_route_planning_envelope,
+    _operator_planning_cost: Callable[..., object] = operator_reservation_planning_cost,
+    _operator_reservation_projection: Callable[
+        ..., object
+    ] = _operator_cost_reservation_projection_sha256,
+    _operator_cost_pricing: Callable[..., object] = route_cost_reservation_pricing_sha256,
+    _operator_reserved_rates: Callable[..., object] = project_route_reserved_rates,
+    _operator_cost_usage: Callable[..., object] = operator_cost_attempts_from_usage,
+    _operator_cost_preview_usage: Callable[..., object] = require_operator_cost_preview_usage,
+    _operator_cost_types: tuple[tuple[type[BaseModel], object, object, object], ...] = (
+        _OPERATOR_COST_TYPE_STATES
+    ),
+    _operator_refresh_attempt_methods: tuple[object, ...] = (
+        AuditModelRefreshPricingAttemptEvidence.__dict__["from_bound"],
+        AuditModelRefreshPricingAttemptEvidence.__dict__["explicit_cost_mode_fields"],
+        AuditModelRefreshPricingAttemptEvidence.__dict__[
+            "attempt_is_exact_bounded_and_self_hashed"
+        ],
+        AuditModelRefreshPricingAttemptEvidence.__dict__[
+            "_require_operator_reservation_consistency"
+        ],
+    ),
     _structured_request_assembler: Callable[..., object] = _assemble_structured_request_body,
     _exact_request_body_guard: Callable[..., object] = _require_exact_openrouter_request_body,
     _registered_zero_unit_request_shape_guard: Callable[..., object] = (
@@ -23505,6 +24199,63 @@ def _openrouter_client_callables_are_pristine(
         and normalize_exact_route_pricing is _route_pricing_normalizer
         and (route_constraints_module.project_provider_price_cap is _route_price_cap_projection)
         and project_provider_price_cap is _route_price_cap_projection
+        and route_constraints_module.project_route_profile_provider_caps
+        is _route_profile_cap_projection
+        and project_route_profile_provider_caps is _route_profile_cap_projection
+        and _operator_route_request_cost_bound is _operator_reservation_bound
+        and _operator_route_planning_envelope is _operator_planning_envelope
+        and operator_reservation_planning_cost is _operator_planning_cost
+        and budgets_module.operator_reservation_planning_cost is _operator_planning_cost
+        and _operator_cost_reservation_projection_sha256 is _operator_reservation_projection
+        and require_operator_cost_preview_usage is _operator_cost_preview_usage
+        and route_cost_reservation_pricing_sha256 is _operator_cost_pricing
+        and project_route_reserved_rates is _operator_reserved_rates
+        and getattr(
+            sys.modules.get("mmaudit.models.route_cost_reservations"),
+            "project_route_reserved_rates",
+            None,
+        )
+        is _operator_reserved_rates
+        and operator_cost_attempts_from_usage is _operator_cost_usage
+        and getattr(
+            sys.modules.get("mmaudit.models.route_cost_reservations"),
+            "operator_cost_attempts_from_usage",
+            None,
+        )
+        is _operator_cost_usage
+        and getattr(
+            sys.modules.get("mmaudit.models.route_cost_reservations"),
+            "route_cost_reservation_pricing_sha256",
+            None,
+        )
+        is _operator_cost_pricing
+        and (
+            ExactRouteCostReservation,
+            OperatorRouteCostAttemptEvidence,
+            RouteCostReservationPlanningEnvelope,
+            RouteCostReservationRate,
+            AuditModelRefreshPricingAttemptEvidence,
+            RouteCostReservationComponent,
+            OpenRouterStructuredRequestCostPreview,
+        )
+        == tuple(state[0] for state in _operator_cost_types)
+        and _operator_refresh_attempt_methods
+        == tuple(
+            AuditModelRefreshPricingAttemptEvidence.__dict__.get(name)
+            for name in (
+                "from_bound",
+                "explicit_cost_mode_fields",
+                "attempt_is_exact_bounded_and_self_hashed",
+                "_require_operator_reservation_consistency",
+            )
+        )
+        and all(
+            getattr(sys.modules.get(kind.__module__), kind.__name__, None) is kind
+            and kind.__pydantic_validator__ is validator
+            and kind.__pydantic_serializer__ is serializer
+            and kind.__pydantic_core_schema__ is core_schema
+            for kind, validator, serializer, core_schema in _operator_cost_types
+        )
         and _assemble_structured_request_body is _structured_request_assembler
         and _require_exact_openrouter_request_body is _exact_request_body_guard
         and _TRUSTED_REQUIRE_EXACT_OPENROUTER_REQUEST_BODY is _exact_request_body_guard
@@ -23627,8 +24378,14 @@ def _openrouter_client_callables_are_pristine(
             BudgetManager.commit_active_reservation_for_transport
             is _TRUSTED_BUDGET_COMMIT_FOR_TRANSPORT
         )
+        and (
+            BudgetManager.commit_active_reservation_for_transport.__code__
+            is _TRUSTED_BUDGET_COMMIT_CODE
+        )
         and AtomicCostLedger.reserve is _TRUSTED_ATOMIC_LEDGER_RESERVE
         and AtomicCostLedger.reconcile is _TRUSTED_ATOMIC_LEDGER_RECONCILE
+        and (AtomicCostLedger.commit_for_transport is _TRUSTED_ATOMIC_LEDGER_COMMIT_FOR_TRANSPORT)
+        and AtomicCostLedger.commit_for_transport.__code__ is _TRUSTED_ATOMIC_LEDGER_COMMIT_CODE
         and AtomicCostLedger.release is _TRUSTED_ATOMIC_LEDGER_RELEASE
         and (AtomicCostLedger.active_reservation is _TRUSTED_ATOMIC_LEDGER_ACTIVE_RESERVATION)
         and AtomicCostLedger.snapshot is _TRUSTED_ATOMIC_LEDGER_SNAPSHOT
@@ -24140,6 +24897,7 @@ _TRUSTED_ROUTE_CONSTRAINTS_MODULE = route_constraints_module
 _TRUSTED_PROJECT_ROUTE_EMITTED_REQUEST_PARAMETERS = project_route_emitted_request_parameters
 _TRUSTED_NORMALIZE_EXACT_ROUTE_PRICING = normalize_exact_route_pricing
 _TRUSTED_PROJECT_PROVIDER_PRICE_CAP = project_provider_price_cap
+_TRUSTED_PROJECT_ROUTE_PROFILE_PROVIDER_CAPS = project_route_profile_provider_caps
 _TRUSTED_ASSEMBLE_STRUCTURED_REQUEST_BODY = _assemble_structured_request_body
 
 
@@ -24175,11 +24933,27 @@ def _routing_max_price(
     _normalize_pricing: Callable[..., object] = normalize_exact_route_pricing,
     _project_price_cap: Callable[..., object] = project_provider_price_cap,
 ) -> dict[str, float]:
-    """Return provider-side price ceilings that cannot round below snapshot prices."""
+    """Return provider-capped rates; relaxed profiles cap only their labelled subset."""
 
     if not endpoints:
         raise OpenRouterCostControlError("endpoint pricing policy is empty")
     algorithm, component_unit_envelopes = _registered_price_component_policy(endpoints)
+    route_profile = endpoints[0].route_predicate_profile
+    if route_profile is not None and route_profile.operator_reservation_policy is not None:
+        if len(endpoints) != 1:
+            raise OpenRouterCostControlError("operator reservation policy requires one exact route")
+        if project_route_profile_provider_caps is not _TRUSTED_PROJECT_ROUTE_PROFILE_PROVIDER_CAPS:
+            raise OpenRouterCostControlError("operator reservation capped-subset projector changed")
+        try:
+            exact = _TRUSTED_NORMALIZE_EXACT_ROUTE_PRICING(dict(endpoints[0].pricing))
+            caps = _TRUSTED_PROJECT_ROUTE_PROFILE_PROVIDER_CAPS(
+                route_profile, exact, schedule=endpoints[0].pricing_schedule
+            )
+        except (RouteConstraintError, TypeError, ValueError) as exc:
+            raise OpenRouterCostControlError(
+                "operator reservation capped subset is invalid"
+            ) from exc
+        return {item.component.value: item.value for item in caps}
     prompt_dominated_fields = _prompt_dominated_pricing_fields(algorithm)
     unenforceable_fields = _UNENFORCEABLE_VARIABLE_PRICING_FIELDS.difference(
         prompt_dominated_fields
@@ -24337,6 +25111,13 @@ def _provider_capped_cost_bound_pricing(
 
     if type(endpoint) is not _RegisteredEndpointPricing or type(routing_max_price) is not dict:
         raise OpenRouterCostControlError("provider-capped cost-bound inputs are invalid")
+    if (
+        endpoint.route_predicate_profile is not None
+        and endpoint.route_predicate_profile.operator_reservation_policy is not None
+    ):
+        raise OpenRouterCostControlError(
+            "operator reservation cannot be projected as a provider-enforced total ceiling"
+        )
     if not routing_max_price or not set(routing_max_price).issubset(_ROUTER_MAX_PRICE_FIELDS):
         raise OpenRouterCostControlError("transmitted provider max_price fields are invalid")
     algorithm, component_unit_envelopes = _registered_price_component_policy((endpoint,))
@@ -25840,6 +26621,8 @@ _install_provider_authority_function_graph(
         _TRUSTED_MODEL_RETRY_POLICY_BUILD,
         _TRUSTED_MODEL_RETRY_POLICY_MODEL_VALIDATE,
         BudgetManager.reserve,
+        BudgetManager.commit_active_reservation_for_transport,
+        AtomicCostLedger.commit_for_transport,
         OpenRouterClient.seal_real_model_discovery_run,
         _assemble_structured_request_body,
         _require_exact_openrouter_request_body,
@@ -25849,6 +26632,27 @@ _install_provider_authority_function_graph(
         _registered_price_component_policy,
         _candidate_review_request_token_plan_projection_sha256,
         request_token_plan_projection_sha256,
+        _operator_route_request_cost_bound,
+        _operator_route_planning_envelope,
+        operator_reservation_planning_cost,
+        _classmethod_function(RouteCostReservationPlanningEnvelope, "build"),
+        RouteCostReservationPlanningEnvelope.planning_is_complete_and_self_hashed,
+        project_route_reserved_rates,
+        _classmethod_function(AuditModelRefreshPricingAttemptEvidence, "from_bound"),
+        AuditModelRefreshPricingAttemptEvidence.explicit_cost_mode_fields,
+        AuditModelRefreshPricingAttemptEvidence.attempt_is_exact_bounded_and_self_hashed,
+        AuditModelRefreshPricingAttemptEvidence._require_operator_reservation_consistency,
+        _operator_cost_reservation_projection_sha256,
+        route_cost_reservation_pricing_sha256,
+        operator_cost_attempts_from_usage,
+        require_operator_cost_preview_usage,
+        _classmethod_function(ExactRouteCostReservation, "build"),
+        ExactRouteCostReservation.reservation_is_complete_and_self_hashed,
+        _classmethod_function(OperatorRouteCostAttemptEvidence, "from_entry"),
+        OperatorRouteCostAttemptEvidence.attempt_conserves_exact_ledger_cost,
+        OpenRouterStructuredRequestCostPreview.exact_units_cost_and_hash_are_consistent,
+        OpenRouterStructuredRequestCostPreview._require_operator_reservation_consistency,
+        _classmethod_function(EndpointRequestCostBound, "from_route_cost_reservation"),
         _debug_json_default,
         _canonical_sha256,
         _routing_max_price,

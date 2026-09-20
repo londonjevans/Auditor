@@ -1,0 +1,15 @@
+{
+  "scope": "SYNTHETIC_SORT_DEPENDENCY_IDENTITIES_NO_PROVIDER",
+  "methods": ["sort", "_sort_recursive"],
+  "mutations": ["rebind", "code", "defaults", "keyword_defaults"],
+  "during_generation_mutations": ["rebind", "code"],
+  "probe_schema": {
+    "zeta": [{"omega": 2, "alpha": 1}],
+    "properties": {
+      "zeta": {"type": "integer"},
+      "alpha": {"type": "string"}
+    },
+    "default": {"zeta": 2, "alpha": 1},
+    "alpha": {"required": ["zeta", "alpha"]}
+  }
+}

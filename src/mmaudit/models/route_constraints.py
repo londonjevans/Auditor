@@ -25,6 +25,7 @@ from mmaudit.models.identifiers import (
     EXACT_MODEL_ID_PATTERN,
     require_exact_openrouter_model_id,
 )
+from mmaudit.models.legacy_cost_allowance import LegacyUncertainCostAllowance
 from mmaudit.models.output_modes import StructuredOutputMode, output_mode_request_parameters
 from mmaudit.models.reasoning import (
     REASONING_EFFORT_ORDER,
@@ -134,9 +135,20 @@ class RoutePredicateId(StrEnum):
     REGISTRY_CONSTRAINT_HASH_CUSTODY = "REGISTRY_CONSTRAINT_HASH_CUSTODY"
     EMPIRICAL_SCHEMA_CONFORMANCE = "EMPIRICAL_SCHEMA_CONFORMANCE"
     TOKEN_DETAIL_REPORTING_CONVENTION = "TOKEN_DETAIL_REPORTING_CONVENTION"
+    RESERVATION_PRICING_AVAILABLE = "RESERVATION_PRICING_AVAILABLE"
+    PROVIDER_CAPPED_SUBSET_BOUND = "PROVIDER_CAPPED_SUBSET_BOUND"
 
 
-ROUTE_PREDICATE_IDS: tuple[RoutePredicateId, ...] = tuple(RoutePredicateId)
+# Preserve the exact legacy inventory and ordering; the relaxed profile replaces
+# only its two cost predicates and does not claim a provider-enforced total bound.
+ROUTE_PREDICATE_IDS: tuple[RoutePredicateId, ...] = tuple(RoutePredicateId)[:-2]
+RESERVATION_ROUTE_PREDICATE_IDS: tuple[RoutePredicateId, ...] = tuple(
+    {
+        RoutePredicateId.PRICE_CAP_EXPRESSIBILITY: RoutePredicateId.RESERVATION_PRICING_AVAILABLE,
+        RoutePredicateId.PRICE_CAP_NO_WEAKER: RoutePredicateId.PROVIDER_CAPPED_SUBSET_BOUND,
+    }.get(predicate, predicate)
+    for predicate in ROUTE_PREDICATE_IDS
+)
 
 
 class RoutePredicateDisposition(StrEnum):
@@ -182,6 +194,9 @@ class RoutePredicateReason(StrEnum):
     PRICE_CAP_PROOF_UNAVAILABLE = "PRICE_CAP_PROOF_UNAVAILABLE"
     PRICE_CAP_MISSING = "PRICE_CAP_MISSING"
     PRICE_CAP_WEAKER_THAN_ROUTE = "PRICE_CAP_WEAKER_THAN_ROUTE"
+    RESERVATION_PRICING_UNAVAILABLE = "RESERVATION_PRICING_UNAVAILABLE"
+    PROVIDER_CAPPED_SUBSET_MISSING = "PROVIDER_CAPPED_SUBSET_MISSING"
+    PROVIDER_CAPPED_SUBSET_MISMATCH = "PROVIDER_CAPPED_SUBSET_MISMATCH"
     LIVE_EQUIVALENCE_UNAVAILABLE = "LIVE_EQUIVALENCE_UNAVAILABLE"
     LIVE_EQUIVALENCE_MISMATCH = "LIVE_EQUIVALENCE_MISMATCH"
     REGISTRY_SELECTION_CUSTODY_UNAVAILABLE = "REGISTRY_SELECTION_CUSTODY_UNAVAILABLE"
@@ -612,10 +627,150 @@ def _exact_route_pricing_schedule_sha256(
     )
 
 
+class RouteCostReservationPolicy(_FrozenStrictModel):
+    """An explicit cost-only relaxation, never inferred from endpoint metadata."""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "allOf": [
+                {
+                    "if": {"properties": {"schema_version": {"const": "1.0"}}},
+                    "then": {"not": {"required": ["legacy_uncertain_allowance"]}},
+                },
+                {
+                    "if": {"properties": {"schema_version": {"const": "1.1"}}},
+                    "then": {
+                        "required": ["legacy_uncertain_allowance"],
+                        "properties": {"legacy_uncertain_allowance": {"type": "object"}},
+                    },
+                },
+            ]
+        }
+    )
+
+    schema_version: Literal["1.0", "1.1"] = "1.0"
+    operator_decision_id: Literal["OP-COST-2026-09-09"] = "OP-COST-2026-09-09"
+    enforcement_basis: Literal["MMAUDIT_OPERATOR_RESERVE_THEN_RECONCILE_V1"] = (
+        "MMAUDIT_OPERATOR_RESERVE_THEN_RECONCILE_V1"
+    )
+    ledger_ceiling_usd_exact: str = Field(
+        default="250", pattern=r"^(?:0|[1-9][0-9]{0,11})(?:\.[0-9]{0,35}[1-9])?$", max_length=49
+    )
+    maximum_request_bytes: int = Field(default=4_000_000, ge=1024, le=64_000_000)
+    uncappable_rate_multiplier: Literal["2"] = "2"
+    require_actual_billed_cost: Literal[True] = True
+    unknown_billing_blocks_new_work: Literal[True] = True
+    legacy_uncertain_allowance: LegacyUncertainCostAllowance | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    reservation_overrun_blocks_new_work: Literal[True] = True
+    automatic_ceiling_increase: Literal[False] = False
+    provider_enforced_total_ceiling: Literal[False] = False
+    policy_sha256: str = Field(pattern=_SHA256_PATTERN)
+
+    @classmethod
+    def build(
+        cls,
+        *,
+        ledger_ceiling_usd_exact: str = "250",
+        maximum_request_bytes: int = 4_000_000,
+        legacy_uncertain_allowance: LegacyUncertainCostAllowance | None = None,
+    ) -> Self:
+        values: dict[str, Any] = {
+            "schema_version": "1.0",
+            "operator_decision_id": "OP-COST-2026-09-09",
+            "enforcement_basis": "MMAUDIT_OPERATOR_RESERVE_THEN_RECONCILE_V1",
+            "ledger_ceiling_usd_exact": ledger_ceiling_usd_exact,
+            "maximum_request_bytes": maximum_request_bytes,
+            "uncappable_rate_multiplier": "2",
+            "require_actual_billed_cost": True,
+            "unknown_billing_blocks_new_work": True,
+            "reservation_overrun_blocks_new_work": True,
+            "automatic_ceiling_increase": False,
+            "provider_enforced_total_ceiling": False,
+        }
+        if legacy_uncertain_allowance is not None:
+            if type(legacy_uncertain_allowance) is not LegacyUncertainCostAllowance:
+                raise ValueError("legacy cost allowance must have its exact typed binding")
+            values["schema_version"] = "1.1"
+            values["legacy_uncertain_allowance"] = LegacyUncertainCostAllowance.model_validate_json(
+                legacy_uncertain_allowance.model_dump_json()
+            ).model_dump(mode="json")
+        values["policy_sha256"] = _canonical_sha256(values)
+        return cls.model_validate_json(json.dumps(values))
+
+    @field_validator(
+        "require_actual_billed_cost",
+        "unknown_billing_blocks_new_work",
+        "reservation_overrun_blocks_new_work",
+        "automatic_ceiling_increase",
+        "provider_enforced_total_ceiling",
+        mode="before",
+    )
+    @classmethod
+    def flags_are_booleans(cls, value: object) -> bool:
+        if type(value) is not bool:
+            raise ValueError("cost policy flags must be literal booleans")
+        return value
+
+    @model_validator(mode="after")
+    def policy_is_bounded_and_self_hashed(self) -> Self:
+        if (self.schema_version == "1.1") != (self.legacy_uncertain_allowance is not None):
+            raise ValueError("exact legacy allowance requires policy schema-v1.1")
+        ceiling = Decimal(self.ledger_ceiling_usd_exact)
+        with localcontext() as context:
+            context.prec = 160
+            if not 0 < ceiling <= 250 or ceiling != ceiling.quantize(Decimal("1e-18")):
+                raise ValueError(
+                    "operator ledger ceiling must be exact, positive and at most USD 250"
+                )
+        _require_self_hash(self, "policy_sha256")
+        return self
+
+
 class RoutePredicateProfile(_FrozenStrictModel):
     """Shared requirements for every exact AUTHRUNNER route."""
 
-    schema_version: Literal["1.0", "1.1", "1.2"] = "1.0"
+    model_config = ConfigDict(
+        json_schema_extra={
+            "allOf": [
+                {
+                    "if": {
+                        "properties": {"schema_version": {"const": "1.3"}},
+                        "required": ["schema_version"],
+                    },
+                    "then": {
+                        "properties": {
+                            "operator_reservation_policy": {"type": "object"},
+                            "price_cap_algorithm": {
+                                "const": ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_CEILING_V1.value
+                            },
+                            "predicate_ids": {
+                                "prefixItems": [
+                                    {"const": item.value}
+                                    for item in RESERVATION_ROUTE_PREDICATE_IDS
+                                ]
+                            },
+                        },
+                        "required": ["operator_reservation_policy"],
+                        "not": {"required": ["price_component_unit_envelopes"]},
+                    },
+                    "else": {
+                        "not": {"required": ["operator_reservation_policy"]},
+                        "properties": {
+                            "predicate_ids": {
+                                "prefixItems": [
+                                    {"const": item.value} for item in ROUTE_PREDICATE_IDS
+                                ]
+                            }
+                        },
+                    },
+                }
+            ]
+        }
+    )
+
+    schema_version: Literal["1.0", "1.1", "1.2", "1.3"] = "1.0"
     predicate_ids: tuple[RoutePredicateId, ...] = Field(
         min_length=len(ROUTE_PREDICATE_IDS),
         max_length=len(ROUTE_PREDICATE_IDS),
@@ -642,6 +797,9 @@ class RoutePredicateProfile(_FrozenStrictModel):
     minimum_context_tokens: int = Field(gt=0, le=2**31 - 1)
     required_completion_limit_source: Literal["metadata"]
     price_cap_algorithm: ProviderPriceCapAlgorithm
+    operator_reservation_policy: RouteCostReservationPolicy | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     price_component_unit_envelopes: tuple[RoutePriceComponentUnitEnvelope, ...] | None = Field(
         default=None,
         min_length=1,
@@ -667,6 +825,7 @@ class RoutePredicateProfile(_FrozenStrictModel):
         price_cap_algorithm: ProviderPriceCapAlgorithm = (
             ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_CEILING_V1
         ),
+        operator_reservation_policy: RouteCostReservationPolicy | None = None,
     ) -> Self:
         schema_version = _price_cap_schema_version(price_cap_algorithm)
         values: dict[str, Any] = {
@@ -704,6 +863,16 @@ class RoutePredicateProfile(_FrozenStrictModel):
             values["price_component_unit_envelopes"] = (
                 RoutePriceComponentUnitEnvelope.build_web_search_disabled(),
             )
+        if operator_reservation_policy is not None:
+            if type(operator_reservation_policy) is not RouteCostReservationPolicy:
+                raise RouteConstraintError("operator reservation policy has the wrong exact type")
+            values.update(
+                schema_version="1.3",
+                predicate_ids=RESERVATION_ROUTE_PREDICATE_IDS,
+                operator_reservation_policy=RouteCostReservationPolicy.model_validate_json(
+                    operator_reservation_policy.model_dump_json(), strict=True
+                ),
+            )
         values["profile_sha256"] = _canonical_sha256(values)
         return cls.model_validate(values)
 
@@ -711,9 +880,23 @@ class RoutePredicateProfile(_FrozenStrictModel):
     def profile_is_exact_complete_and_self_hashed(self) -> Self:
         envelopes = self.price_component_unit_envelopes or ()
         _require_price_component_unit_envelopes(self.price_cap_algorithm, envelopes)
-        if self.schema_version != _price_cap_schema_version(self.price_cap_algorithm):
+        reservation_mode = self.schema_version == "1.3"
+        if reservation_mode:
+            if (
+                self.operator_reservation_policy is None
+                or self.price_cap_algorithm
+                is not ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_CEILING_V1
+                or self.price_component_unit_envelopes is not None
+            ):
+                raise ValueError("reservation profile requires its distinct policy and V1 subset")
+        elif "operator_reservation_policy" in self.model_fields_set:
+            raise ValueError("legacy route profile cannot carry an operator reservation policy")
+        elif self.schema_version != _price_cap_schema_version(self.price_cap_algorithm):
             raise ValueError("route predicate schema differs from its price-component policy")
-        if self.predicate_ids != ROUTE_PREDICATE_IDS:
+        expected_inventory = (
+            RESERVATION_ROUTE_PREDICATE_IDS if reservation_mode else ROUTE_PREDICATE_IDS
+        )
+        if self.predicate_ids != expected_inventory:
             raise ValueError("route predicate profile inventory is incomplete or reordered")
         if self.emitted_request_parameters != _EMITTED_REQUEST_PARAMETERS:
             raise ValueError("route predicate emitted parameter inventory is not exact")
@@ -1039,7 +1222,39 @@ class RoutePredicateResult(_FrozenStrictModel):
 
 
 class RoutePredicateReport(_FrozenStrictModel):
-    schema_version: Literal["1.0"] = "1.0"
+    model_config = ConfigDict(
+        json_schema_extra={
+            "allOf": [
+                {
+                    "if": {
+                        "properties": {"schema_version": {"const": "1.0"}},
+                        "required": ["schema_version"],
+                    },
+                    "then": {
+                        "properties": {
+                            "results": {
+                                "prefixItems": [
+                                    {"properties": {"predicate_id": {"const": item.value}}}
+                                    for item in ROUTE_PREDICATE_IDS
+                                ]
+                            }
+                        }
+                    },
+                    "else": {
+                        "properties": {
+                            "results": {
+                                "prefixItems": [
+                                    {"properties": {"predicate_id": {"const": item.value}}}
+                                    for item in RESERVATION_ROUTE_PREDICATE_IDS
+                                ]
+                            }
+                        }
+                    },
+                }
+            ]
+        }
+    )
+    schema_version: Literal["1.0", "1.1"] = "1.0"
     profile_sha256: str = Field(pattern=_SHA256_PATTERN)
     constraint_sha256: str = Field(pattern=_SHA256_PATTERN)
     facts_sha256: str = Field(pattern=_SHA256_PATTERN)
@@ -1051,7 +1266,10 @@ class RoutePredicateReport(_FrozenStrictModel):
 
     @model_validator(mode="after")
     def report_is_complete_and_self_hashed(self) -> Self:
-        if tuple(result.predicate_id for result in self.results) != ROUTE_PREDICATE_IDS:
+        expected_inventory = (
+            ROUTE_PREDICATE_IDS if self.schema_version == "1.0" else RESERVATION_ROUTE_PREDICATE_IDS
+        )
+        if tuple(result.predicate_id for result in self.results) != expected_inventory:
             raise ValueError("route predicate report inventory is incomplete or reordered")
         _require_self_hash(self, "report_sha256")
         return self
@@ -1182,6 +1400,16 @@ _FAILURE_REASONS_BY_PREDICATE: Mapping[
                 RoutePredicateReason.PRICE_CAP_WEAKER_THAN_ROUTE,
             }
         ),
+        RoutePredicateId.RESERVATION_PRICING_AVAILABLE: frozenset(
+            {RoutePredicateReason.RESERVATION_PRICING_UNAVAILABLE}
+        ),
+        RoutePredicateId.PROVIDER_CAPPED_SUBSET_BOUND: frozenset(
+            {
+                RoutePredicateReason.RESERVATION_PRICING_UNAVAILABLE,
+                RoutePredicateReason.PROVIDER_CAPPED_SUBSET_MISSING,
+                RoutePredicateReason.PROVIDER_CAPPED_SUBSET_MISMATCH,
+            }
+        ),
         RoutePredicateId.FROZEN_LIVE_EQUIVALENCE: frozenset(
             {
                 RoutePredicateReason.LIVE_EQUIVALENCE_UNAVAILABLE,
@@ -1223,6 +1451,7 @@ _UNAVAILABLE_REASONS = frozenset(
     {
         RoutePredicateReason.REASONING_EFFORT_INVENTORY_UNAVAILABLE,
         RoutePredicateReason.PRICE_CAP_PROOF_UNAVAILABLE,
+        RoutePredicateReason.RESERVATION_PRICING_UNAVAILABLE,
         RoutePredicateReason.LIVE_EQUIVALENCE_UNAVAILABLE,
         RoutePredicateReason.REGISTRY_SELECTION_CUSTODY_UNAVAILABLE,
         RoutePredicateReason.REGISTRY_CONSTRAINT_CUSTODY_UNAVAILABLE,
@@ -1453,6 +1682,88 @@ def prove_provider_price_cap(
     return ProviderPriceCapProof.model_validate(values)
 
 
+def project_route_reservation_provider_caps(
+    pricing: Sequence[ExactRoutePrice], *, schedule: ExactRoutePricingSchedule | None = None
+) -> tuple[ProviderPriceCap, ...]:
+    """Project only capped rates after validating all observed reservation prices.
+
+    This is not a proof for the complete vector. Actual request units and the
+    conservative total reservation must still be bound before dispatch.
+    """
+
+    if not route_constraint_callables_are_pristine():
+        raise RouteConstraintError("route predicate callable boundary changed")
+    canonical = tuple(pricing)
+    _require_canonical_pricing(canonical)
+    canonical = tuple(_detached(item, ExactRoutePrice, "reservation price") for item in canonical)
+    if schedule is not None:
+        schedule = _detached(schedule, ExactRoutePricingSchedule, "reservation pricing schedule")
+        if schedule.base_pricing != canonical:
+            raise RouteConstraintError("reservation schedule differs from base pricing")
+        canonical = schedule.maximum_pricing
+    capped = tuple(
+        item
+        for item in canonical
+        if item.component.value in ProviderMaxPriceComponent._value2member_map_
+    )
+    return project_provider_price_cap(capped)
+
+
+def project_route_profile_provider_caps(
+    profile: RoutePredicateProfile,
+    pricing: Sequence[ExactRoutePrice],
+    *,
+    schedule: ExactRoutePricingSchedule | None = None,
+) -> tuple[ProviderPriceCap, ...]:
+    """Select legacy total-cap projection or the explicitly labelled capped subset."""
+
+    if not route_constraint_callables_are_pristine():
+        raise RouteConstraintError("route predicate callable boundary changed")
+    profile = _detached(profile, RoutePredicateProfile, "route predicate profile")
+    if profile.operator_reservation_policy is not None:
+        return project_route_reservation_provider_caps(pricing, schedule=schedule)
+    return project_provider_price_cap(
+        pricing,
+        schedule=schedule,
+        algorithm=profile.price_cap_algorithm,
+        price_component_unit_envelopes=profile.price_component_unit_envelopes or (),
+    )
+
+
+def _reservation_price_results(
+    facts: NormalizedRouteFacts,
+) -> tuple[RoutePredicateResult, RoutePredicateResult]:
+    try:
+        if facts.pricing_schedule == "unavailable":
+            raise RouteConstraintError("reservation pricing schedule unavailable")
+        expected = project_route_reservation_provider_caps(
+            facts.exact_pricing, schedule=facts.pricing_schedule
+        )
+    except RouteConstraintError:
+        return (
+            _unavailable_result(
+                RoutePredicateId.RESERVATION_PRICING_AVAILABLE,
+                RoutePredicateReason.RESERVATION_PRICING_UNAVAILABLE,
+            ),
+            _unavailable_result(
+                RoutePredicateId.PROVIDER_CAPPED_SUBSET_BOUND,
+                RoutePredicateReason.RESERVATION_PRICING_UNAVAILABLE,
+            ),
+        )
+    return (
+        _satisfied_result(RoutePredicateId.RESERVATION_PRICING_AVAILABLE),
+        _predicate_result(
+            RoutePredicateId.PROVIDER_CAPPED_SUBSET_BOUND,
+            facts.configured_provider_max_price == expected,
+            (
+                RoutePredicateReason.PROVIDER_CAPPED_SUBSET_MISSING
+                if facts.configured_provider_max_price is None
+                else RoutePredicateReason.PROVIDER_CAPPED_SUBSET_MISMATCH
+            ),
+        ),
+    )
+
+
 def evaluate_route_predicates(
     *,
     profile: RoutePredicateProfile,
@@ -1643,7 +1954,10 @@ def evaluate_route_predicates(
         RoutePredicateReason.COMPLETION_CAPACITY_NOT_METADATA,
     )
     pricing_schedule = facts.pricing_schedule
-    if pricing_schedule == "unavailable":
+    if profile.operator_reservation_policy is not None:
+        for result in _reservation_price_results(facts):
+            results[result.predicate_id] = result
+    elif pricing_schedule == "unavailable":
         results[RoutePredicateId.PRICE_CAP_EXPRESSIBILITY] = _rejected_result(
             RoutePredicateId.PRICE_CAP_EXPRESSIBILITY,
             RoutePredicateReason.PRICE_CAP_NOT_EXPRESSIBLE,
@@ -1740,9 +2054,9 @@ def evaluate_route_predicates(
         RoutePredicateId.TOKEN_DETAIL_REPORTING_CONVENTION,
         RoutePredicateReason.TOKEN_DETAIL_CONVENTION_UNAVAILABLE,
     )
-    ordered = tuple(results[predicate] for predicate in ROUTE_PREDICATE_IDS)
+    ordered = tuple(results[predicate] for predicate in profile.predicate_ids)
     values: dict[str, Any] = {
-        "schema_version": "1.0",
+        "schema_version": "1.1" if profile.operator_reservation_policy is not None else "1.0",
         "profile_sha256": profile.profile_sha256,
         "constraint_sha256": constraint.constraint_sha256,
         "facts_sha256": facts.facts_sha256,
@@ -2173,6 +2487,13 @@ def require_route_predicates(
     if type(purpose) is not RouteConstraintPurpose:
         raise RouteConstraintError("route predicate purpose has the wrong exact type")
     required = _PURPOSE_REQUIRED[purpose]
+    if report.schema_version == "1.1":
+        required = required.difference(
+            {RoutePredicateId.PRICE_CAP_EXPRESSIBILITY, RoutePredicateId.PRICE_CAP_NO_WEAKER}
+        ) | {
+            RoutePredicateId.RESERVATION_PRICING_AVAILABLE,
+            RoutePredicateId.PROVIDER_CAPPED_SUBSET_BOUND,
+        }
     failures = tuple(
         result
         for result in report.results
@@ -2519,6 +2840,7 @@ def _build_route_constraint_callable_guard() -> Callable[[], bool]:
     )
     fixed_globals = (
         ("ROUTE_PREDICATE_IDS", ROUTE_PREDICATE_IDS),
+        ("RESERVATION_ROUTE_PREDICATE_IDS", RESERVATION_ROUTE_PREDICATE_IDS),
         ("_FAILURE_REASONS_BY_PREDICATE", _FAILURE_REASONS_BY_PREDICATE),
         ("_UNAVAILABLE_REASONS", _UNAVAILABLE_REASONS),
         ("_LATE_LIVE_PREDICATES", _LATE_LIVE_PREDICATES),
@@ -2736,6 +3058,7 @@ if not route_constraint_callables_are_pristine():
 
 
 __all__ = [
+    "RESERVATION_ROUTE_PREDICATE_IDS",
     "ROUTE_PREDICATE_IDS",
     "ExactRouteConstraint",
     "ExactRoutePrice",
@@ -2749,6 +3072,7 @@ __all__ = [
     "ProviderPriceCapProof",
     "RouteConstraintError",
     "RouteConstraintPurpose",
+    "RouteCostReservationPolicy",
     "RoutePredicateDisposition",
     "RoutePredicateId",
     "RoutePredicateProfile",
@@ -2766,6 +3090,8 @@ __all__ = [
     "normalize_exact_route_pricing",
     "project_provider_price_cap",
     "project_route_emitted_request_parameters",
+    "project_route_profile_provider_caps",
+    "project_route_reservation_provider_caps",
     "prove_provider_price_cap",
     "require_route_predicates",
     "route_constraint_callables_are_pristine",

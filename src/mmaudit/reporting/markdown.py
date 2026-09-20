@@ -9,6 +9,7 @@ from collections import Counter
 
 from mmaudit.constants import ALL_MODEL_ROLES
 from mmaudit.models.actor_model import ActorRemediationFocus, actor_remediation_guidance
+from mmaudit.models.provisional_findings import provisional_findings_from_metadata
 from mmaudit.models.schemas import (
     AttackerCapabilityPolicy,
     AuditReport,
@@ -40,6 +41,8 @@ _MAX_AUDITED_SUITE_COVERAGE_GAP_ROWS = 20
 _MAX_FILTERED_FINDING_ROWS = 50
 _MAX_TAXONOMY_CITATIONS_PER_ITEM = 5
 _MAX_TAXONOMY_CITATION_LOCATIONS = 3
+_MAX_PROVISIONAL_FINDING_ROWS = 50
+_MAX_PROVISIONAL_FINDING_TITLE_CHARACTERS = 240
 
 
 def _neutralize_untrusted_controls(value: str, *, retain_newlines: bool = True) -> str:
@@ -72,6 +75,59 @@ def _text(value: str) -> str:
 
 def _inline(value: str) -> str:
     return "`" + _clean(value).replace("`", "'").replace("|", "\\|") + "`"
+
+
+def _provisional_finding_lines(report: AuditReport, *, concise: bool = False) -> list[str]:
+    """Expose retained proposals separately; never turn truncation into reportable findings."""
+
+    inventory = provisional_findings_from_metadata(report.metadata)
+    if inventory is None:
+        return []
+    lines = [
+        "## Retained provisional findings — not validated",
+        "",
+        f"{inventory.retained_finding_count} complete proposed finding record(s) were retained "
+        f"from {len(inventory.sources)} truncated request(s).",
+        "",
+        "These are unverified proposals, not accepted or confirmed findings. They do not "
+        "contribute to finding totals, review or coverage credit, or audit completion. "
+        "Any independently accepted result is recorded separately in the findings section.",
+        "",
+        "Full records and original frame/request bindings are retained in "
+        "`final-findings.json`, under `metadata.provisional_truncated_findings`. "
+        "Channel state describes the original truncated response, not a validated finding.",
+        "",
+        "| Original request | Record ID | Proposed severity | Proposed title | Findings channel |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+    row_limit = min(_MAX_PROVISIONAL_FINDING_ROWS, 10) if concise else _MAX_PROVISIONAL_FINDING_ROWS
+    rendered = 0
+    for source in inventory.sources:
+        for record in source.records:
+            if rendered == row_limit:
+                break
+            candidate = record.candidate
+            title = candidate.title[:_MAX_PROVISIONAL_FINDING_TITLE_CHARACTERS]
+            if len(title) != len(candidate.title):
+                title += "… [full title retained in JSON]"
+            lines.append(
+                f"| {_inline(source.request_id)} | {_inline(candidate.candidate_id)} | "
+                f"{_text(candidate.severity.value)} | {_text(title)} | "
+                f"{_text(source.findings_state.value)} |"
+            )
+            rendered += 1
+        if rendered == row_limit:
+            break
+    if rendered < inventory.retained_finding_count:
+        lines.extend(
+            [
+                "",
+                f"{inventory.retained_finding_count - rendered} further provisional record(s) "
+                "remain in the full JSON inventory; this table is display-bounded, not a "
+                "complete-record count.",
+            ]
+        )
+    return [*lines, ""]
 
 
 def _taxonomy_ratio(numerator: int, denominator: int, percentage: float | None) -> str:
@@ -2159,6 +2215,7 @@ def render_markdown(
         if isinstance(privacy_limitations, list):
             lines.extend(f"- Privacy limitation: {item}" for item in privacy_limitations)
         lines.append("")
+    lines.extend(_provisional_finding_lines(report))
     lines.extend(["## Findings", ""])
     ordered = sorted(
         report.findings,

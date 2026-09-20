@@ -1917,7 +1917,7 @@ def test_fresh_production_reverification_replays_and_rescores_frozen_workflow() 
 
     manifest, discovery_evidence, registry = workflow_fixtures._candidate_inputs()
     report = workflow_fixtures._as_real_report(
-        asyncio.run(workflow_fixtures._mock_report()),
+        asyncio.run(workflow_fixtures._mock_report(), loop_factory=asyncio.new_event_loop),
         candidate=registry.candidates[0],
     )
     portfolio, campaign_verification = workflow_fixtures._portfolio_evidence(
@@ -2007,7 +2007,7 @@ def test_fresh_production_reverification_rejects_self_declared_benchmark_version
 
     manifest, discovery_evidence, registry = workflow_fixtures._candidate_inputs()
     report = workflow_fixtures._as_real_report(
-        asyncio.run(workflow_fixtures._mock_report()),
+        asyncio.run(workflow_fixtures._mock_report(), loop_factory=asyncio.new_event_loop),
         candidate=registry.candidates[0],
     )
     portfolio, campaign_verification = workflow_fixtures._portfolio_evidence(

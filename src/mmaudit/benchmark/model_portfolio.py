@@ -130,6 +130,7 @@ def _build_campaign_runtime_authority() -> tuple[
         None,
     ],
     Callable[[TrustedCandidateBenchmarkCampaignVerification], None],
+    Callable[..., TrustedCandidateBenchmarkCampaignVerification],
 ]:
     """Create process-local journal and capability registries hidden from data models."""
 
@@ -159,6 +160,7 @@ def _build_campaign_runtime_authority() -> tuple[
     trusted_getpid = os.getpid
     trusted_id = id
     trusted_type = type
+    move_owner_pid = trusted_getpid()
 
     def register_fresh_journal(journal: object) -> Callable[[int, str], None]:
         key = trusted_id(journal)
@@ -334,11 +336,63 @@ def _build_campaign_runtime_authority() -> tuple[
         if removed is not registered:
             raise ValueError("trusted campaign verification changed during revocation")
 
+    def move_capability(
+        capability: TrustedCandidateBenchmarkCampaignVerification,
+        portfolio_sha256: str,
+        reports: tuple[ModelBenchmarkReport, ...],
+        policy_sha256: str,
+        effective_config_sha256: str,
+    ) -> TrustedCandidateBenchmarkCampaignVerification:
+        """Move an existing immutable registry row once, without recreating its origin."""
+
+        # Check the captured PID before touching a lock inherited through fork.
+        if trusted_getpid() != move_owner_pid:
+            raise ValueError("trusted campaign custody move belongs to another process")
+        if trusted_type(capability) is not trusted_capability_type:
+            raise ValueError("trusted campaign verification is absent, mismatched, or revoked")
+        key = trusted_id(capability)
+        with lock:
+            registered = capability_registry.get(key)
+            if registered is None or registered[0]() is not capability:
+                raise ValueError("trusted campaign verification is absent, mismatched, or revoked")
+        require_capability(
+            capability, portfolio_sha256, reports, policy_sha256, effective_config_sha256
+        )
+        with lock:
+            if capability_registry.get(key) is not registered:
+                raise ValueError("trusted campaign verification changed during custody transfer")
+            successor = object.__new__(trusted_capability_type)
+            successor_key = trusted_id(successor)
+
+            def discard(
+                reference: weakref.ReferenceType[TrustedCandidateBenchmarkCampaignVerification],
+            ) -> None:
+                with lock:
+                    current = capability_registry.get(successor_key)
+                    if current is not None and current[0] is reference:
+                        capability_registry.pop(successor_key, None)
+
+            try:
+                capability_registry[successor_key] = (
+                    weakref.ref(successor, discard),
+                    registered[1],
+                )
+                if capability_registry.get(key) is not registered:
+                    raise ValueError(
+                        "trusted campaign verification changed during custody transfer"
+                    )
+                capability_registry.pop(key)
+            except BaseException:
+                capability_registry.pop(successor_key, None)
+                raise
+            return successor
+
     return (
         create_campaign,
         issue_capability,
         require_capability,
         revoke_capability,
+        move_capability,
     )
 
 
@@ -347,6 +401,7 @@ def _build_campaign_runtime_authority() -> tuple[
     issue_trusted_candidate_benchmark_campaign_verification,
     _require_trusted_campaign_capability_positional,
     _revoke_trusted_campaign_capability,
+    _move_trusted_campaign_capability,
 ) = _build_campaign_runtime_authority()
 
 
@@ -2394,6 +2449,132 @@ def _build_campaign_revocation_authority() -> Callable[
 
 revoke_trusted_candidate_benchmark_campaign_verification = _build_campaign_revocation_authority()
 del _build_campaign_revocation_authority
+
+
+def _build_campaign_custody_transfer() -> Callable[
+    ..., TrustedCandidateBenchmarkCampaignVerification
+]:
+    """Bind a move-only API to the original campaign verifiers and opaque registry."""
+
+    namespace = globals()
+    trusted_module = sys.modules[__name__]
+    trusted_sys = sys
+    trusted_os = os
+    getpid = os.getpid
+    owner_pid = getpid()
+    capability_type = TrustedCandidateBenchmarkCampaignVerification
+    report_type = ModelBenchmarkReport
+    require = capability_type.require_for
+    move = _move_trusted_campaign_capability
+    revoke = _revoke_trusted_campaign_capability
+    report_dump = report_type.model_dump
+    protected = {
+        name: namespace[name]
+        for name in (
+            "TrustedCandidateBenchmarkCampaignVerification",
+            "ModelBenchmarkReport",
+            "_require_trusted_campaign_capability",
+            "_require_trusted_campaign_capability_positional",
+            "_move_trusted_campaign_capability",
+            "_revoke_trusted_campaign_capability",
+            "_report_content_bindings",
+            "canonical_sha256",
+            "create_candidate_benchmark_campaign",
+            "issue_trusted_candidate_benchmark_campaign_verification",
+            "revoke_trusted_candidate_benchmark_campaign_verification",
+        )
+    }
+    functions = (
+        require,
+        report_dump,
+        *(value for value in protected.values() if callable(value) and hasattr(value, "__code__")),
+    )
+    states = tuple(
+        (
+            function,
+            function.__code__,
+            function.__defaults__,
+            function.__kwdefaults__,
+            tuple(sorted((function.__kwdefaults__ or {}).items())),
+        )
+        for function in functions
+    )
+    public: dict[str, object] = {}
+
+    def pristine() -> None:
+        if (
+            namespace.get("sys") is not trusted_sys
+            or namespace.get("os") is not trusted_os
+            or trusted_os.getpid is not getpid
+            or getpid() != owner_pid
+            or trusted_sys.modules.get(__name__) is not trusted_module
+            or any(namespace.get(name) is not value for name, value in protected.items())
+            or any(namespace.get(name) is not value for name, value in public.items())
+            or capability_type.require_for is not require
+            or report_type.model_dump is not report_dump
+            or any(
+                function.__code__ is not code
+                or function.__defaults__ is not defaults
+                or function.__kwdefaults__ is not kwdefaults
+                or tuple(sorted((function.__kwdefaults__ or {}).items())) != keyword_items
+                for function, code, defaults, kwdefaults, keyword_items in states
+            )
+        ):
+            raise ValueError("trusted campaign custody transfer runtime is not pristine")
+
+    def transfer(
+        capability: TrustedCandidateBenchmarkCampaignVerification,
+        *,
+        portfolio_sha256: str,
+        reports: tuple[ModelBenchmarkReport, ...],
+        policy_sha256: str,
+        effective_config_sha256: str,
+    ) -> TrustedCandidateBenchmarkCampaignVerification:
+        """Consume an exact campaign proof, preserving its entire original immutable state.
+
+        Pre-move refusal leaves the original intact. Successor verification failure
+        disposes the successor without reviving its source. This neither transfers
+        a containing runner nor upgrades any report's execution or qualification.
+        """
+
+        pristine()
+        if (
+            type(capability) is not capability_type
+            or type(reports) is not tuple
+            or not 1 <= len(reports) <= 128
+            or any(type(report) is not report_type for report in reports)
+            or any(
+                type(value) is not str
+                or len(value) != 64
+                or any(character not in "0123456789abcdef" for character in value)
+                for value in (portfolio_sha256, policy_sha256, effective_config_sha256)
+            )
+        ):
+            raise ValueError("campaign custody transfer requires exact bounded report inputs")
+        successor = move(
+            capability, portfolio_sha256, reports, policy_sha256, effective_config_sha256
+        )
+        try:
+            pristine()
+            require(
+                successor,
+                portfolio_sha256=portfolio_sha256,
+                reports=reports,
+                policy_sha256=policy_sha256,
+                effective_config_sha256=effective_config_sha256,
+            )
+            pristine()
+            return successor
+        except BaseException:
+            revoke(successor)
+            raise
+
+    public["transfer_trusted_candidate_benchmark_campaign_verification"] = transfer
+    return transfer
+
+
+transfer_trusted_candidate_benchmark_campaign_verification = _build_campaign_custody_transfer()
+del _build_campaign_custody_transfer
 
 
 def _live_report_content_binding(

@@ -13,10 +13,11 @@ import json
 import math
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass
-from typing import Any
+from dataclasses import dataclass, field
+from pathlib import PurePosixPath
+from typing import TYPE_CHECKING, Any, Literal, Self
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from mmaudit.models.schemas import (
     AUDITED_SUITE_STATEMENT_OBSERVATION_LIMIT,
@@ -42,19 +43,26 @@ from mmaudit.models.schemas import (
     RepositoryTestForkRpcScopeStatus,
     SolidityEntityKind,
     SolidityProvenance,
+    StrictModel,
     validated_repository_statement_coverage_evidence,
 )
 from mmaudit.repository.chunking import line_range_hash
 from mmaudit.scanners.foundry_inventory import (
     FoundryCompilerBuildUnit,
     FoundryCompilerEntity,
+    FoundryCompilerSource,
     FoundryCompilerStatement,
     FoundryCompilerStatementCatalog,
 )
 from mmaudit.scanners.foundry_statement_coverage import ForgeDebugStatementCoverage
+from mmaudit.solidity.compiler_source import CompilerSourceMap
+
+if TYPE_CHECKING:
+    from mmaudit.scanners.solc_capture import CapturedSolcInvocation
 
 FOUNDRY_STATEMENT_COVERAGE_PRODUCER_VERSION = "1.0.0"
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_STATEMENT_ID = re.compile(r"^compiler-statement:[0-9a-f]{64}$")
 _CONTRACT_ENTITY_KINDS = frozenset(
     {
         SolidityEntityKind.CONTRACT,
@@ -122,6 +130,257 @@ FOUNDRY_STATEMENT_COVERAGE_NORMALIZER_POLICY_SHA256 = _canonical_sha256(_NORMALI
 class FoundryStatementCoverageProductionError(ValueError):
     """Raised when exact compiler/debug evidence cannot support coverage credit."""
 
+    def __init__(
+        self, message: str, *, observation_gaps: FoundryStatementCoverageGaps | None = None
+    ) -> None:
+        super().__init__(message)
+        self.observation_gaps = observation_gaps
+
+
+MAX_FOUNDRY_STATEMENT_GAP_REFERENCES = 100_000
+
+
+class _GapModel(StrictModel):
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+
+
+class FoundryStatementGapRecord(_GapModel):
+    """A full compiler-owned obligation, without an inferred execution status."""
+
+    physical_statement_id: str = Field(pattern=_STATEMENT_ID.pattern)
+    project_root: str = Field(min_length=1, max_length=1_000)
+    path: str = Field(min_length=1, max_length=1_000)
+    source_file_sha256: str = Field(pattern=_SHA256.pattern)
+    normalized_build_info_sha256: str = Field(pattern=_SHA256.pattern)
+    compiler_source_id: int = Field(ge=0)
+    compiler_ast_id: int | None = Field(default=None, ge=0)
+    enclosing_inline_assembly_ast_id: int | None = Field(default=None, ge=0)
+    node_type: str = Field(min_length=1, max_length=100)
+    start_byte: int = Field(ge=0)
+    end_byte_exclusive: int = Field(gt=0)
+    compiler_start_byte: int = Field(ge=0)
+    compiler_end_byte_exclusive: int = Field(gt=0)
+    start_line: int = Field(ge=1)
+    end_line_exclusive: int = Field(ge=2)
+
+    @model_validator(mode="after")
+    def exact_obligation(self) -> Self:
+        for value in (self.project_root, self.path):
+            parsed = PurePosixPath(value)
+            if (
+                parsed.is_absolute()
+                or parsed.as_posix() != value
+                or ".." in parsed.parts
+                or "\\" in value
+                or any(ord(c) < 32 or ord(c) == 127 for c in value)
+            ):
+                raise ValueError("statement gap path is not a canonical relative path")
+        if (
+            self.path == "."
+            or not PurePosixPath(self.path).is_relative_to(self.project_root)
+            or self.end_byte_exclusive <= self.start_byte
+            or self.compiler_end_byte_exclusive <= self.compiler_start_byte
+            or self.end_line_exclusive <= self.start_line
+            or self.node_type not in _ATOMIC_STATEMENT_NODE_TYPES
+            or (self.compiler_ast_id is None and self.enclosing_inline_assembly_ast_id is None)
+        ):
+            raise ValueError("statement gap lacks a complete atomic compiler identity")
+        expected = AuditedSuiteCompilerStatementRecord.calculate_physical_statement_id(
+            path=self.path,
+            source_file_sha256=self.source_file_sha256,
+            start_byte_offset=self.start_byte,
+            end_byte_offset=self.end_byte_exclusive,
+        )
+        if self.physical_statement_id != expected:
+            raise ValueError("statement gap physical identity differs from its exact source span")
+        return self
+
+
+class FoundryStatementGapProcess(_GapModel):
+    sequence_index: int = Field(ge=1, le=10_000)
+    descriptor_sha256: str = Field(pattern=_SHA256.pattern)
+    project_root: str = Field(min_length=1, max_length=1_000)
+    stdout_sha256: str = Field(pattern=_SHA256.pattern)
+    stdout_path: str = Field(pattern=r"^repository-suite/coverage/[0-9]{5}/stdout\.txt$")
+    debug_statement_inventory_sha256: str = Field(pattern=_SHA256.pattern)
+    fork_rpc_scope_sha256: str = Field(pattern=_SHA256.pattern)
+    primary_machine_result_sha256: str = Field(pattern=_SHA256.pattern)
+    coverage_machine_result_sha256: str = Field(pattern=_SHA256.pattern)
+    coverage_command_sha256: str = Field(pattern=_SHA256.pattern)
+    private_artifact_sha256: str = Field(pattern=_SHA256.pattern)
+    private_artifact_bytes: int = Field(gt=0, le=1_000_000_000)
+    mapped_statement_ids: tuple[str, ...] = Field(max_length=100_000)
+    missing_statement_ids: tuple[str, ...] = Field(max_length=100_000)
+
+    @model_validator(mode="after")
+    def exact_sets(self) -> Self:
+        for ids in (self.mapped_statement_ids, self.missing_statement_ids):
+            if ids != tuple(sorted(set(ids))) or any(
+                _STATEMENT_ID.fullmatch(i) is None for i in ids
+            ):
+                raise ValueError("statement gap references are not unique canonical identities")
+        if set(self.mapped_statement_ids) & set(self.missing_statement_ids):
+            raise ValueError("statement gap cannot be both mapped and missing")
+        if (
+            self.stdout_path
+            != f"repository-suite/coverage/{self.sequence_index - 1:05d}/stdout.txt"
+        ):
+            raise ValueError("statement gap stdout path differs from its original sequence")
+        return self
+
+
+class FoundryStatementCoverageGaps(_GapModel):
+    """Complete original report-span gaps, never uncovered/covered or runtime credit."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    interpretation: Literal["MISSING_IS_UNKNOWN_NOT_UNCOVERED_MAPPED_IS_NOT_EXECUTED"] = (
+        "MISSING_IS_UNKNOWN_NOT_UNCOVERED_MAPPED_IS_NOT_EXECUTED"
+    )
+    repository_sha256: str = Field(pattern=_SHA256.pattern)
+    entity_catalog_sha256: str = Field(pattern=_SHA256.pattern)
+    selection_sha256: str = Field(pattern=_SHA256.pattern)
+    execution_policy_sha256: str = Field(pattern=_SHA256.pattern)
+    pre_inventory_sha256: str = Field(pattern=_SHA256.pattern)
+    post_inventory_sha256: str = Field(pattern=_SHA256.pattern)
+    producer_sha256: str = Field(pattern=_SHA256.pattern)
+    statements: tuple[FoundryStatementGapRecord, ...] = Field(min_length=1, max_length=100_000)
+    processes: tuple[FoundryStatementGapProcess, ...] = Field(min_length=1, max_length=10_000)
+    coverage_complete: Literal[False] = False
+    runtime_authority: Literal[False] = False
+    qualification_eligible: Literal[False] = False
+    safety_claim: Literal[False] = False
+    gaps_sha256: str = Field(pattern=_SHA256.pattern)
+
+    @classmethod
+    def sealed(cls, **values: Any) -> Self:
+        if "gaps_sha256" in values:
+            raise ValueError("statement gap digest is derived")
+        if (
+            type(values.get("statements")) is not tuple
+            or type(values.get("processes")) is not tuple
+        ):
+            raise ValueError("statement gaps require complete immutable input populations")
+        values["statements"] = tuple(
+            FoundryStatementGapRecord.model_validate(s) for s in values["statements"]
+        )
+        values["processes"] = tuple(
+            FoundryStatementGapProcess.model_validate(p) for p in values["processes"]
+        )
+        draft = cls.model_construct(**values, gaps_sha256="0" * 64)
+        payload = draft.model_dump(mode="python", exclude={"gaps_sha256"})
+        return cls.model_validate({**payload, "gaps_sha256": _canonical_sha256(payload)})
+
+    @model_validator(mode="after")
+    def complete_population(self) -> Self:
+        identities = tuple(s.physical_statement_id for s in self.statements)
+        if identities != tuple(sorted(set(identities))):
+            raise ValueError("statement gap population is not unique and canonically sorted")
+        if tuple(p.sequence_index for p in self.processes) != tuple(
+            range(1, len(self.processes) + 1)
+        ):
+            raise ValueError("statement gap process population is not complete and ordered")
+        if len({p.descriptor_sha256 for p in self.processes}) != len(self.processes):
+            raise ValueError("statement gap process descriptors are repeated")
+        expected: dict[str, set[str]] = {}
+        for statement in self.statements:
+            expected.setdefault(statement.project_root, set()).add(statement.physical_statement_id)
+        if not set(expected) <= {p.project_root for p in self.processes}:
+            raise ValueError("statement gap project lacks an original process")
+        references = 0
+        for process in self.processes:
+            references += len(process.mapped_statement_ids) + len(process.missing_statement_ids)
+            if references > MAX_FOUNDRY_STATEMENT_GAP_REFERENCES:
+                raise ValueError("statement gap references exceed the complete population bound")
+            if (
+                set(process.mapped_statement_ids) | set(process.missing_statement_ids)
+            ) != expected.get(process.project_root, set()):
+                raise ValueError("statement gap process dropped or added a compiler obligation")
+        if not any(p.missing_statement_ids for p in self.processes):
+            raise ValueError("statement gap diagnostic contains no missing observation")
+        if self.gaps_sha256 != _canonical_sha256(
+            self.model_dump(mode="json", exclude={"gaps_sha256"})
+        ):
+            raise ValueError("statement gap digest differs from the complete original context")
+        return self
+
+
+class _AtomicSpanGaps(FoundryStatementCoverageProductionError):
+    def __init__(self, missing: dict[int, frozenset[tuple[str, str, int, int]]]) -> None:
+        super().__init__(
+            "atomic compiler statement lacks an exact Forge debug span in every selected-test process"
+        )
+        self.missing = missing
+
+
+def validate_statement_gap_manifest_context(
+    gaps: FoundryStatementCoverageGaps,
+    *,
+    selection: RepositorySuiteSelection,
+    inventory: RepositorySuiteInventoryEvidence,
+    post_inventory: RepositorySuiteInventoryEvidence,
+    policy: RepositorySuiteExecutionPolicy,
+    catalog: AuditedSuiteEntityCatalog,
+    executions: Sequence[RepositoryTestExecution],
+    scopes: Sequence[RepositoryTestForkRpcScopeEvidence],
+    previously_charged_artifact_bytes: int,
+) -> FoundryStatementCoverageGaps:
+    """Bind failure diagnostics to the complete downgraded original run, never admit it."""
+    if type(gaps) is not FoundryStatementCoverageGaps:
+        raise ValueError("statement gaps require an exact typed diagnostic")
+    parsed = FoundryStatementCoverageGaps.model_validate_json(gaps.model_dump_json())
+    selection = RepositorySuiteSelection.model_validate_json(selection.model_dump_json())
+    inventory = RepositorySuiteInventoryEvidence.model_validate_json(inventory.model_dump_json())
+    post_inventory = RepositorySuiteInventoryEvidence.model_validate_json(
+        post_inventory.model_dump_json()
+    )
+    policy = RepositorySuiteExecutionPolicy.model_validate_json(policy.model_dump_json())
+    catalog = AuditedSuiteEntityCatalog.model_validate_json(catalog.model_dump_json())
+    if (
+        parsed.repository_sha256 != selection.repository_sha256
+        or parsed.entity_catalog_sha256 != catalog.catalog_sha256
+        or catalog.repository_sha256 != selection.repository_sha256
+        or parsed.selection_sha256 != selection.selection_sha256
+        or parsed.execution_policy_sha256 != policy.policy_sha256
+        or policy.selection_sha256 != selection.selection_sha256
+        or parsed.pre_inventory_sha256 != inventory.inventory_sha256
+        or parsed.post_inventory_sha256 != post_inventory.inventory_sha256
+        or inventory.repository_sha256 != selection.repository_sha256
+        or post_inventory.repository_sha256 != selection.repository_sha256
+        or len(parsed.processes) != len(selection.tests)
+        or len(executions) != len(selection.tests)
+        or len(scopes) != len(selection.tests)
+        or type(previously_charged_artifact_bytes) is not int
+        or previously_charged_artifact_bytes
+        < sum(p.private_artifact_bytes for p in parsed.processes)
+    ):
+        raise ValueError("statement gaps differ from original context or charged artifact custody")
+    for descriptor, process, execution, scope in zip(
+        selection.tests, parsed.processes, executions, scopes, strict=True
+    ):
+        execution = RepositoryTestExecution.model_validate_json(execution.model_dump_json())
+        scope = RepositoryTestForkRpcScopeEvidence.model_validate_json(scope.model_dump_json())
+        if (
+            process.descriptor_sha256 != descriptor.descriptor_sha256
+            or process.project_root != descriptor.project_root
+            or execution.descriptor_sha256 != descriptor.descriptor_sha256
+            or execution.selection_sha256 != selection.selection_sha256
+            or execution.execution_policy_sha256 != policy.policy_sha256
+            or execution.inventory_sha256 != inventory.inventory_sha256
+            or execution.post_inventory_sha256 != post_inventory.inventory_sha256
+            or process.primary_machine_result_sha256 != execution.machine_result_sha256
+            or execution.status is not RepositoryTestExecutionStatus.PASSED
+            or execution.execution_evidence is not ExecutionEvidenceKind.UNVERIFIED
+            or process.fork_rpc_scope_sha256 != scope.evidence_sha256
+            or scope.descriptor_sha256 != descriptor.descriptor_sha256
+            or scope.selection_sha256 != selection.selection_sha256
+            or scope.sequence_index != process.sequence_index
+            or scope.status is not RepositoryTestForkRpcScopeStatus.VALIDATED
+        ):
+            raise ValueError(
+                "statement gap manifest changes a process or promotes execution credit"
+            )
+    return parsed
+
 
 @dataclass(frozen=True, slots=True)
 class FoundryStatementCoverageProcessObservation:
@@ -144,6 +403,9 @@ class FoundryStatementCoverageProcessObservation:
     private_artifact_bytes: int
     duration_seconds: float
     debug_coverage: ForgeDebugStatementCoverage
+    # Additional original compiler bytes are diagnostic input, never a fallback
+    # that excuses missing atomic debug observations or grants runtime authority.
+    compiler_transcripts: tuple[CapturedSolcInvocation, ...] = field(default=(), repr=False)
 
     def __post_init__(self) -> None:
         if type(self.sequence_index) is not int or not 1 <= self.sequence_index <= 10_000:
@@ -251,8 +513,12 @@ class _PhysicalStatement:
     def debug_identity(self) -> tuple[int, int, int, int, int]:
         return (
             self.statement.source_id,
-            self.statement.start_byte,
-            self.statement.end_byte_exclusive,
+            self.statement.start_byte
+            if self.statement.compiler_start_byte is None
+            else self.statement.compiler_start_byte,
+            self.statement.end_byte_exclusive
+            if self.statement.compiler_end_byte_exclusive is None
+            else self.statement.compiler_end_byte_exclusive,
             self.statement.start_line,
             self.statement.end_line_exclusive,
         )
@@ -375,11 +641,64 @@ def produce_foundry_statement_coverage(
             keys.append(physical.source_key)
         entity_source_keys[mapped.binding.entity_id] = tuple(sorted(set(keys)))
 
-    coverage_by_source = _aggregate_coverage(
-        physical_by_source,
-        catalogs=pre_catalog_map,
-        processes_by_project=processes_by_project,
-    )
+    try:
+        coverage_by_source = _aggregate_coverage(
+            physical_by_source,
+            catalogs=pre_catalog_map,
+            processes_by_project=processes_by_project,
+        )
+    except _AtomicSpanGaps as gaps:
+        # Preserve every obligation and every original process. Missing spans are
+        # unknown observations, never silently dropped or labelled uncovered.
+        records_by_key = {
+            key: _statement_gap_record(item) for key, item in physical_by_source.items()
+        }
+        records = tuple(
+            sorted(records_by_key.values(), key=lambda item: item.physical_statement_id)
+        )
+        ids = {key: record.physical_statement_id for key, record in records_by_key.items()}
+        keys_by_project: dict[str, set[tuple[str, str, int, int]]] = {}
+        for key, item in physical_by_source.items():
+            keys_by_project.setdefault(item.project_root, set()).add(key)
+        process_gaps = []
+        for descriptor, process, execution, scope in zip(
+            selected.tests, canonical_processes, canonical_executions, canonical_scopes, strict=True
+        ):
+            assert execution.machine_result_sha256 is not None
+            required_keys = keys_by_project.get(descriptor.project_root, set())
+            missing = gaps.missing.get(process.sequence_index, frozenset())
+            process_gaps.append(
+                FoundryStatementGapProcess(
+                    sequence_index=process.sequence_index,
+                    descriptor_sha256=process.descriptor_sha256,
+                    project_root=descriptor.project_root,
+                    stdout_sha256=process.stdout_sha256,
+                    stdout_path=process.stdout_path,
+                    debug_statement_inventory_sha256=process.debug_coverage.statement_inventory_sha256,
+                    fork_rpc_scope_sha256=scope.evidence_sha256,
+                    primary_machine_result_sha256=execution.machine_result_sha256,
+                    coverage_machine_result_sha256=process.machine_result_sha256,
+                    coverage_command_sha256=process.coverage_command_sha256,
+                    private_artifact_sha256=process.private_artifact_sha256,
+                    private_artifact_bytes=process.private_artifact_bytes,
+                    mapped_statement_ids=tuple(sorted(ids[key] for key in required_keys - missing)),
+                    missing_statement_ids=tuple(sorted(ids[key] for key in missing)),
+                )
+            )
+        diagnostic = FoundryStatementCoverageGaps.sealed(
+            repository_sha256=selected.repository_sha256,
+            entity_catalog_sha256=catalog.catalog_sha256,
+            selection_sha256=selected.selection_sha256,
+            execution_policy_sha256=policy.policy_sha256,
+            pre_inventory_sha256=before.inventory_sha256,
+            post_inventory_sha256=after.inventory_sha256,
+            producer_sha256=producer_sha256,
+            statements=records,
+            processes=tuple(process_gaps),
+        )
+        raise FoundryStatementCoverageProductionError(
+            str(gaps), observation_gaps=diagnostic
+        ) from gaps
     compiler_records = tuple(
         sorted(
             (
@@ -615,6 +934,29 @@ def _validated_compiler_catalogs(
     return dict(sorted(result.items()))
 
 
+def _validate_original_compiler_span(
+    source: FoundryCompilerSource,
+    item: FoundryCompilerEntity | FoundryCompilerStatement,
+) -> None:
+    mapping = source.source_mapping
+    start, end = item.compiler_start_byte, item.compiler_end_byte_exclusive
+    if mapping is None:
+        valid = start is None and end is None
+    else:
+        try:
+            valid = (
+                type(start) is int
+                and type(end) is int
+                and mapping.original_span(start, end) == (item.start_byte, item.end_byte_exclusive)
+            )
+        except ValueError:
+            valid = False
+    if not valid:
+        raise FoundryStatementCoverageProductionError(
+            "compiler statement/entity original and compiler byte spans differ"
+        )
+
+
 def _validate_catalog_structure(
     catalog: FoundryCompilerStatementCatalog,
     label: str,
@@ -657,6 +999,21 @@ def _validate_catalog_structure(
                 raise FoundryStatementCoverageProductionError(
                     f"{label} compiler source bytes differ from their digest"
                 )
+            mapping = source.source_mapping
+            if mapping is not None:
+                try:
+                    valid = (
+                        type(mapping) is CompilerSourceMap
+                        and mapping.original == source.content
+                        and mapping.transformation is not None
+                        and CompilerSourceMap(source.content, mapping.compiled) == mapping
+                    )
+                except ValueError:
+                    valid = False
+                if not valid:
+                    raise FoundryStatementCoverageProductionError(
+                        f"{label} compiler source mapping differs from exact original bytes"
+                    )
         entity_keys = tuple(
             (
                 entity.path,
@@ -721,6 +1078,7 @@ def _validate_catalog_structure(
                 raise FoundryStatementCoverageProductionError(
                     f"{label} compiler entity has invalid source custody"
                 )
+            _validate_original_compiler_span(entity_source, entity)
         statement_keys = tuple(
             (
                 statement.path,
@@ -799,6 +1157,7 @@ def _validate_catalog_structure(
                 raise FoundryStatementCoverageProductionError(
                     f"{label} compiler statement has invalid AST/source custody"
                 )
+            _validate_original_compiler_span(statement_source, statement)
             previous = previous_by_path.get(statement.path)
             if previous is not None and statement.start_byte < previous.end_byte_exclusive:
                 raise FoundryStatementCoverageProductionError(
@@ -1152,6 +1511,8 @@ def _aggregate_coverage(
                     matches.append(physical)
 
     result = {source_key: False for source_key in physical_by_source}
+    missing_by_sequence: dict[int, frozenset[tuple[str, str, int, int]]] = {}
+    references = 0
     for project_root, targets in targets_by_project.items():
         for identity, (source_key, physical) in targets.items():
             matches = compiler_matches[project_root][identity]
@@ -1165,6 +1526,7 @@ def _aggregate_coverage(
                 )
         required = set(targets)
         for process in processes_by_project[project_root]:
+            references += len(required)
             seen: set[tuple[int, int, int, int, int]] = set()
             uncovered_paths = {
                 source.source_id: source.path for source in process.debug_coverage.uncovered_sources
@@ -1182,11 +1544,46 @@ def _aggregate_coverage(
                 result[source_key] = result[source_key] or observed.covered
                 seen.add(observed.identity)
             if seen != required:
-                raise FoundryStatementCoverageProductionError(
-                    "atomic compiler statement lacks an exact Forge debug span in every "
-                    "selected-test process"
+                if references > MAX_FOUNDRY_STATEMENT_GAP_REFERENCES:
+                    raise FoundryStatementCoverageProductionError(
+                        "statement gap references exceed the complete population bound"
+                    )
+                missing_by_sequence[process.sequence_index] = frozenset(
+                    targets[identity][0] for identity in required - seen
                 )
+            if missing_by_sequence and references > MAX_FOUNDRY_STATEMENT_GAP_REFERENCES:
+                raise FoundryStatementCoverageProductionError(
+                    "statement gap references exceed the complete population bound"
+                )
+    if missing_by_sequence:
+        raise _AtomicSpanGaps(missing_by_sequence)
     return result
+
+
+def _statement_gap_record(physical: _PhysicalStatement) -> FoundryStatementGapRecord:
+    statement = physical.statement
+    return FoundryStatementGapRecord(
+        physical_statement_id=AuditedSuiteCompilerStatementRecord.calculate_physical_statement_id(
+            path=physical.repository_path,
+            source_file_sha256=statement.source_sha256,
+            start_byte_offset=statement.start_byte,
+            end_byte_offset=statement.end_byte_exclusive,
+        ),
+        project_root=physical.project_root,
+        path=physical.repository_path,
+        source_file_sha256=statement.source_sha256,
+        normalized_build_info_sha256=physical.unit.normalized_build_info_sha256,
+        compiler_source_id=statement.source_id,
+        compiler_ast_id=statement.compiler_ast_id,
+        enclosing_inline_assembly_ast_id=statement.enclosing_inline_assembly_ast_id,
+        node_type=statement.node_type,
+        start_byte=statement.start_byte,
+        end_byte_exclusive=statement.end_byte_exclusive,
+        compiler_start_byte=physical.debug_identity[1],
+        compiler_end_byte_exclusive=physical.debug_identity[2],
+        start_line=statement.start_line,
+        end_line_exclusive=statement.end_line_exclusive,
+    )
 
 
 def _compiler_statement_record(

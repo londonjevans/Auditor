@@ -1,0 +1,37 @@
+{
+  "candidate_plan_sha256": "382b676e9c7f304a35bbb79ef50d00b71e235bb586f5051615d84ca106ff95ee",
+  "ensemble_plan_sha256": "b5e16b7578b1c79e304026acd76bf9a2233144221416024962c7f6bc0235dfa0",
+  "manifest_sha256": "d11e25e0ec8d03cc187d7cd8a6d70046d6e483a26425bd8e207ecef43724c01a",
+  "policy": {
+    "maximum_attempts": 1,
+    "overspend_risk_accepted": true,
+    "per_attempt_budget_usd": "3",
+    "purpose": "DEVELOPMENT_ONLY_ESTIMATED",
+    "safety_multiplier": "2",
+    "total_budget_usd": "60"
+  },
+  "primary_filenames": [
+    "src/Controller.sol",
+    "src/SecondReserve.sol"
+  ],
+  "run_id": "synthetic-manifest-ensemble",
+  "scope": "Retained synthetic pre-AUTOPARTITION manifest1.10 and prepared request golden; no provider or authority evidence.",
+  "shards": [
+    {
+      "request_bytes": 45981,
+      "request_id": "dvc-20c27411e2c6f50aeb113cd2e79d6b175c10306cc0eeae814711f51fdccf",
+      "request_sha256": "355eb3cc7676754158c473e8d998246cee6529997ff0ddbf67ff7b6737013f8f",
+      "shard_id": "file-0002"
+    },
+    {
+      "request_bytes": 45937,
+      "request_id": "dvc-14d61b053752ad1bd8b69146e2b0d337b98903c3ef6d6e0351af1acf8902",
+      "request_sha256": "9a9f87352283215411fbd9cddd070f8dc3e3a3d6d611d81959a4b7a645a33f3e",
+      "shard_id": "file-0005"
+    }
+  ],
+  "upstream_file_sha256s": {
+    "candidate/plan.json": "a1d62d4b4d482d47c6912c3ef4e692571ed3e6d54802cb663c104acdf0a7f77a",
+    "plan.json": "fcfc3f5ffa5ebb5f2a7ad6e7f3f31de81762bef001e4dfcc7e6dbfd10a6bfb9e"
+  }
+}

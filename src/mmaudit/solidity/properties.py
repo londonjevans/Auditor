@@ -6,7 +6,10 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
-from typing import Any
+from pathlib import PurePosixPath
+from typing import TYPE_CHECKING, Any, Literal, Self
+
+from pydantic import Field, model_validator
 
 from mmaudit.models.schemas import (
     AnalysisState,
@@ -20,10 +23,21 @@ from mmaudit.models.schemas import (
     PropertyCorpus,
     PropertyFuzzInputBound,
     PropertySourceEvidence,
+    RepositorySuiteInventoryRecord,
     SolidityEntity,
     SolidityProvenance,
     SoliditySymbolIndex,
+    StrictModel,
 )
+from mmaudit.repository.chunking import line_range_hash
+from mmaudit.repository.ignore import normalize_relative_path
+from mmaudit.solidity.property_reachability import (
+    CompilerPropertyReachability,
+    derive_compiler_property_reachability,
+)
+
+if TYPE_CHECKING:
+    from mmaudit.scanners.foundry_inventory_runner import FoundryInventoryRunResult
 
 
 @dataclass
@@ -339,3 +353,292 @@ def _stable_hash(value: object) -> str:
     return hashlib.sha256(
         json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
+
+
+class CompilerBoundPropertyTest(StrictModel):
+    """An exact generated assertion, not an inference from a test's name."""
+
+    property_id: str = Field(pattern=r"^prop-[0-9a-f]{24}$")
+    record: RepositorySuiteInventoryRecord
+    test_id: str = Field(min_length=1, max_length=200)
+
+
+class FoundryPropertyTestMapping(StrictModel):
+    """Complete property/test accounting; consistency grants no runtime or truth authority."""
+
+    corpus: PropertyCorpus
+    project_root: str = Field(min_length=1, max_length=1_000)
+    inventory_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    expected_chain_id: int | None = Field(
+        default=None, ge=1, le=2**256 - 1, exclude_if=lambda value: value is None
+    )
+    harnesses: list[FoundryInvariantHarnessSpec] = Field(max_length=10_000)
+    tests: list[CompilerBoundPropertyTest] = Field(max_length=10_000)
+    unresolved_property_ids: list[str] = Field(max_length=10_000)
+    compiler_reachability: CompilerPropertyReachability | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    execution_validated: Literal[False] = False
+    qualification_eligible: Literal[False] = False
+    mapping_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @classmethod
+    def sealed(cls, **values: Any) -> Self:
+        if "mapping_sha256" in values:
+            raise ValueError("property mapping digest is derived")
+        draft = cls.model_construct(**values, mapping_sha256="0" * 64)
+        payload = draft.model_dump(mode="json", exclude={"mapping_sha256"})
+        return cls.model_validate({**payload, "mapping_sha256": _stable_hash(payload)})
+
+    @model_validator(mode="after")
+    def exact_generated_assertions_and_population(self) -> Self:
+        from mmaudit.benchmark.foundry_mutation_executor import (
+            canonical_foundry_inventory_mutation_test_id,
+        )
+
+        if normalize_relative_path(self.project_root) != self.project_root:
+            raise ValueError("property mapping project root is not canonical")
+        names = [h.name for h in self.harnesses]
+        if names != sorted(set(names)):
+            raise ValueError("generated property harness names must be unique and sorted")
+        properties = {p.id: p for p in self.corpus.properties}
+        if self.compiler_reachability is not None:
+            self.compiler_reachability.validate_corpus(self.corpus)
+            if (
+                self.compiler_reachability.project_root != self.project_root
+                or self.compiler_reachability.inventory_sha256 != self.inventory_sha256
+            ):
+                raise ValueError("compiler property reachability differs from selected inventory")
+        bound_ids = [t.property_id for t in self.tests]
+        missing = self.unresolved_property_ids
+        if (
+            bound_ids != sorted(set(bound_ids))
+            or missing != sorted(set(missing))
+            or set(bound_ids) & set(missing)
+            or set(bound_ids) | set(missing) != set(properties)
+        ):
+            raise ValueError("every corpus property requires one bound test or unresolved record")
+        harnesses = {h.name: h for h in self.harnesses}
+        generated = {
+            h.name: generated_local_property_source(
+                h, project_root=self.project_root, expected_chain_id=self.expected_chain_id
+            )
+            for h in self.harnesses
+        }
+        for test in self.tests:
+            prop = properties[test.property_id]
+            harness = harnesses.get(prop.harness_name)
+            if harness is None:
+                raise ValueError("bound property lacks its complete typed harness")
+            _validate_property_harness(prop, harness)
+            source = generated[harness.name]
+            if source is None:
+                raise ValueError("bound property requires locally deployed targets")
+            path, content = source
+            record = test.record
+            suite = f"MMAuditInvariant_{harness.name}"
+            name = f"invariant_{prop.property_id}"
+            signature = name + "()"
+            source_sha = hashlib.sha256(content).hexdigest()
+            if (
+                record.project_root != self.project_root
+                or record.execution_path != path
+                or record.declaration_path != path
+                or record.execution_suite_name != suite
+                or record.declaration_suite_name != suite
+                or record.test_name != name
+                or record.execution_signature not in {name, signature}
+                or record.declaration_signature != signature
+                or record.execution_source_sha256 != source_sha
+                or record.declaration_source_sha256 != source_sha
+                or test.test_id
+                != canonical_foundry_inventory_mutation_test_id(
+                    record, inventory_sha256=self.inventory_sha256
+                )
+            ):
+                raise ValueError(
+                    "compiled property test differs from the exact generated assertion"
+                )
+        if self.mapping_sha256 != _stable_hash(
+            self.model_dump(mode="json", exclude={"mapping_sha256"})
+        ):
+            raise ValueError("property test mapping digest differs")
+        return self
+
+
+def generated_local_property_source(
+    harness: FoundryInvariantHarnessSpec,
+    *,
+    project_root: str,
+    expected_chain_id: int | None = None,
+) -> tuple[str, bytes] | None:
+    """Reproduce the existing runner's complete local harness; never execute or write it."""
+
+    from mmaudit.solidity.invariant_execution import translate_foundry_invariant
+
+    if type(harness) is not FoundryInvariantHarnessSpec:
+        raise ValueError("property generation requires the exact typed harness")
+    harness = FoundryInvariantHarnessSpec.model_validate(harness.model_dump(mode="python"))
+    if normalize_relative_path(project_root) != project_root:
+        raise ValueError("generated property project root is not canonical")
+    if expected_chain_id is not None and (
+        type(expected_chain_id) is not int or not 1 <= expected_chain_id <= 2**256 - 1
+    ):
+        raise ValueError("generated property chain identity is invalid")
+    if not harness.local_deployments:
+        return None
+    if any(
+        re.fullmatch(r"[A-Za-z0-9_./@-]+\.sol", item.source_path) is None
+        for item in harness.local_deployments
+    ):
+        raise ValueError("local property import path cannot be safely rendered in Solidity")
+    # Every referenced alias is local by the harness validator. No address is contacted.
+    targets = {item.target_alias: "0x" + "0" * 40 for item in harness.local_deployments}
+    source = translate_foundry_invariant(
+        harness, targets=targets, expected_chain_id=expected_chain_id
+    )
+    path = (
+        PurePosixPath(project_root)
+        / "test/mmaudit_generated"
+        / f"MMAuditInvariant_{harness.name}.t.sol"
+    ).as_posix()
+    return path, source.encode("utf-8")
+
+
+def _validate_property_harness(
+    prop: DynamicPropertySpec, harness: FoundryInvariantHarnessSpec
+) -> None:
+    if (
+        prop.invariant_id != harness.invariant_id
+        or prop.harness_name != harness.name
+        or prop.predicate not in harness.properties
+        or prop.actors != harness.actors
+        or prop.setup_calls != harness.setup_calls
+        or prop.token_balance_seeds != harness.token_balance_seeds
+        or prop.actions != harness.actions
+        or prop.target_aliases != _target_aliases(harness)
+        or prop.campaign != _campaign_bounds(harness)
+        or prop.capability_policy != harness.capability_policy
+        or not set(harness.assumptions) <= set(prop.assumptions)
+    ):
+        raise ValueError("property predicate, actions, actors or campaign differ from its harness")
+
+
+def bind_compiled_property_tests(
+    *,
+    inventory_result: FoundryInventoryRunResult,
+    project_root: str,
+    corpus: PropertyCorpus,
+    harnesses: list[FoundryInvariantHarnessSpec],
+    expected_chain_id: int | None = None,
+    include_compiler_reachability: bool = True,
+) -> FoundryPropertyTestMapping:
+    """Join exact source-backed predicates to original compiler-inventoried local assertions.
+
+    Missing assertions remain unresolved. Changed source or conflicting typed inputs are
+    refused, not downgraded to an omission. No filesystem, process or network I/O occurs.
+    """
+
+    from mmaudit.benchmark.foundry_mutation_executor import (
+        canonical_foundry_inventory_mutation_test_id,
+    )
+    from mmaudit.models.schemas import RepositorySuiteInventoryPhase
+    from mmaudit.scanners.foundry_inventory_runner import validated_foundry_compiler_input
+
+    if (
+        type(corpus) is not PropertyCorpus
+        or type(harnesses) is not list
+        or type(include_compiler_reachability) is not bool
+    ):
+        raise ValueError("property mapping requires exact typed corpus and harness inputs")
+    corpus = PropertyCorpus.model_validate(corpus.model_dump(mode="python"))
+    if len(harnesses) > 10_000 or any(
+        type(h) is not FoundryInvariantHarnessSpec for h in harnesses
+    ):
+        raise ValueError("property harness population is invalid or excessive")
+    harnesses = [
+        FoundryInvariantHarnessSpec.model_validate(h.model_dump(mode="python")) for h in harnesses
+    ]
+    harnesses.sort(key=lambda h: h.name)
+    if len({h.name for h in harnesses}) != len(harnesses):
+        raise ValueError("generated property harness names are ambiguous")
+    snapshot, inventory = validated_foundry_compiler_input(
+        inventory_result, project_root=project_root
+    )
+    if inventory.phase is not RepositorySuiteInventoryPhase.PRE_EXECUTION:
+        raise ValueError("property mapping requires pre-execution compiler inventory")
+    sources = {
+        (PurePosixPath(project_root) / s.path).as_posix(): s.content for s in snapshot.sources
+    }
+    for prop in corpus.properties:
+        for evidence in prop.source_evidence:
+            location = evidence.location
+            raw = sources.get(location.path)
+            if raw is None:
+                raise ValueError("property evidence source is absent from retained compiler input")
+            content = raw.decode("utf-8", errors="strict")
+            if (
+                location.end_line > len(content.splitlines())
+                or line_range_hash(content, location.start_line, location.end_line)
+                != location.content_hash
+            ):
+                raise ValueError("property evidence differs from exact retained source lines")
+    by_name = {h.name: h for h in harnesses}
+    generated = {
+        h.name: generated_local_property_source(
+            h, project_root=project_root, expected_chain_id=expected_chain_id
+        )
+        for h in harnesses
+    }
+    for source in generated.values():
+        if source is not None and source[0] in sources and sources[source[0]] != source[1]:
+            raise ValueError("retained property harness differs from complete generated source")
+    project = next(p for p in inventory.projects if p.project_root == project_root)
+    tests: list[CompilerBoundPropertyTest] = []
+    unresolved: list[str] = []
+    for prop in corpus.properties:
+        harness = by_name.get(prop.harness_name)
+        source = None if harness is None else generated[harness.name]
+        if harness is not None:
+            _validate_property_harness(prop, harness)
+        records = (
+            [
+                r
+                for r in project.records
+                if r.execution_path == source[0]
+                and r.execution_suite_name == f"MMAuditInvariant_{prop.harness_name}"
+                and r.test_name == f"invariant_{prop.property_id}"
+            ]
+            if source is not None and source[0] in sources
+            else []
+        )
+        if len(records) > 1:
+            raise ValueError("generated property assertion has ambiguous compiler records")
+        if not records:
+            unresolved.append(prop.id)
+            continue
+        tests.append(
+            CompilerBoundPropertyTest(
+                property_id=prop.id,
+                record=records[0],
+                test_id=canonical_foundry_inventory_mutation_test_id(
+                    records[0], inventory_sha256=inventory.normalized_inventory_sha256
+                ),
+            )
+        )
+    return FoundryPropertyTestMapping.sealed(
+        corpus=corpus,
+        project_root=project_root,
+        inventory_sha256=inventory.normalized_inventory_sha256,
+        expected_chain_id=expected_chain_id,
+        harnesses=harnesses,
+        tests=tests,
+        unresolved_property_ids=unresolved,
+        compiler_reachability=(
+            derive_compiler_property_reachability(
+                inventory_result=inventory_result, project_root=project_root, corpus=corpus
+            )
+            if include_compiler_reachability
+            else None
+        ),
+    )

@@ -1,0 +1,3154 @@
+{
+  "$defs": {
+    "AuthenticatedRunnerSelection": {
+      "additionalProperties": false,
+      "description": "Planning-only three-model role assignment; independence is not asserted.",
+      "properties": {
+        "candidate_model_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+          "title": "Candidate Model Id",
+          "type": "string"
+        },
+        "distinct_root_lineages_verified": {
+          "const": false,
+          "title": "Distinct Root Lineages Verified",
+          "type": "boolean"
+        },
+        "primary_judge_model_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+          "title": "Primary Judge Model Id",
+          "type": "string"
+        },
+        "replay_judge_model_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+          "title": "Replay Judge Model Id",
+          "type": "string"
+        },
+        "required_completion_limit_source": {
+          "const": "metadata",
+          "title": "Required Completion Limit Source",
+          "type": "string"
+        },
+        "required_output_mode": {
+          "const": "NATIVE_JSON_SCHEMA",
+          "title": "Required Output Mode",
+          "type": "string"
+        },
+        "required_reasoning_effort": {
+          "const": "high",
+          "title": "Required Reasoning Effort",
+          "type": "string"
+        },
+        "required_supported_parameters": {
+          "items": {
+            "const": "structured_outputs",
+            "type": "string"
+          },
+          "maxItems": 1,
+          "minItems": 1,
+          "title": "Required Supported Parameters",
+          "type": "array"
+        },
+        "role_assignment_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Role Assignment Sha256",
+          "type": "string"
+        },
+        "route_constraints": {
+          "items": {
+            "$ref": "#/$defs/ExactRouteConstraint"
+          },
+          "maxItems": 18,
+          "minItems": 3,
+          "title": "Route Constraints",
+          "type": "array"
+        },
+        "route_predicate_profile": {
+          "$ref": "#/$defs/RoutePredicateProfile"
+        }
+      },
+      "required": [
+        "candidate_model_id",
+        "primary_judge_model_id",
+        "replay_judge_model_id",
+        "required_output_mode",
+        "required_supported_parameters",
+        "required_reasoning_effort",
+        "required_completion_limit_source",
+        "route_predicate_profile",
+        "route_constraints",
+        "distinct_root_lineages_verified",
+        "role_assignment_sha256"
+      ],
+      "title": "AuthenticatedRunnerSelection",
+      "type": "object"
+    },
+    "CalibrationPopulationSlot": {
+      "additionalProperties": false,
+      "description": "Runner boundaries are not a count or assertion of provider dispatches.",
+      "properties": {
+        "exact_model_id": {
+          "title": "Exact Model Id",
+          "type": "string"
+        },
+        "launch_binding_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Launch Binding Sha256"
+        },
+        "registry_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Registry Sha256"
+        },
+        "runner_evidence_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Runner Evidence Sha256"
+        },
+        "state": {
+          "enum": [
+            "MISSING",
+            "PENDING",
+            "READY",
+            "REFUSED",
+            "STARTED",
+            "RETAINED",
+            "FAILED"
+          ],
+          "title": "State",
+          "type": "string"
+        }
+      },
+      "required": [
+        "exact_model_id",
+        "state",
+        "registry_sha256",
+        "launch_binding_sha256",
+        "runner_evidence_sha256"
+      ],
+      "title": "CalibrationPopulationSlot",
+      "type": "object"
+    },
+    "CandidateSelectionEndpointInventoryRefresh": {
+      "additionalProperties": false,
+      "description": "One explicit, nonauthorizing endpoint inventory transition.",
+      "properties": {
+        "constrained_discovery_required": {
+          "const": true,
+          "title": "Constrained Discovery Required",
+          "type": "boolean"
+        },
+        "discovery_evidence_embedded": {
+          "const": false,
+          "title": "Discovery Evidence Embedded",
+          "type": "boolean"
+        },
+        "disposition": {
+          "const": "OPERATOR_STAGED_UNVERIFIED",
+          "title": "Disposition",
+          "type": "string"
+        },
+        "endpoint_authority": {
+          "const": false,
+          "title": "Endpoint Authority",
+          "type": "boolean"
+        },
+        "exact_model_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+          "title": "Exact Model Id",
+          "type": "string"
+        },
+        "predecessor_allowed_provider_endpoints": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "title": "Predecessor Allowed Provider Endpoints",
+          "type": "array"
+        },
+        "predecessor_entry_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Predecessor Entry Sha256",
+          "type": "string"
+        },
+        "provider_endpoint": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$",
+          "title": "Provider Endpoint",
+          "type": "string"
+        },
+        "provider_metadata_embedded": {
+          "const": false,
+          "title": "Provider Metadata Embedded",
+          "type": "boolean"
+        },
+        "refresh_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Refresh Sha256",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "exact_model_id",
+        "predecessor_entry_sha256",
+        "predecessor_allowed_provider_endpoints",
+        "provider_endpoint",
+        "disposition",
+        "constrained_discovery_required",
+        "provider_metadata_embedded",
+        "discovery_evidence_embedded",
+        "endpoint_authority",
+        "refresh_sha256"
+      ],
+      "title": "CandidateSelectionEndpointInventoryRefresh",
+      "type": "object"
+    },
+    "CandidateSelectionEntry": {
+      "additionalProperties": false,
+      "description": "One exact candidate proposal with no discovery or lineage authority.",
+      "properties": {
+        "advisory_lineage_group": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._:/+-]{0,199}$",
+          "title": "Advisory Lineage Group",
+          "type": "string"
+        },
+        "allowed_provider_endpoints": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "title": "Allowed Provider Endpoints",
+          "type": "array"
+        },
+        "approved_roles": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 0,
+          "title": "Approved Roles",
+          "type": "array"
+        },
+        "availability": {
+          "const": "UNVERIFIED",
+          "title": "Availability",
+          "type": "string"
+        },
+        "documentary_lineage": {
+          "const": "UNCONFIRMED",
+          "title": "Documentary Lineage",
+          "type": "string"
+        },
+        "entry_authority": {
+          "const": false,
+          "title": "Entry Authority",
+          "type": "boolean"
+        },
+        "entry_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Entry Sha256",
+          "type": "string"
+        },
+        "exact_model_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+          "title": "Exact Model Id",
+          "type": "string"
+        },
+        "lineage_group_seed_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Lineage Group Seed Sha256",
+          "type": "string"
+        },
+        "priority_rank": {
+          "maximum": 128,
+          "minimum": 1,
+          "title": "Priority Rank",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "exact_model_id",
+        "priority_rank",
+        "advisory_lineage_group",
+        "lineage_group_seed_sha256",
+        "allowed_provider_endpoints",
+        "approved_roles",
+        "availability",
+        "documentary_lineage",
+        "entry_authority",
+        "entry_sha256"
+      ],
+      "title": "CandidateSelectionEntry",
+      "type": "object"
+    },
+    "CandidateSelectionPlan": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "else": {
+            "properties": {
+              "predecessor_plan_sha256": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "predecessor_plan_sha256"
+            ]
+          },
+          "if": {
+            "properties": {
+              "schema_version": {
+                "const": "1.4"
+              }
+            },
+            "required": [
+              "schema_version"
+            ]
+          },
+          "then": {
+            "not": {
+              "required": [
+                "predecessor_plan_sha256"
+              ]
+            }
+          }
+        },
+        {
+          "else": {
+            "not": {
+              "required": [
+                "endpoint_inventory_refresh"
+              ]
+            }
+          },
+          "if": {
+            "properties": {
+              "schema_version": {
+                "const": "1.6"
+              }
+            },
+            "required": [
+              "schema_version"
+            ]
+          },
+          "then": {
+            "properties": {
+              "endpoint_inventory_refresh": {
+                "not": {
+                  "type": "null"
+                }
+              }
+            },
+            "required": [
+              "endpoint_inventory_refresh"
+            ]
+          }
+        },
+        {
+          "else": {
+            "not": {
+              "required": [
+                "authenticated_runner_unavailability"
+              ]
+            }
+          },
+          "if": {
+            "properties": {
+              "schema_version": {
+                "const": "1.7"
+              }
+            },
+            "required": [
+              "schema_version"
+            ]
+          },
+          "then": {
+            "properties": {
+              "authenticated_runner_selection": {
+                "type": "null"
+              },
+              "authenticated_runner_unavailability": {
+                "not": {
+                  "type": "null"
+                }
+              }
+            },
+            "required": [
+              "authenticated_runner_unavailability"
+            ]
+          }
+        },
+        {
+          "else": {
+            "not": {
+              "required": [
+                "ancestry_transition_binding"
+              ]
+            }
+          },
+          "if": {
+            "properties": {
+              "schema_version": {
+                "const": "1.8"
+              }
+            },
+            "required": [
+              "schema_version"
+            ]
+          },
+          "then": {
+            "properties": {
+              "ancestry_transition_binding": {
+                "not": {
+                  "type": "null"
+                }
+              },
+              "authenticated_runner_selection": {
+                "properties": {
+                  "route_predicate_profile": {
+                    "properties": {
+                      "price_cap_algorithm": {
+                        "const": "MMAUDIT_OPENROUTER_MAX_PRICE_CEILING_V1"
+                      },
+                      "price_component_unit_envelopes": {
+                        "type": "null"
+                      },
+                      "schema_version": {
+                        "const": "1.0"
+                      }
+                    },
+                    "required": [
+                      "schema_version",
+                      "price_cap_algorithm"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "route_predicate_profile"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "authenticated_runner_selection",
+              "ancestry_transition_binding"
+            ]
+          }
+        },
+        {
+          "else": {
+            "not": {
+              "required": [
+                "ancestry_route_transition_binding"
+              ]
+            }
+          },
+          "if": {
+            "properties": {
+              "schema_version": {
+                "const": "1.9"
+              }
+            },
+            "required": [
+              "schema_version"
+            ]
+          },
+          "then": {
+            "properties": {
+              "ancestry_route_transition_binding": {
+                "not": {
+                  "type": "null"
+                }
+              },
+              "authenticated_runner_selection": {
+                "properties": {
+                  "route_predicate_profile": {
+                    "properties": {
+                      "price_cap_algorithm": {
+                        "const": "MMAUDIT_OPENROUTER_MAX_PRICE_CEILING_V1"
+                      },
+                      "price_component_unit_envelopes": {
+                        "type": "null"
+                      },
+                      "schema_version": {
+                        "const": "1.0"
+                      }
+                    },
+                    "required": [
+                      "schema_version",
+                      "price_cap_algorithm"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "route_predicate_profile"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "authenticated_runner_selection",
+              "ancestry_route_transition_binding"
+            ]
+          }
+        },
+        {
+          "else": {
+            "not": {
+              "required": [
+                "operator_cost_transition_binding"
+              ]
+            }
+          },
+          "if": {
+            "properties": {
+              "schema_version": {
+                "enum": [
+                  "1.10",
+                  "1.11"
+                ]
+              }
+            },
+            "required": [
+              "schema_version"
+            ]
+          },
+          "then": {
+            "properties": {
+              "authenticated_runner_selection": {
+                "properties": {
+                  "route_predicate_profile": {
+                    "properties": {
+                      "schema_version": {
+                        "const": "1.3"
+                      }
+                    }
+                  }
+                },
+                "type": "object"
+              },
+              "operator_cost_transition_binding": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "operator_cost_transition_binding",
+              "authenticated_runner_selection"
+            ]
+          }
+        },
+        {
+          "else": {
+            "properties": {
+              "authenticated_runner_selection": {
+                "properties": {
+                  "route_predicate_profile": {
+                    "not": {
+                      "required": [
+                        "operator_reservation_policy"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "if": {
+            "properties": {
+              "schema_version": {
+                "enum": [
+                  "1.10",
+                  "1.11",
+                  "1.12"
+                ]
+              }
+            },
+            "required": [
+              "schema_version"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "schema_version": {
+                "const": "1.10"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "authenticated_runner_selection": {
+                "properties": {
+                  "route_predicate_profile": {
+                    "properties": {
+                      "operator_reservation_policy": {
+                        "properties": {
+                          "schema_version": {
+                            "const": "1.0"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "operator_cost_transition_binding": {
+                "properties": {
+                  "schema_version": {
+                    "const": "1.0"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "schema_version": {
+                "const": "1.11"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "authenticated_runner_selection": {
+                "properties": {
+                  "route_predicate_profile": {
+                    "properties": {
+                      "operator_reservation_policy": {
+                        "properties": {
+                          "schema_version": {
+                            "const": "1.1"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "operator_cost_transition_binding": {
+                "properties": {
+                  "schema_version": {
+                    "const": "1.1"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "else": {
+            "not": {
+              "required": [
+                "operator_endpoint_trial_binding"
+              ]
+            }
+          },
+          "if": {
+            "properties": {
+              "schema_version": {
+                "const": "1.12"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "authenticated_runner_selection": {
+                "properties": {
+                  "route_predicate_profile": {
+                    "properties": {
+                      "schema_version": {
+                        "const": "1.3"
+                      }
+                    }
+                  }
+                },
+                "type": "object"
+              },
+              "operator_endpoint_trial_binding": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "operator_endpoint_trial_binding",
+              "authenticated_runner_selection"
+            ]
+          }
+        }
+      ],
+      "description": "Self-hashed operator-staged seed with only literal-false authority flags.",
+      "properties": {
+        "ancestry_route_transition_binding": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CandidateSelectionPlanRoleRouteTransitionBinding"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "ancestry_transition_binding": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CandidateSelectionPlanAncestryTransitionBinding"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "artifact_kind": {
+          "const": "OPERATOR_STAGED_MODEL_SELECTION",
+          "title": "Artifact Kind",
+          "type": "string"
+        },
+        "authenticated_runner_selection": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AuthenticatedRunnerSelection"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "authenticated_runner_unavailability": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CandidateSelectionUnavailableState"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "benchmark_authorized": {
+          "const": false,
+          "title": "Benchmark Authorized",
+          "type": "boolean"
+        },
+        "cached_ranking_payload_present": {
+          "const": false,
+          "title": "Cached Ranking Payload Present",
+          "type": "boolean"
+        },
+        "discovery_evidence_present": {
+          "const": false,
+          "title": "Discovery Evidence Present",
+          "type": "boolean"
+        },
+        "documentary_lineage_identity_authorized": {
+          "const": false,
+          "title": "Documentary Lineage Identity Authorized",
+          "type": "boolean"
+        },
+        "endpoint_inventory_refresh": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CandidateSelectionEndpointInventoryRefresh"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "entries": {
+          "items": {
+            "$ref": "#/$defs/CandidateSelectionEntry"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Entries",
+          "type": "array"
+        },
+        "objective_sha256": {
+          "const": "e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15",
+          "title": "Objective Sha256",
+          "type": "string"
+        },
+        "operator_cost_transition_binding": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CandidateSelectionPlanCostTransitionBinding"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "operator_endpoint_trial_binding": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CandidateSelectionPlanEndpointTrialBinding"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "plan_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Plan Sha256",
+          "type": "string"
+        },
+        "predecessor_plan_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Predecessor Plan Sha256"
+        },
+        "production_selection_authorized": {
+          "const": false,
+          "title": "Production Selection Authorized",
+          "type": "boolean"
+        },
+        "provider_call_authorized": {
+          "const": false,
+          "title": "Provider Call Authorized",
+          "type": "boolean"
+        },
+        "provider_metadata_present": {
+          "const": false,
+          "title": "Provider Metadata Present",
+          "type": "boolean"
+        },
+        "qualification_authorized": {
+          "const": false,
+          "title": "Qualification Authorized",
+          "type": "boolean"
+        },
+        "ranking_executed": {
+          "const": false,
+          "title": "Ranking Executed",
+          "type": "boolean"
+        },
+        "release_authorized": {
+          "const": false,
+          "title": "Release Authorized",
+          "type": "boolean"
+        },
+        "runner_authority_authorized": {
+          "const": false,
+          "title": "Runner Authority Authorized",
+          "type": "boolean"
+        },
+        "schema_version": {
+          "enum": [
+            "1.4",
+            "1.5",
+            "1.6",
+            "1.7",
+            "1.8",
+            "1.9",
+            "1.10",
+            "1.11",
+            "1.12"
+          ],
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "seal_publication_authorized": {
+          "const": false,
+          "title": "Seal Publication Authorized",
+          "type": "boolean"
+        },
+        "serialized_authority": {
+          "const": false,
+          "title": "Serialized Authority",
+          "type": "boolean"
+        },
+        "source_bindings": {
+          "items": {
+            "$ref": "#/$defs/CandidateSelectionSourceBinding"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "title": "Source Bindings",
+          "type": "array"
+        },
+        "source_egress_authorized": {
+          "const": false,
+          "title": "Source Egress Authorized",
+          "type": "boolean"
+        },
+        "status": {
+          "const": "NONAUTHORIZING",
+          "title": "Status",
+          "type": "string"
+        },
+        "unresolved_requirements": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 64,
+          "title": "Unresolved Requirements",
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema_version",
+        "artifact_kind",
+        "status",
+        "objective_sha256",
+        "source_bindings",
+        "entries",
+        "unresolved_requirements",
+        "ranking_executed",
+        "cached_ranking_payload_present",
+        "provider_metadata_present",
+        "discovery_evidence_present",
+        "documentary_lineage_identity_authorized",
+        "provider_call_authorized",
+        "source_egress_authorized",
+        "qualification_authorized",
+        "production_selection_authorized",
+        "runner_authority_authorized",
+        "benchmark_authorized",
+        "seal_publication_authorized",
+        "release_authorized",
+        "serialized_authority",
+        "plan_sha256"
+      ],
+      "title": "CandidateSelectionPlan",
+      "type": "object"
+    },
+    "CandidateSelectionPlanAncestryTransitionBinding": {
+      "additionalProperties": false,
+      "description": "Nonauthorizing durable binding for one capability-verified reactivation.",
+      "properties": {
+        "ancestry_evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Ancestry Evidence Sha256",
+          "type": "string"
+        },
+        "artifact_kind": {
+          "const": "REPOSITORY_PINNED_SELECTION_PLAN_ANCESTRY_TRANSITION",
+          "title": "Artifact Kind",
+          "type": "string"
+        },
+        "benchmark_authorized": {
+          "const": false,
+          "title": "Benchmark Authorized",
+          "type": "boolean"
+        },
+        "binding_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Binding Sha256",
+          "type": "string"
+        },
+        "endpoint_inventory_refresh_authorized": {
+          "const": false,
+          "title": "Endpoint Inventory Refresh Authorized",
+          "type": "boolean"
+        },
+        "matched_revocation_set_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Matched Revocation Set Sha256",
+          "type": "string"
+        },
+        "opaque_ancestry_capability_required": {
+          "const": true,
+          "title": "Opaque Ancestry Capability Required",
+          "type": "boolean"
+        },
+        "price_cap_profile_upgrade_authorized": {
+          "const": false,
+          "title": "Price Cap Profile Upgrade Authorized",
+          "type": "boolean"
+        },
+        "production_selection_authorized": {
+          "const": false,
+          "title": "Production Selection Authorized",
+          "type": "boolean"
+        },
+        "provider_call_authorized": {
+          "const": false,
+          "title": "Provider Call Authorized",
+          "type": "boolean"
+        },
+        "qualification_authorized": {
+          "const": false,
+          "title": "Qualification Authorized",
+          "type": "boolean"
+        },
+        "release_authorized": {
+          "const": false,
+          "title": "Release Authorized",
+          "type": "boolean"
+        },
+        "replacement_candidate_constraint_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Replacement Candidate Constraint Sha256",
+          "type": "string"
+        },
+        "replacement_candidate_model_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+          "title": "Replacement Candidate Model Id",
+          "type": "string"
+        },
+        "replacement_provider_endpoint": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$",
+          "title": "Replacement Provider Endpoint",
+          "type": "string"
+        },
+        "retained_judge_constraint_sha256s": {
+          "items": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "maxItems": 17,
+          "minItems": 2,
+          "title": "Retained Judge Constraint Sha256S",
+          "type": "array"
+        },
+        "retained_route_predicate_profile_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Retained Route Predicate Profile Sha256",
+          "type": "string"
+        },
+        "revocation_entry_sha256s": {
+          "items": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "title": "Revocation Entry Sha256S",
+          "type": "array"
+        },
+        "runner_authority_authorized": {
+          "const": false,
+          "title": "Runner Authority Authorized",
+          "type": "boolean"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "seal_publication_authorized": {
+          "const": false,
+          "title": "Seal Publication Authorized",
+          "type": "boolean"
+        },
+        "selected_ancestor_plan_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Selected Ancestor Plan Sha256",
+          "type": "string"
+        },
+        "selected_ancestor_raw_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Selected Ancestor Raw Sha256",
+          "type": "string"
+        },
+        "selected_ancestor_role_assignment_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Selected Ancestor Role Assignment Sha256",
+          "type": "string"
+        },
+        "serialized_authority": {
+          "const": false,
+          "title": "Serialized Authority",
+          "type": "boolean"
+        },
+        "source_egress_authorized": {
+          "const": false,
+          "title": "Source Egress Authorized",
+          "type": "boolean"
+        },
+        "unavailable_predecessor_plan_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Unavailable Predecessor Plan Sha256",
+          "type": "string"
+        },
+        "unavailable_predecessor_raw_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Unavailable Predecessor Raw Sha256",
+          "type": "string"
+        },
+        "unavailable_state_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Unavailable State Sha256",
+          "type": "string"
+        },
+        "withdrawn_candidate_constraint_sha256s": {
+          "items": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "title": "Withdrawn Candidate Constraint Sha256S",
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema_version",
+        "artifact_kind",
+        "selected_ancestor_raw_sha256",
+        "selected_ancestor_plan_sha256",
+        "unavailable_predecessor_raw_sha256",
+        "unavailable_predecessor_plan_sha256",
+        "unavailable_state_sha256",
+        "matched_revocation_set_sha256",
+        "ancestry_evidence_sha256",
+        "revocation_entry_sha256s",
+        "withdrawn_candidate_constraint_sha256s",
+        "selected_ancestor_role_assignment_sha256",
+        "retained_route_predicate_profile_sha256",
+        "retained_judge_constraint_sha256s",
+        "replacement_candidate_model_id",
+        "replacement_provider_endpoint",
+        "replacement_candidate_constraint_sha256",
+        "opaque_ancestry_capability_required",
+        "endpoint_inventory_refresh_authorized",
+        "price_cap_profile_upgrade_authorized",
+        "provider_call_authorized",
+        "source_egress_authorized",
+        "qualification_authorized",
+        "production_selection_authorized",
+        "runner_authority_authorized",
+        "benchmark_authorized",
+        "seal_publication_authorized",
+        "release_authorized",
+        "serialized_authority",
+        "binding_sha256"
+      ],
+      "title": "CandidateSelectionPlanAncestryTransitionBinding",
+      "type": "object"
+    },
+    "CandidateSelectionPlanCostTransitionBinding": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "schema_version": {
+                "const": "1.0"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "operator_decision_id": {
+                "const": "OP-COST-2026-09-09"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "schema_version": {
+                "const": "1.1"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "operator_decision_id": {
+                "const": "OP-COSTLEGACY-2026-09-11"
+              }
+            }
+          }
+        }
+      ],
+      "description": "Cost-only successor data; opaque ancestry replay supplies its authentication.",
+      "properties": {
+        "ancestry_evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Ancestry Evidence Sha256",
+          "type": "string"
+        },
+        "artifact_kind": {
+          "const": "REPOSITORY_PINNED_OPERATOR_COST_TRANSITION",
+          "default": "REPOSITORY_PINNED_OPERATOR_COST_TRANSITION",
+          "title": "Artifact Kind",
+          "type": "string"
+        },
+        "binding_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Binding Sha256",
+          "type": "string"
+        },
+        "operator_decision_id": {
+          "default": "OP-COST-2026-09-09",
+          "enum": [
+            "OP-COST-2026-09-09",
+            "OP-COSTLEGACY-2026-09-11"
+          ],
+          "title": "Operator Decision Id",
+          "type": "string"
+        },
+        "predecessor_constraints": {
+          "items": {
+            "$ref": "#/$defs/ExactRouteConstraint"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "title": "Predecessor Constraints",
+          "type": "array"
+        },
+        "predecessor_plan_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Predecessor Plan Sha256",
+          "type": "string"
+        },
+        "predecessor_profile_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Predecessor Profile Sha256",
+          "type": "string"
+        },
+        "predecessor_raw_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Predecessor Raw Sha256",
+          "type": "string"
+        },
+        "provider_call_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Provider Call Authorized",
+          "type": "boolean"
+        },
+        "replacement_constraints": {
+          "items": {
+            "$ref": "#/$defs/ExactRouteConstraint"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "title": "Replacement Constraints",
+          "type": "array"
+        },
+        "replacement_profile_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Replacement Profile Sha256",
+          "type": "string"
+        },
+        "reservation_policy_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Reservation Policy Sha256",
+          "type": "string"
+        },
+        "schema_version": {
+          "default": "1.0",
+          "enum": [
+            "1.0",
+            "1.1"
+          ],
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "security_requirements_relaxed": {
+          "const": false,
+          "default": false,
+          "title": "Security Requirements Relaxed",
+          "type": "boolean"
+        },
+        "serialized_authority": {
+          "const": false,
+          "default": false,
+          "title": "Serialized Authority",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "predecessor_raw_sha256",
+        "predecessor_plan_sha256",
+        "ancestry_evidence_sha256",
+        "predecessor_profile_sha256",
+        "replacement_profile_sha256",
+        "reservation_policy_sha256",
+        "predecessor_constraints",
+        "replacement_constraints",
+        "binding_sha256"
+      ],
+      "title": "CandidateSelectionPlanCostTransitionBinding",
+      "type": "object"
+    },
+    "CandidateSelectionPlanEndpointTrialBinding": {
+      "additionalProperties": false,
+      "description": "A single staged endpoint addition, never adoption or paid-run authority.",
+      "properties": {
+        "added_candidate_constraint": {
+          "$ref": "#/$defs/ExactRouteConstraint"
+        },
+        "artifact_kind": {
+          "const": "REPOSITORY_PINNED_CANDIDATE_ENDPOINT_TRIAL",
+          "default": "REPOSITORY_PINNED_CANDIDATE_ENDPOINT_TRIAL",
+          "title": "Artifact Kind",
+          "type": "string"
+        },
+        "binding_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Binding Sha256",
+          "type": "string"
+        },
+        "disposition": {
+          "const": "NONCREDITING_SMOKE_STAGING",
+          "default": "NONCREDITING_SMOKE_STAGING",
+          "title": "Disposition",
+          "type": "string"
+        },
+        "durable_runner_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Durable Runner Authorized",
+          "type": "boolean"
+        },
+        "operator_decision_id": {
+          "const": "OP-ENDPOINTTRIAL-2026-09-11",
+          "default": "OP-ENDPOINTTRIAL-2026-09-11",
+          "title": "Operator Decision Id",
+          "type": "string"
+        },
+        "plan_adoption_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Plan Adoption Authorized",
+          "type": "boolean"
+        },
+        "predecessor_plan_sha256": {
+          "const": "a868db571f4ced1cba9db7aa53d9a6b56b05c99bb465618d445ca940cd73313c",
+          "title": "Predecessor Plan Sha256",
+          "type": "string"
+        },
+        "predecessor_raw_sha256": {
+          "const": "7af8d0eeeade437767c965482c563dafa893ce76eee818333fd728daab7cdbb0",
+          "title": "Predecessor Raw Sha256",
+          "type": "string"
+        },
+        "provider_call_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Provider Call Authorized",
+          "type": "boolean"
+        },
+        "qualification_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Qualification Authorized",
+          "type": "boolean"
+        },
+        "retained_constraints": {
+          "items": {
+            "$ref": "#/$defs/ExactRouteConstraint"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "title": "Retained Constraints",
+          "type": "array"
+        },
+        "retained_profile_sha256": {
+          "const": "279f5050a7cd0dd3ce04f724d4987c239b740b7bfced1325e605e94537938a08",
+          "title": "Retained Profile Sha256",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "seal_publication_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Seal Publication Authorized",
+          "type": "boolean"
+        },
+        "serialized_authority": {
+          "const": false,
+          "default": false,
+          "title": "Serialized Authority",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "predecessor_raw_sha256",
+        "predecessor_plan_sha256",
+        "retained_profile_sha256",
+        "retained_constraints",
+        "added_candidate_constraint",
+        "binding_sha256"
+      ],
+      "title": "CandidateSelectionPlanEndpointTrialBinding",
+      "type": "object"
+    },
+    "CandidateSelectionPlanRoleRouteTransitionBinding": {
+      "additionalProperties": false,
+      "description": "Nonauthorizing three-role refresh from capability-verified unavailable ancestry.",
+      "properties": {
+        "ancestry_evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Ancestry Evidence Sha256",
+          "type": "string"
+        },
+        "artifact_kind": {
+          "const": "REPOSITORY_PINNED_SELECTION_PLAN_ROLE_ROUTE_TRANSITION",
+          "title": "Artifact Kind",
+          "type": "string"
+        },
+        "benchmark_authorized": {
+          "const": false,
+          "title": "Benchmark Authorized",
+          "type": "boolean"
+        },
+        "binding_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Binding Sha256",
+          "type": "string"
+        },
+        "constrained_discovery_required": {
+          "const": true,
+          "title": "Constrained Discovery Required",
+          "type": "boolean"
+        },
+        "endpoint_inventory_refresh_staged": {
+          "const": true,
+          "title": "Endpoint Inventory Refresh Staged",
+          "type": "boolean"
+        },
+        "matched_revocation_set_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Matched Revocation Set Sha256",
+          "type": "string"
+        },
+        "opaque_ancestry_capability_required": {
+          "const": true,
+          "title": "Opaque Ancestry Capability Required",
+          "type": "boolean"
+        },
+        "operator_decision_id": {
+          "const": "OP-COST-2026-09-09",
+          "title": "Operator Decision Id",
+          "type": "string"
+        },
+        "predecessor_judge_constraint_sha256s": {
+          "items": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "maxItems": 17,
+          "minItems": 2,
+          "title": "Predecessor Judge Constraint Sha256S",
+          "type": "array"
+        },
+        "price_cap_profile_decision": {
+          "const": "RETAIN_EXACT_PREDECESSOR_V1",
+          "title": "Price Cap Profile Decision",
+          "type": "string"
+        },
+        "price_cap_profile_upgrade_authorized": {
+          "const": false,
+          "title": "Price Cap Profile Upgrade Authorized",
+          "type": "boolean"
+        },
+        "production_selection_authorized": {
+          "const": false,
+          "title": "Production Selection Authorized",
+          "type": "boolean"
+        },
+        "provider_call_authorized": {
+          "const": false,
+          "title": "Provider Call Authorized",
+          "type": "boolean"
+        },
+        "qualification_authorized": {
+          "const": false,
+          "title": "Qualification Authorized",
+          "type": "boolean"
+        },
+        "release_authorized": {
+          "const": false,
+          "title": "Release Authorized",
+          "type": "boolean"
+        },
+        "retained_primary_judge_model_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+          "title": "Retained Primary Judge Model Id",
+          "type": "string"
+        },
+        "retained_replay_judge_model_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+          "title": "Retained Replay Judge Model Id",
+          "type": "string"
+        },
+        "retained_route_predicate_profile_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Retained Route Predicate Profile Sha256",
+          "type": "string"
+        },
+        "revocation_entry_sha256s": {
+          "items": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "title": "Revocation Entry Sha256S",
+          "type": "array"
+        },
+        "route_refreshes": {
+          "items": {
+            "$ref": "#/$defs/CandidateSelectionRoleRouteRefresh"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "title": "Route Refreshes",
+          "type": "array"
+        },
+        "runner_authority_authorized": {
+          "const": false,
+          "title": "Runner Authority Authorized",
+          "type": "boolean"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "seal_publication_authorized": {
+          "const": false,
+          "title": "Seal Publication Authorized",
+          "type": "boolean"
+        },
+        "selected_ancestor_plan_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Selected Ancestor Plan Sha256",
+          "type": "string"
+        },
+        "selected_ancestor_raw_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Selected Ancestor Raw Sha256",
+          "type": "string"
+        },
+        "selected_ancestor_role_assignment_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Selected Ancestor Role Assignment Sha256",
+          "type": "string"
+        },
+        "serialized_authority": {
+          "const": false,
+          "title": "Serialized Authority",
+          "type": "boolean"
+        },
+        "source_egress_authorized": {
+          "const": false,
+          "title": "Source Egress Authorized",
+          "type": "boolean"
+        },
+        "unavailable_predecessor_plan_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Unavailable Predecessor Plan Sha256",
+          "type": "string"
+        },
+        "unavailable_predecessor_raw_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Unavailable Predecessor Raw Sha256",
+          "type": "string"
+        },
+        "unavailable_state_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Unavailable State Sha256",
+          "type": "string"
+        },
+        "withdrawn_candidate_constraint_sha256s": {
+          "items": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "title": "Withdrawn Candidate Constraint Sha256S",
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema_version",
+        "artifact_kind",
+        "operator_decision_id",
+        "selected_ancestor_raw_sha256",
+        "selected_ancestor_plan_sha256",
+        "unavailable_predecessor_raw_sha256",
+        "unavailable_predecessor_plan_sha256",
+        "unavailable_state_sha256",
+        "matched_revocation_set_sha256",
+        "ancestry_evidence_sha256",
+        "revocation_entry_sha256s",
+        "withdrawn_candidate_constraint_sha256s",
+        "selected_ancestor_role_assignment_sha256",
+        "retained_route_predicate_profile_sha256",
+        "predecessor_judge_constraint_sha256s",
+        "retained_primary_judge_model_id",
+        "retained_replay_judge_model_id",
+        "route_refreshes",
+        "price_cap_profile_decision",
+        "opaque_ancestry_capability_required",
+        "endpoint_inventory_refresh_staged",
+        "constrained_discovery_required",
+        "price_cap_profile_upgrade_authorized",
+        "provider_call_authorized",
+        "source_egress_authorized",
+        "qualification_authorized",
+        "production_selection_authorized",
+        "runner_authority_authorized",
+        "benchmark_authorized",
+        "seal_publication_authorized",
+        "release_authorized",
+        "serialized_authority",
+        "binding_sha256"
+      ],
+      "title": "CandidateSelectionPlanRoleRouteTransitionBinding",
+      "type": "object"
+    },
+    "CandidateSelectionRoleRouteRefresh": {
+      "additionalProperties": false,
+      "description": "One role's unverified inventory change and exact replacement constraint.",
+      "properties": {
+        "inventory_refresh": {
+          "$ref": "#/$defs/CandidateSelectionEndpointInventoryRefresh"
+        },
+        "replacement_constraint": {
+          "$ref": "#/$defs/ExactRouteConstraint"
+        },
+        "role": {
+          "$ref": "#/$defs/ExactRouteRole"
+        }
+      },
+      "required": [
+        "role",
+        "inventory_refresh",
+        "replacement_constraint"
+      ],
+      "title": "CandidateSelectionRoleRouteRefresh",
+      "type": "object"
+    },
+    "CandidateSelectionSourceBinding": {
+      "additionalProperties": false,
+      "description": "Exact bytes for one operator-staged, explicitly unverified input.",
+      "properties": {
+        "authenticity": {
+          "const": "OPERATOR_STAGED_UNVERIFIED",
+          "title": "Authenticity",
+          "type": "string"
+        },
+        "byte_count": {
+          "maximum": 2000000,
+          "minimum": 1,
+          "title": "Byte Count",
+          "type": "integer"
+        },
+        "content_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Content Sha256",
+          "type": "string"
+        },
+        "filename": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$",
+          "title": "Filename",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "MODEL_RANKING_IMPLEMENTATION",
+            "OPERATOR_LINEAGE_REVIEW"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "source_binding_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Binding Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "filename",
+        "byte_count",
+        "content_sha256",
+        "authenticity",
+        "source_binding_sha256"
+      ],
+      "title": "CandidateSelectionSourceBinding",
+      "type": "object"
+    },
+    "CandidateSelectionUnavailableState": {
+      "additionalProperties": false,
+      "description": "Inactive judge custody after every predecessor candidate route was revoked.",
+      "properties": {
+        "candidate_selection_authorized": {
+          "const": false,
+          "title": "Candidate Selection Authorized",
+          "type": "boolean"
+        },
+        "disposition": {
+          "const": "NO_ACTIVE_CANDIDATE_AFTER_REVOCATION",
+          "title": "Disposition",
+          "type": "string"
+        },
+        "judge_route_constraints": {
+          "items": {
+            "$ref": "#/$defs/ExactRouteConstraint"
+          },
+          "maxItems": 17,
+          "minItems": 2,
+          "title": "Judge Route Constraints",
+          "type": "array"
+        },
+        "matched_revocation_set_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Matched Revocation Set Sha256",
+          "type": "string"
+        },
+        "predecessor_role_assignment_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Predecessor Role Assignment Sha256",
+          "type": "string"
+        },
+        "price_cap_profile_decision": {
+          "const": "PRESERVE_PREDECESSOR_V1_NO_V2_ADOPTION",
+          "title": "Price Cap Profile Decision",
+          "type": "string"
+        },
+        "primary_judge_model_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+          "title": "Primary Judge Model Id",
+          "type": "string"
+        },
+        "replay_judge_model_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+          "title": "Replay Judge Model Id",
+          "type": "string"
+        },
+        "revocation_entry_sha256s": {
+          "items": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "title": "Revocation Entry Sha256S",
+          "type": "array"
+        },
+        "route_predicate_profile": {
+          "$ref": "#/$defs/RoutePredicateProfile"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "state_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "State Sha256",
+          "type": "string"
+        },
+        "withdrawn_candidate_constraint_sha256s": {
+          "items": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "title": "Withdrawn Candidate Constraint Sha256S",
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema_version",
+        "disposition",
+        "price_cap_profile_decision",
+        "predecessor_role_assignment_sha256",
+        "matched_revocation_set_sha256",
+        "revocation_entry_sha256s",
+        "withdrawn_candidate_constraint_sha256s",
+        "primary_judge_model_id",
+        "replay_judge_model_id",
+        "route_predicate_profile",
+        "judge_route_constraints",
+        "candidate_selection_authorized",
+        "state_sha256"
+      ],
+      "title": "CandidateSelectionUnavailableState",
+      "type": "object"
+    },
+    "CostEntry": {
+      "description": "Validated, non-secret persisted state for one request.",
+      "properties": {
+        "accounted_cost_usd": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "title": "Accounted Cost Usd"
+        },
+        "actual_cost_usd": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Actual Cost Usd"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "release_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReleaseReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "request_id": {
+          "title": "Request Id",
+          "type": "string"
+        },
+        "reservation_id": {
+          "title": "Reservation Id",
+          "type": "string"
+        },
+        "reserved_usd": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "title": "Reserved Usd"
+        },
+        "status": {
+          "$ref": "#/$defs/CostEntryStatus"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "title": "Updated At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "request_id",
+        "reservation_id",
+        "status",
+        "reserved_usd",
+        "actual_cost_usd",
+        "accounted_cost_usd",
+        "release_reason",
+        "created_at",
+        "updated_at"
+      ],
+      "title": "CostEntry",
+      "type": "object"
+    },
+    "CostEntryStatus": {
+      "description": "Persisted lifecycle state for one unique provider request.",
+      "enum": [
+        "reserved",
+        "reconciled",
+        "released",
+        "uncertain_accounted",
+        "reservation_overrun"
+      ],
+      "title": "CostEntryStatus",
+      "type": "string"
+    },
+    "CostLedgerSnapshot": {
+      "description": "Immutable totals derived from validated entries.",
+      "properties": {
+        "active_reserved_usd": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "title": "Active Reserved Usd"
+        },
+        "cap_usd": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "title": "Cap Usd"
+        },
+        "entries": {
+          "items": {
+            "$ref": "#/$defs/CostEntry"
+          },
+          "title": "Entries",
+          "type": "array"
+        },
+        "has_reservation_overrun": {
+          "title": "Has Reservation Overrun",
+          "type": "boolean"
+        },
+        "held_portfolio_usd": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "default": "0",
+          "title": "Held Portfolio Usd"
+        },
+        "over_cap": {
+          "title": "Over Cap",
+          "type": "boolean"
+        },
+        "portfolio_holds": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/CostPortfolioHold"
+          },
+          "title": "Portfolio Holds",
+          "type": "array"
+        },
+        "remaining_usd": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "title": "Remaining Usd"
+        },
+        "spent_usd": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "title": "Spent Usd"
+        }
+      },
+      "required": [
+        "cap_usd",
+        "spent_usd",
+        "active_reserved_usd",
+        "remaining_usd",
+        "over_cap",
+        "has_reservation_overrun",
+        "entries"
+      ],
+      "title": "CostLedgerSnapshot",
+      "type": "object"
+    },
+    "CostPortfolioHold": {
+      "description": "Validated durable state for one exact all-request portfolio.",
+      "properties": {
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "plan_sha256": {
+          "title": "Plan Sha256",
+          "type": "string"
+        },
+        "reservation_id": {
+          "title": "Reservation Id",
+          "type": "string"
+        },
+        "slots": {
+          "items": {
+            "$ref": "#/$defs/CostPortfolioSlot"
+          },
+          "title": "Slots",
+          "type": "array"
+        },
+        "status": {
+          "$ref": "#/$defs/PortfolioHoldStatus"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "title": "Updated At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "plan_sha256",
+        "reservation_id",
+        "status",
+        "slots",
+        "created_at",
+        "updated_at"
+      ],
+      "title": "CostPortfolioHold",
+      "type": "object"
+    },
+    "CostPortfolioSlot": {
+      "description": "Validated persisted lifecycle for one held request slot.",
+      "properties": {
+        "maximum_cost_usd": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "title": "Maximum Cost Usd"
+        },
+        "request_id": {
+          "title": "Request Id",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/PortfolioSlotStatus"
+        }
+      },
+      "required": [
+        "request_id",
+        "maximum_cost_usd",
+        "status"
+      ],
+      "title": "CostPortfolioSlot",
+      "type": "object"
+    },
+    "ExactRouteConstraint": {
+      "additionalProperties": false,
+      "properties": {
+        "constraint_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Constraint Sha256",
+          "type": "string"
+        },
+        "exact_model_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+          "title": "Exact Model Id",
+          "type": "string"
+        },
+        "profile_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Profile Sha256",
+          "type": "string"
+        },
+        "provider_endpoint": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$",
+          "title": "Provider Endpoint",
+          "type": "string"
+        },
+        "role": {
+          "$ref": "#/$defs/ExactRouteRole"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "role",
+        "exact_model_id",
+        "provider_endpoint",
+        "profile_sha256",
+        "constraint_sha256"
+      ],
+      "title": "ExactRouteConstraint",
+      "type": "object"
+    },
+    "ExactRouteRole": {
+      "enum": [
+        "candidate",
+        "primary_judge",
+        "replay_judge"
+      ],
+      "title": "ExactRouteRole",
+      "type": "string"
+    },
+    "LegacyUncertainCostAllowance": {
+      "additionalProperties": false,
+      "description": "Explicit operator relaxation for two exact rows, with no general carry mechanism.",
+      "properties": {
+        "allowance_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Allowance Sha256",
+          "type": "string"
+        },
+        "entries": {
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "$ref": "#/$defs/LegacyUncertainCostEntry"
+            },
+            {
+              "$ref": "#/$defs/LegacyUncertainCostEntry"
+            }
+          ],
+          "title": "Entries",
+          "type": "array"
+        },
+        "operator_decision_id": {
+          "const": "OP-COSTLEGACY-2026-09-11",
+          "default": "OP-COSTLEGACY-2026-09-11",
+          "title": "Operator Decision Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "entries",
+        "allowance_sha256"
+      ],
+      "title": "LegacyUncertainCostAllowance",
+      "type": "object"
+    },
+    "LegacyUncertainCostEntry": {
+      "additionalProperties": false,
+      "description": "Bind every immutable identity and retained liability field of one approved row.",
+      "properties": {
+        "accounted_cost_usd_exact": {
+          "enum": [
+            "0.18105",
+            "0.05225616"
+          ],
+          "title": "Accounted Cost Usd Exact",
+          "type": "string"
+        },
+        "actual_cost_usd": {
+          "default": null,
+          "title": "Actual Cost Usd",
+          "type": "null"
+        },
+        "created_at": {
+          "maxLength": 32,
+          "minLength": 25,
+          "title": "Created At",
+          "type": "string"
+        },
+        "release_reason": {
+          "default": null,
+          "title": "Release Reason",
+          "type": "null"
+        },
+        "request_id": {
+          "pattern": "^authrunner\\.smoke\\.(?:r17\\.judge\\.replay|r2\\.candidate\\.primary):[0-9a-f]{64}$",
+          "title": "Request Id",
+          "type": "string"
+        },
+        "reservation_id": {
+          "pattern": "^[0-9a-f]{32}$",
+          "title": "Reservation Id",
+          "type": "string"
+        },
+        "reserved_usd_exact": {
+          "enum": [
+            "0.18105",
+            "0.05225616"
+          ],
+          "title": "Reserved Usd Exact",
+          "type": "string"
+        },
+        "status": {
+          "const": "uncertain_accounted",
+          "default": "uncertain_accounted",
+          "title": "Status",
+          "type": "string"
+        },
+        "updated_at": {
+          "maxLength": 32,
+          "minLength": 25,
+          "title": "Updated At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "request_id",
+        "reservation_id",
+        "created_at",
+        "updated_at",
+        "reserved_usd_exact",
+        "accounted_cost_usd_exact"
+      ],
+      "title": "LegacyUncertainCostEntry",
+      "type": "object"
+    },
+    "PopulationDisposition": {
+      "enum": [
+        "OPEN",
+        "CONSUMED",
+        "FAILED",
+        "CANCELLED"
+      ],
+      "type": "string"
+    },
+    "PopulationEventKind": {
+      "enum": [
+        "REGISTERED",
+        "PREFLIGHT_PASSED",
+        "PREFLIGHT_REFUSED",
+        "RUNNER_STARTED",
+        "RUNNER_RETAINED",
+        "FINISHED"
+      ],
+      "type": "string"
+    },
+    "PortfolioHoldStatus": {
+      "description": "Persisted lifecycle state for one bounded all-request hold.",
+      "enum": [
+        "active",
+        "released"
+      ],
+      "title": "PortfolioHoldStatus",
+      "type": "string"
+    },
+    "PortfolioSlotStatus": {
+      "description": "Persisted lifecycle state for one exact request slot in a portfolio.",
+      "enum": [
+        "held",
+        "claimed",
+        "released"
+      ],
+      "title": "PortfolioSlotStatus",
+      "type": "string"
+    },
+    "ProviderPriceCapAlgorithm": {
+      "enum": [
+        "MMAUDIT_OPENROUTER_MAX_PRICE_CEILING_V1",
+        "MMAUDIT_OPENROUTER_MAX_PRICE_REQUEST_UNITS_V2",
+        "MMAUDIT_OPENROUTER_MAX_PRICE_PROMPT_DOMINATED_CACHE_WRITE_V3"
+      ],
+      "title": "ProviderPriceCapAlgorithm",
+      "type": "string"
+    },
+    "ReleaseReason": {
+      "description": "Closed release reasons that cannot carry arbitrary or secret text.",
+      "enum": [
+        "cancelled_before_send",
+        "failed_before_send"
+      ],
+      "title": "ReleaseReason",
+      "type": "string"
+    },
+    "RouteCostReservationPolicy": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "schema_version": {
+                "const": "1.0"
+              }
+            }
+          },
+          "then": {
+            "not": {
+              "required": [
+                "legacy_uncertain_allowance"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "schema_version": {
+                "const": "1.1"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "legacy_uncertain_allowance": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "legacy_uncertain_allowance"
+            ]
+          }
+        }
+      ],
+      "description": "An explicit cost-only relaxation, never inferred from endpoint metadata.",
+      "properties": {
+        "automatic_ceiling_increase": {
+          "const": false,
+          "default": false,
+          "title": "Automatic Ceiling Increase",
+          "type": "boolean"
+        },
+        "enforcement_basis": {
+          "const": "MMAUDIT_OPERATOR_RESERVE_THEN_RECONCILE_V1",
+          "default": "MMAUDIT_OPERATOR_RESERVE_THEN_RECONCILE_V1",
+          "title": "Enforcement Basis",
+          "type": "string"
+        },
+        "ledger_ceiling_usd_exact": {
+          "default": "250",
+          "maxLength": 49,
+          "pattern": "^(?:0|[1-9][0-9]{0,11})(?:\\.[0-9]{0,35}[1-9])?$",
+          "title": "Ledger Ceiling Usd Exact",
+          "type": "string"
+        },
+        "legacy_uncertain_allowance": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LegacyUncertainCostAllowance"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "maximum_request_bytes": {
+          "default": 4000000,
+          "maximum": 64000000,
+          "minimum": 1024,
+          "title": "Maximum Request Bytes",
+          "type": "integer"
+        },
+        "operator_decision_id": {
+          "const": "OP-COST-2026-09-09",
+          "default": "OP-COST-2026-09-09",
+          "title": "Operator Decision Id",
+          "type": "string"
+        },
+        "policy_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Policy Sha256",
+          "type": "string"
+        },
+        "provider_enforced_total_ceiling": {
+          "const": false,
+          "default": false,
+          "title": "Provider Enforced Total Ceiling",
+          "type": "boolean"
+        },
+        "require_actual_billed_cost": {
+          "const": true,
+          "default": true,
+          "title": "Require Actual Billed Cost",
+          "type": "boolean"
+        },
+        "reservation_overrun_blocks_new_work": {
+          "const": true,
+          "default": true,
+          "title": "Reservation Overrun Blocks New Work",
+          "type": "boolean"
+        },
+        "schema_version": {
+          "default": "1.0",
+          "enum": [
+            "1.0",
+            "1.1"
+          ],
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "uncappable_rate_multiplier": {
+          "const": "2",
+          "default": "2",
+          "title": "Uncappable Rate Multiplier",
+          "type": "string"
+        },
+        "unknown_billing_blocks_new_work": {
+          "const": true,
+          "default": true,
+          "title": "Unknown Billing Blocks New Work",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "policy_sha256"
+      ],
+      "title": "RouteCostReservationPolicy",
+      "type": "object"
+    },
+    "RoutePredicateDisposition": {
+      "enum": [
+        "SATISFIED",
+        "REJECTED",
+        "UNAVAILABLE"
+      ],
+      "title": "RoutePredicateDisposition",
+      "type": "string"
+    },
+    "RoutePredicateId": {
+      "description": "The complete, ordered route-admission predicate inventory.",
+      "enum": [
+        "EXACT_MODEL_IDENTITY",
+        "EXACT_PROVIDER_ENDPOINT",
+        "PROVIDER_DISPLAY_NAME_INJECTIVITY",
+        "OPERATIONAL_STATUS",
+        "ZDR_ELIGIBILITY",
+        "EMITS_MAX_TOKENS",
+        "EMITS_TEMPERATURE",
+        "EMITS_RESPONSE_FORMAT",
+        "EMITS_REASONING",
+        "MODEL_STRUCTURED_OUTPUT_MARKER",
+        "ENDPOINT_STRUCTURED_OUTPUT_MARKER",
+        "NATIVE_STRUCTURED_OUTPUT_MODE",
+        "SINGLETON_EXACT_ROUTE",
+        "AUTOMATIC_FALLBACK_DISABLED",
+        "REASONING_POLICY_BINDING",
+        "REASONING_CONTROL_BINDING",
+        "REASONING_CONTROL_VALUES",
+        "REASONING_EFFORT_SUPPORT",
+        "PROMPT_CAPACITY_ENVELOPE",
+        "OUTPUT_CAPACITY_ENVELOPE",
+        "CONTEXT_CAPACITY_ENVELOPE",
+        "METADATA_COMPLETION_CAPACITY",
+        "PRICE_CAP_EXPRESSIBILITY",
+        "PRICE_CAP_NO_WEAKER",
+        "FROZEN_LIVE_EQUIVALENCE",
+        "REGISTRY_SELECTION_HASH_CUSTODY",
+        "REGISTRY_CONSTRAINT_HASH_CUSTODY",
+        "EMPIRICAL_SCHEMA_CONFORMANCE",
+        "TOKEN_DETAIL_REPORTING_CONVENTION",
+        "RESERVATION_PRICING_AVAILABLE",
+        "PROVIDER_CAPPED_SUBSET_BOUND"
+      ],
+      "title": "RoutePredicateId",
+      "type": "string"
+    },
+    "RoutePredicateProfile": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "else": {
+            "not": {
+              "required": [
+                "operator_reservation_policy"
+              ]
+            },
+            "properties": {
+              "predicate_ids": {
+                "prefixItems": [
+                  {
+                    "const": "EXACT_MODEL_IDENTITY"
+                  },
+                  {
+                    "const": "EXACT_PROVIDER_ENDPOINT"
+                  },
+                  {
+                    "const": "PROVIDER_DISPLAY_NAME_INJECTIVITY"
+                  },
+                  {
+                    "const": "OPERATIONAL_STATUS"
+                  },
+                  {
+                    "const": "ZDR_ELIGIBILITY"
+                  },
+                  {
+                    "const": "EMITS_MAX_TOKENS"
+                  },
+                  {
+                    "const": "EMITS_TEMPERATURE"
+                  },
+                  {
+                    "const": "EMITS_RESPONSE_FORMAT"
+                  },
+                  {
+                    "const": "EMITS_REASONING"
+                  },
+                  {
+                    "const": "MODEL_STRUCTURED_OUTPUT_MARKER"
+                  },
+                  {
+                    "const": "ENDPOINT_STRUCTURED_OUTPUT_MARKER"
+                  },
+                  {
+                    "const": "NATIVE_STRUCTURED_OUTPUT_MODE"
+                  },
+                  {
+                    "const": "SINGLETON_EXACT_ROUTE"
+                  },
+                  {
+                    "const": "AUTOMATIC_FALLBACK_DISABLED"
+                  },
+                  {
+                    "const": "REASONING_POLICY_BINDING"
+                  },
+                  {
+                    "const": "REASONING_CONTROL_BINDING"
+                  },
+                  {
+                    "const": "REASONING_CONTROL_VALUES"
+                  },
+                  {
+                    "const": "REASONING_EFFORT_SUPPORT"
+                  },
+                  {
+                    "const": "PROMPT_CAPACITY_ENVELOPE"
+                  },
+                  {
+                    "const": "OUTPUT_CAPACITY_ENVELOPE"
+                  },
+                  {
+                    "const": "CONTEXT_CAPACITY_ENVELOPE"
+                  },
+                  {
+                    "const": "METADATA_COMPLETION_CAPACITY"
+                  },
+                  {
+                    "const": "PRICE_CAP_EXPRESSIBILITY"
+                  },
+                  {
+                    "const": "PRICE_CAP_NO_WEAKER"
+                  },
+                  {
+                    "const": "FROZEN_LIVE_EQUIVALENCE"
+                  },
+                  {
+                    "const": "REGISTRY_SELECTION_HASH_CUSTODY"
+                  },
+                  {
+                    "const": "REGISTRY_CONSTRAINT_HASH_CUSTODY"
+                  },
+                  {
+                    "const": "EMPIRICAL_SCHEMA_CONFORMANCE"
+                  },
+                  {
+                    "const": "TOKEN_DETAIL_REPORTING_CONVENTION"
+                  }
+                ]
+              }
+            }
+          },
+          "if": {
+            "properties": {
+              "schema_version": {
+                "const": "1.3"
+              }
+            },
+            "required": [
+              "schema_version"
+            ]
+          },
+          "then": {
+            "not": {
+              "required": [
+                "price_component_unit_envelopes"
+              ]
+            },
+            "properties": {
+              "operator_reservation_policy": {
+                "type": "object"
+              },
+              "predicate_ids": {
+                "prefixItems": [
+                  {
+                    "const": "EXACT_MODEL_IDENTITY"
+                  },
+                  {
+                    "const": "EXACT_PROVIDER_ENDPOINT"
+                  },
+                  {
+                    "const": "PROVIDER_DISPLAY_NAME_INJECTIVITY"
+                  },
+                  {
+                    "const": "OPERATIONAL_STATUS"
+                  },
+                  {
+                    "const": "ZDR_ELIGIBILITY"
+                  },
+                  {
+                    "const": "EMITS_MAX_TOKENS"
+                  },
+                  {
+                    "const": "EMITS_TEMPERATURE"
+                  },
+                  {
+                    "const": "EMITS_RESPONSE_FORMAT"
+                  },
+                  {
+                    "const": "EMITS_REASONING"
+                  },
+                  {
+                    "const": "MODEL_STRUCTURED_OUTPUT_MARKER"
+                  },
+                  {
+                    "const": "ENDPOINT_STRUCTURED_OUTPUT_MARKER"
+                  },
+                  {
+                    "const": "NATIVE_STRUCTURED_OUTPUT_MODE"
+                  },
+                  {
+                    "const": "SINGLETON_EXACT_ROUTE"
+                  },
+                  {
+                    "const": "AUTOMATIC_FALLBACK_DISABLED"
+                  },
+                  {
+                    "const": "REASONING_POLICY_BINDING"
+                  },
+                  {
+                    "const": "REASONING_CONTROL_BINDING"
+                  },
+                  {
+                    "const": "REASONING_CONTROL_VALUES"
+                  },
+                  {
+                    "const": "REASONING_EFFORT_SUPPORT"
+                  },
+                  {
+                    "const": "PROMPT_CAPACITY_ENVELOPE"
+                  },
+                  {
+                    "const": "OUTPUT_CAPACITY_ENVELOPE"
+                  },
+                  {
+                    "const": "CONTEXT_CAPACITY_ENVELOPE"
+                  },
+                  {
+                    "const": "METADATA_COMPLETION_CAPACITY"
+                  },
+                  {
+                    "const": "RESERVATION_PRICING_AVAILABLE"
+                  },
+                  {
+                    "const": "PROVIDER_CAPPED_SUBSET_BOUND"
+                  },
+                  {
+                    "const": "FROZEN_LIVE_EQUIVALENCE"
+                  },
+                  {
+                    "const": "REGISTRY_SELECTION_HASH_CUSTODY"
+                  },
+                  {
+                    "const": "REGISTRY_CONSTRAINT_HASH_CUSTODY"
+                  },
+                  {
+                    "const": "EMPIRICAL_SCHEMA_CONFORMANCE"
+                  },
+                  {
+                    "const": "TOKEN_DETAIL_REPORTING_CONVENTION"
+                  }
+                ]
+              },
+              "price_cap_algorithm": {
+                "const": "MMAUDIT_OPENROUTER_MAX_PRICE_CEILING_V1"
+              }
+            },
+            "required": [
+              "operator_reservation_policy"
+            ]
+          }
+        }
+      ],
+      "description": "Shared requirements for every exact AUTHRUNNER route.",
+      "properties": {
+        "accepted_operational_status": {
+          "const": "0",
+          "title": "Accepted Operational Status",
+          "type": "string"
+        },
+        "allow_automatic_fallbacks": {
+          "const": false,
+          "title": "Allow Automatic Fallbacks",
+          "type": "boolean"
+        },
+        "emitted_request_parameters": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 4,
+          "minItems": 4,
+          "title": "Emitted Request Parameters",
+          "type": "array"
+        },
+        "empirical_schema_conformance_disposition": {
+          "$ref": "#/$defs/RoutePredicateDisposition"
+        },
+        "minimum_context_tokens": {
+          "exclusiveMinimum": 0,
+          "maximum": 2147483647,
+          "title": "Minimum Context Tokens",
+          "type": "integer"
+        },
+        "minimum_prompt_tokens": {
+          "exclusiveMinimum": 0,
+          "maximum": 2147483647,
+          "title": "Minimum Prompt Tokens",
+          "type": "integer"
+        },
+        "native_capability_marker": {
+          "const": "structured_outputs",
+          "title": "Native Capability Marker",
+          "type": "string"
+        },
+        "operator_reservation_policy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RouteCostReservationPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "predicate_ids": {
+          "items": {
+            "$ref": "#/$defs/RoutePredicateId"
+          },
+          "maxItems": 29,
+          "minItems": 29,
+          "title": "Predicate Ids",
+          "type": "array"
+        },
+        "price_cap_algorithm": {
+          "$ref": "#/$defs/ProviderPriceCapAlgorithm"
+        },
+        "price_component_unit_envelopes": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/RoutePriceComponentUnitEnvelope"
+              },
+              "maxItems": 8,
+              "minItems": 1,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Price Component Unit Envelopes"
+        },
+        "profile_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Profile Sha256",
+          "type": "string"
+        },
+        "reasoning_control_profile_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Reasoning Control Profile Sha256",
+          "type": "string"
+        },
+        "reasoning_effort": {
+          "anyOf": [
+            {
+              "enum": [
+                "none",
+                "minimal",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Reasoning Effort"
+        },
+        "reasoning_exclude": {
+          "title": "Reasoning Exclude",
+          "type": "boolean"
+        },
+        "reasoning_max_tokens": {
+          "anyOf": [
+            {
+              "maximum": 65536,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reasoning Max Tokens"
+        },
+        "reasoning_mode": {
+          "enum": [
+            "disabled",
+            "default",
+            "effort",
+            "max_tokens"
+          ],
+          "title": "Reasoning Mode",
+          "type": "string"
+        },
+        "reasoning_policy_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Reasoning Policy Sha256",
+          "type": "string"
+        },
+        "reasoning_role_binding_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Reasoning Role Binding Sha256",
+          "type": "string"
+        },
+        "reasoning_role_profile_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Reasoning Role Profile Sha256",
+          "type": "string"
+        },
+        "require_singleton_route": {
+          "const": true,
+          "title": "Require Singleton Route",
+          "type": "boolean"
+        },
+        "require_zdr": {
+          "const": true,
+          "title": "Require Zdr",
+          "type": "boolean"
+        },
+        "required_completion_limit_source": {
+          "const": "metadata",
+          "title": "Required Completion Limit Source",
+          "type": "string"
+        },
+        "required_completion_tokens": {
+          "exclusiveMinimum": 0,
+          "maximum": 131072,
+          "title": "Required Completion Tokens",
+          "type": "integer"
+        },
+        "required_output_mode": {
+          "const": "NATIVE_JSON_SCHEMA",
+          "title": "Required Output Mode",
+          "type": "string"
+        },
+        "required_output_tokens": {
+          "exclusiveMinimum": 0,
+          "maximum": 65536,
+          "title": "Required Output Tokens",
+          "type": "integer"
+        },
+        "reserved_reasoning_tokens": {
+          "exclusiveMinimum": 0,
+          "maximum": 65536,
+          "title": "Reserved Reasoning Tokens",
+          "type": "integer"
+        },
+        "schema_version": {
+          "default": "1.0",
+          "enum": [
+            "1.0",
+            "1.1",
+            "1.2",
+            "1.3"
+          ],
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "token_detail_convention_disposition": {
+          "$ref": "#/$defs/RoutePredicateDisposition"
+        }
+      },
+      "required": [
+        "predicate_ids",
+        "emitted_request_parameters",
+        "native_capability_marker",
+        "required_output_mode",
+        "accepted_operational_status",
+        "require_zdr",
+        "require_singleton_route",
+        "allow_automatic_fallbacks",
+        "reasoning_policy_sha256",
+        "reasoning_role_profile_sha256",
+        "reasoning_role_binding_sha256",
+        "reasoning_control_profile_sha256",
+        "reasoning_mode",
+        "reasoning_effort",
+        "reasoning_exclude",
+        "reserved_reasoning_tokens",
+        "minimum_prompt_tokens",
+        "required_output_tokens",
+        "required_completion_tokens",
+        "minimum_context_tokens",
+        "required_completion_limit_source",
+        "price_cap_algorithm",
+        "empirical_schema_conformance_disposition",
+        "token_detail_convention_disposition",
+        "profile_sha256"
+      ],
+      "title": "RoutePredicateProfile",
+      "type": "object"
+    },
+    "RoutePriceComponentUnitEnvelope": {
+      "additionalProperties": false,
+      "description": "Self-hashed proof that one unsupported price component has zero reachable units.",
+      "properties": {
+        "component": {
+          "const": "web_search",
+          "title": "Component",
+          "type": "string"
+        },
+        "emitted_request_parameters": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 4,
+          "minItems": 4,
+          "title": "Emitted Request Parameters",
+          "type": "array"
+        },
+        "enforcement_method": {
+          "const": "MMAUDIT_EXACT_REQUEST_FIELD_ABSENCE_V1",
+          "title": "Enforcement Method",
+          "type": "string"
+        },
+        "envelope_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Envelope Sha256",
+          "type": "string"
+        },
+        "maximum_cost_usd_exact": {
+          "const": "0",
+          "title": "Maximum Cost Usd Exact",
+          "type": "string"
+        },
+        "maximum_units": {
+          "const": 0,
+          "title": "Maximum Units",
+          "type": "integer"
+        },
+        "prohibited_request_fields": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 5,
+          "minItems": 5,
+          "title": "Prohibited Request Fields",
+          "type": "array"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "component",
+        "maximum_units",
+        "maximum_cost_usd_exact",
+        "enforcement_method",
+        "emitted_request_parameters",
+        "prohibited_request_fields",
+        "envelope_sha256"
+      ],
+      "title": "RoutePriceComponentUnitEnvelope",
+      "type": "object"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/calibration_population_event.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Complete nonauthorizing state after one exact append-only transition.",
+  "properties": {
+    "disposition": {
+      "$ref": "#/$defs/PopulationDisposition"
+    },
+    "event_index": {
+      "exclusiveMaximum": 194,
+      "minimum": 0,
+      "title": "Event Index",
+      "type": "integer"
+    },
+    "event_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Event Sha256",
+      "type": "string"
+    },
+    "external_population_seal_required": {
+      "const": true,
+      "default": true,
+      "title": "External Population Seal Required",
+      "type": "boolean"
+    },
+    "kind": {
+      "$ref": "#/$defs/PopulationEventKind"
+    },
+    "ledger_identity_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Ledger Identity Sha256",
+      "type": "string"
+    },
+    "ledger_snapshot": {
+      "$ref": "#/$defs/CostLedgerSnapshot"
+    },
+    "model_qualification_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Model Qualification Authorized",
+      "type": "boolean"
+    },
+    "previous_event_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Previous Event Sha256"
+    },
+    "provider_call_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Provider Call Authorized",
+      "type": "boolean"
+    },
+    "recorded_at": {
+      "format": "date-time",
+      "title": "Recorded At",
+      "type": "string"
+    },
+    "release_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Release Authorized",
+      "type": "boolean"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "selection_plan": {
+      "$ref": "#/$defs/CandidateSelectionPlan"
+    },
+    "serialized_authority": {
+      "const": false,
+      "default": false,
+      "title": "Serialized Authority",
+      "type": "boolean"
+    },
+    "slot_index": {
+      "anyOf": [
+        {
+          "exclusiveMaximum": 64,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Slot Index"
+    },
+    "slots": {
+      "items": {
+        "$ref": "#/$defs/CalibrationPopulationSlot"
+      },
+      "maxItems": 64,
+      "minItems": 1,
+      "title": "Slots",
+      "type": "array"
+    }
+  },
+  "required": [
+    "event_index",
+    "recorded_at",
+    "kind",
+    "slot_index",
+    "previous_event_sha256",
+    "selection_plan",
+    "slots",
+    "ledger_snapshot",
+    "ledger_identity_sha256",
+    "disposition",
+    "event_sha256"
+  ],
+  "title": "CalibrationPopulationEvent",
+  "type": "object"
+}

@@ -38,7 +38,7 @@ mmaudit-hardhat-loopback = "mmaudit.isolation.hardhat_loopback_relay:main"
 packages = ["src/mmaudit"]
 
 [tool.pytest.ini_options]
-addopts = "-ra"
+addopts = "-ra --import-mode=importlib"
 asyncio_mode = "auto"
 testpaths = ["tests"]
 markers = [

@@ -6,7 +6,7 @@ import threading
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass, replace
-from datetime import datetime, tzinfo
+from datetime import UTC, datetime, tzinfo
 from decimal import Decimal, localcontext
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -17,7 +17,10 @@ import pytest
 import mmaudit.models.openrouter as openrouter_module
 import mmaudit.models.schemas as schemas_module
 import mmaudit.orchestration.pipeline as pipeline_module
-from mmaudit.models.endpoint_snapshots import validate_openrouter_endpoint_snapshot
+from mmaudit.models.endpoint_snapshots import (
+    OpenRouterConstrainedRouteContext,
+    validate_openrouter_endpoint_snapshot,
+)
 from mmaudit.models.openrouter import (
     OpenRouterClient,
     OpenRouterCostControlError,
@@ -34,7 +37,13 @@ from mmaudit.models.refresh_runtime import (
     AuditModelRefreshRouteEvidence,
     VerifiedAuditModelRefreshPricingAuthority,
 )
-from mmaudit.models.route_constraints import ExactRoutePricingSchedule, RoutePredicateProfile
+from mmaudit.models.route_constraints import (
+    ExactRouteConstraint,
+    ExactRoutePricingSchedule,
+    ExactRouteRole,
+    RouteCostReservationPolicy,
+    RoutePredicateProfile,
+)
 from mmaudit.models.schemas import (
     AuditModelRefreshPricingAttemptEvidence,
     ExecutionEvidenceKind,
@@ -307,14 +316,18 @@ def _build_harness(
     store_raw_prompts: bool = False,
     per_role_usd_caps: dict[str, str] | None = None,
     route_predicate_profile: RoutePredicateProfile | None = None,
+    operator_reservation: bool = False,
+    force_real_boundary: bool = True,
 ) -> _Harness:
     runtime = synthetic_refresh_runtime(
         tmp_path / "refresh-runtime",
         qualified_pricing=qualified_pricing,
         current_pricing=current_pricing,
+        native_high_reasoning=operator_reservation,
     )
     _ControlledDateTime.current = runtime.verified_at
     monkeypatch.setattr(openrouter_module, "datetime", _ControlledDateTime)
+    monkeypatch.setattr(pipeline_module, "datetime", _ControlledDateTime)
     technical = runtime.technical_qualification
     selection = runtime.audit_selection_evidence.selection
     model = runtime.audit_selection.models[0].exact_model_id
@@ -384,13 +397,31 @@ def _build_harness(
         ),
         effective_privacy_policy=privacy,
     )
+    if operator_reservation:
+        assert route_predicate_profile is None
+        reasoning = _reasoning_policy(technical, model)
+        role = reasoning.role_policy_for_request("source_audit")
+        route_predicate_profile = RoutePredicateProfile.build(
+            reasoning_policy_sha256=reasoning.artifact_sha256,
+            reasoning_role_profile_sha256=reasoning.role_profile.profile_sha256,
+            reasoning_role_binding_sha256=role.binding_sha256,
+            reasoning_control_profile_sha256=role.control.profile_sha256,
+            reserved_reasoning_tokens=4096,
+            minimum_prompt_tokens=65536,
+            required_output_tokens=4096,
+            minimum_context_tokens=73728,
+            operator_reservation_policy=RouteCostReservationPolicy.build(
+                ledger_ceiling_usd_exact=format(Decimal(str(config.execution.budget_usd)), ".0f")
+            ),
+        )
     _register_current_refresh_endpoint(
         client,
         runtime,
         model,
         route_predicate_profile=route_predicate_profile,
     )
-    _force_real_refresh_boundary(monkeypatch, client)
+    if force_real_boundary:
+        _force_real_refresh_boundary(monkeypatch, client)
     return _Harness(
         client=client,
         ledger=ledger,
@@ -437,9 +468,34 @@ def _register_current_refresh_endpoint(
         endpoint["tag"] = live.endpoint_tag
     if live.endpoint_slug is not None:
         endpoint["slug"] = live.endpoint_slug
+    context: OpenRouterConstrainedRouteContext | None = None
+    if (
+        route_predicate_profile is not None
+        and route_predicate_profile.operator_reservation_policy is not None
+    ):
+        endpoint["reasoning"] = {"supported_efforts": ["high"]}
+        context = OpenRouterConstrainedRouteContext(
+            route_predicate_profile=route_predicate_profile,
+            exact_route_constraint=ExactRouteConstraint.build(
+                role=ExactRouteRole.CANDIDATE,
+                exact_model_id=model,
+                provider_endpoint=live.provider_endpoint,
+                profile=route_predicate_profile,
+            ),
+            expected_selection_plan_sha256="1" * 64,
+            reasoning_policy=_reasoning_policy(runtime.technical_qualification, model),
+            reasoning_request_role="source_audit",
+            model_supported_parameters=live.supported_parameters,
+            model_supported_reasoning_efforts=("high",),
+            automatic_fallbacks_allowed=False,
+        )
     registration_endpoint = endpoint
-    if route_predicate_profile is not None and (
-        Decimal(live.pricing.get("web_search", "0")) > 0 or "input_cache_write" in live.pricing
+    if (
+        context is None
+        and route_predicate_profile is not None
+        and (
+            Decimal(live.pricing.get("web_search", "0")) > 0 or "input_cache_write" in live.pricing
+        )
     ):
         # The generic V1 registration path correctly refuses V2/V3-only components. Register a
         # V1-safe shell, then install the exact synthetic refreshed route below so this focused
@@ -463,15 +519,17 @@ def _register_current_refresh_endpoint(
         endpoint_payload={"data": {"id": model, "endpoints": [registration_endpoint]}},
         require_zdr=True,
         zdr_payload={"data": [{**registration_endpoint, "model_id": model}]},
-        reasoning_requested=False,
+        reasoning_requested=context is not None,
         structured_output_required=True,
+        required_output_mode=(StructuredOutputMode.NATIVE_JSON_SCHEMA if context else None),
+        route_constraint_context=context,
     )
     client.register_endpoint_snapshot(evidence=snapshot)
     technical_model = next(
         item for item in runtime.technical_qualification.models if item.exact_model_id == model
     )
     registered = client._endpoint_pricing[model]
-    if route_predicate_profile is not None:
+    if route_predicate_profile is not None and context is None:
         exact_endpoint = replace(
             registered.endpoints[0],
             pricing=tuple(live.pricing.items()),
@@ -520,6 +578,39 @@ async def _complete(harness: _Harness) -> Any:
         response_model=Answer,
         schema_name="answer",
     )
+
+
+@pytest.mark.asyncio
+async def test_refresh_harness_uses_its_clock_and_keeps_qualification_expiry_enforced(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class LaterHostDateTime(datetime):
+        @classmethod
+        def now(cls, timezone: tzinfo | None = None) -> datetime:
+            value = datetime(2099, 1, 1, tzinfo=UTC)
+            return value if timezone is None else value.astimezone(timezone)
+
+    monkeypatch.setattr(pipeline_module, "datetime", LaterHostDateTime)
+    harness = _build_harness(
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        response=lambda _request, model, provider: _completion_response(
+            '{"answer":"unused synthetic response"}', model=model, provider=provider
+        ),
+    )
+    try:
+        assert pipeline_module._openrouter_qualification_routing(
+            harness.runtime.technical_qualification
+        )
+        _ControlledDateTime.current = datetime(2099, 1, 1, tzinfo=UTC)
+        with pytest.raises(ValueError, match="qualification is expired"):
+            pipeline_module._openrouter_qualification_routing(
+                harness.runtime.technical_qualification
+            )
+    finally:
+        await harness.client.close()
+    assert harness.requests == []
+    assert harness.ledger.snapshot().entries == ()
 
 
 @pytest.mark.asyncio

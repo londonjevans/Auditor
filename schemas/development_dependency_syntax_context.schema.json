@@ -1,0 +1,264 @@
+{
+  "$defs": {
+    "DependencySourceSyntax": {
+      "additionalProperties": false,
+      "properties": {
+        "parsed_token_count": {
+          "maximum": 131072,
+          "minimum": 0,
+          "title": "Parsed Token Count",
+          "type": "integer"
+        },
+        "source": {
+          "maxLength": 512,
+          "pattern": "^(?:[A-Za-z0-9][A-Za-z0-9._-]*/)*[A-Za-z0-9][A-Za-z0-9._-]*\\.sol$",
+          "title": "Source",
+          "type": "string"
+        },
+        "source_bytes": {
+          "exclusiveMinimum": 0,
+          "maximum": 262144,
+          "title": "Source Bytes",
+          "type": "integer"
+        },
+        "source_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Sha256",
+          "type": "string"
+        },
+        "syntax_coverage": {
+          "enum": [
+            "SUPPORTED_GRAMMAR_ACCOUNTED",
+            "NOT_ESTABLISHED"
+          ],
+          "title": "Syntax Coverage",
+          "type": "string"
+        },
+        "token_count": {
+          "maximum": 131072,
+          "minimum": 0,
+          "title": "Token Count",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "source",
+        "source_sha256",
+        "source_bytes",
+        "token_count",
+        "parsed_token_count",
+        "syntax_coverage"
+      ],
+      "title": "DependencySourceSyntax",
+      "type": "object"
+    },
+    "DependencySyntaxCall": {
+      "additionalProperties": false,
+      "properties": {
+        "byte_end": {
+          "exclusiveMinimum": 0,
+          "maximum": 262144,
+          "title": "Byte End",
+          "type": "integer"
+        },
+        "byte_start": {
+          "exclusiveMaximum": 262144,
+          "minimum": 0,
+          "title": "Byte Start",
+          "type": "integer"
+        },
+        "call_byte_start": {
+          "exclusiveMaximum": 262144,
+          "exclusiveMinimum": 0,
+          "title": "Call Byte Start",
+          "type": "integer"
+        },
+        "kind": {
+          "$ref": "#/$defs/SyntaxCallKind"
+        },
+        "source": {
+          "maxLength": 512,
+          "pattern": "^(?:[A-Za-z0-9][A-Za-z0-9._-]*/)*[A-Za-z0-9][A-Za-z0-9._-]*\\.sol$",
+          "title": "Source",
+          "type": "string"
+        },
+        "typed_call_index": {
+          "anyOf": [
+            {
+              "exclusiveMaximum": 4096,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Typed Call Index"
+        },
+        "typed_match": {
+          "enum": [
+            "EXACT_SPAN",
+            "SPAN_MISMATCH",
+            "MISSING_TYPED_CALL"
+          ],
+          "title": "Typed Match",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "byte_start",
+        "call_byte_start",
+        "byte_end",
+        "kind",
+        "typed_call_index",
+        "typed_match"
+      ],
+      "title": "DependencySyntaxCall",
+      "type": "object"
+    },
+    "DependencySyntaxGap": {
+      "additionalProperties": false,
+      "properties": {
+        "byte_end": {
+          "maximum": 262144,
+          "minimum": 0,
+          "title": "Byte End",
+          "type": "integer"
+        },
+        "byte_start": {
+          "maximum": 262144,
+          "minimum": 0,
+          "title": "Byte Start",
+          "type": "integer"
+        },
+        "failure_byte_offset": {
+          "maximum": 262144,
+          "minimum": 0,
+          "title": "Failure Byte Offset",
+          "type": "integer"
+        },
+        "reason": {
+          "enum": [
+            "UNSUPPORTED_OR_MALFORMED_SYNTAX",
+            "UNSUPPORTED_PRAGMA",
+            "UNSUPPORTED_TYPE",
+            "UNSUPPORTED_ASSEMBLY",
+            "UNSUPPORTED_USING",
+            "INVALID_STRING_LITERAL",
+            "LEXICAL_ERROR"
+          ],
+          "title": "Reason",
+          "type": "string"
+        },
+        "source": {
+          "maxLength": 512,
+          "pattern": "^(?:[A-Za-z0-9][A-Za-z0-9._-]*/)*[A-Za-z0-9][A-Za-z0-9._-]*\\.sol$",
+          "title": "Source",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "byte_start",
+        "byte_end",
+        "failure_byte_offset",
+        "reason"
+      ],
+      "title": "DependencySyntaxGap",
+      "type": "object"
+    },
+    "SyntaxCallKind": {
+      "enum": [
+        "EXPRESSION",
+        "CREATION",
+        "INHERITANCE_ARGUMENTS",
+        "MODIFIER_ARGUMENTS",
+        "EVENT",
+        "ERROR",
+        "IMPLICIT_MODIFIER"
+      ],
+      "type": "string"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/development_dependency_syntax_context.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "call_context_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Call Context Sha256",
+      "type": "string"
+    },
+    "calls": {
+      "items": {
+        "$ref": "#/$defs/DependencySyntaxCall"
+      },
+      "maxItems": 4096,
+      "title": "Calls",
+      "type": "array"
+    },
+    "complete_static_resolution": {
+      "const": false,
+      "default": false,
+      "title": "Complete Static Resolution",
+      "type": "boolean"
+    },
+    "gaps": {
+      "items": {
+        "$ref": "#/$defs/DependencySyntaxGap"
+      },
+      "maxItems": 256,
+      "title": "Gaps",
+      "type": "array"
+    },
+    "policy": {
+      "default": "SOURCE_GRAMMAR_AND_TYPED_CALL_CENSUS_V1",
+      "enum": [
+        "SOURCE_GRAMMAR_AND_TYPED_CALL_CENSUS_V1",
+        "SOURCE_GRAMMAR_AND_MODIFIER_CENSUS_V2",
+        "SOURCE_GRAMMAR_AND_CONSTRUCTOR_CENSUS_V3"
+      ],
+      "title": "Policy",
+      "type": "string"
+    },
+    "scope": {
+      "const": "SUPPORTED_SYNTAX_NOT_TYPECHECK_COMPILATION_OR_CALL_CLOSURE",
+      "default": "SUPPORTED_SYNTAX_NOT_TYPECHECK_COMPILATION_OR_CALL_CLOSURE",
+      "title": "Scope",
+      "type": "string"
+    },
+    "source_inventory_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Source Inventory Sha256",
+      "type": "string"
+    },
+    "sources": {
+      "items": {
+        "$ref": "#/$defs/DependencySourceSyntax"
+      },
+      "maxItems": 256,
+      "minItems": 1,
+      "title": "Sources",
+      "type": "array"
+    },
+    "unmatched_typed_call_indices": {
+      "items": {
+        "type": "integer"
+      },
+      "maxItems": 4096,
+      "title": "Unmatched Typed Call Indices",
+      "type": "array"
+    }
+  },
+  "required": [
+    "source_inventory_sha256",
+    "call_context_sha256",
+    "sources",
+    "calls",
+    "gaps",
+    "unmatched_typed_call_indices"
+  ],
+  "title": "DependencySyntaxContext",
+  "type": "object"
+}

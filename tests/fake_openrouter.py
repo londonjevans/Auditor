@@ -1120,22 +1120,52 @@ class FakeOpenRouter:
                 "truncation_recovery",
                 "truncation_recovery_multiple",
                 "truncation_recovery_recursive",
+                "truncation_recovery_recursive_retained",
+                "truncation_recovery_tree",
+                "truncation_recovery_tree_retained",
                 "truncation_recovery_retained_surface",
             } and isinstance(logical_request_id, str):
                 if logical_request_id.startswith("scheduler-recovery-request-"):
                     self.recovery_child_calls += 1
                     if (
-                        self.mode == "truncation_recovery_recursive"
-                        and self.recovery_child_calls == 1
-                    ) or (
-                        self.mode != "truncation_recovery_recursive"
-                        and self.recovery_child_calls % 2 == 0
+                        (
+                            self.mode
+                            in {"truncation_recovery_tree", "truncation_recovery_tree_retained"}
+                            and len(content["surface_reviews"])
+                            > (2 if self.mode == "truncation_recovery_tree_retained" else 1)
+                        )
+                        or (
+                            self.mode
+                            in {
+                                "truncation_recovery_recursive",
+                                "truncation_recovery_recursive_retained",
+                            }
+                            and self.recovery_child_calls == 1
+                        )
+                        or (
+                            self.mode
+                            not in {
+                                "truncation_recovery_recursive",
+                                "truncation_recovery_recursive_retained",
+                                "truncation_recovery_tree",
+                                "truncation_recovery_tree_retained",
+                            }
+                            and self.recovery_child_calls % 2 == 0
+                        )
                     ):
                         return self._completion(
                             body,
                             _truncated_candidate_review_wire(
                                 content,
-                                retained_surface_count=0,
+                                retained_surface_count=(
+                                    1
+                                    if self.mode
+                                    in {
+                                        "truncation_recovery_recursive_retained",
+                                        "truncation_recovery_tree_retained",
+                                    }
+                                    else 0
+                                ),
                             ),
                             finish_reason="length",
                             native_finish_reason="max_tokens",
@@ -1158,7 +1188,14 @@ class FakeOpenRouter:
                         )
                     ]
                     retained_surface_count = (
-                        1 if self.mode == "truncation_recovery_retained_surface" else 0
+                        1
+                        if self.mode
+                        in {
+                            "truncation_recovery_retained_surface",
+                            "truncation_recovery_tree",
+                            "truncation_recovery_tree_retained",
+                        }
+                        else 0
                     )
                     self.truncated_parent_calls += 1
                     return self._completion(
@@ -1502,7 +1539,12 @@ class FakeOpenRouter:
                     force_inconclusive=self.mode == "execution_origin_post_judge",
                 ),
             }
-            if self.mode == "truncation_recovery_specialist":
+            if self.mode in {
+                "truncation_recovery_specialist",
+                "truncation_recovery_specialist_recursive",
+                "truncation_recovery_specialist_tree",
+                "truncation_recovery_specialist_tree_retained",
+            }:
                 metadata = body.get("metadata") or {}
                 logical_request_id = metadata.get("mmaudit_request_id")
                 if not isinstance(logical_request_id, str):
@@ -1511,6 +1553,31 @@ class FakeOpenRouter:
                     )
                 if logical_request_id.startswith("scheduler-recovery-request-"):
                     self.recovery_child_calls += 1
+                    if (
+                        self.mode == "truncation_recovery_specialist_recursive"
+                        and self.recovery_child_calls == 1
+                    ) or (
+                        self.mode
+                        in {
+                            "truncation_recovery_specialist_tree",
+                            "truncation_recovery_specialist_tree_retained",
+                        }
+                        and len(content["surface_reviews"])
+                        > (2 if self.mode == "truncation_recovery_specialist_tree_retained" else 1)
+                    ):
+                        return self._completion(
+                            body,
+                            _truncated_candidate_review_wire(
+                                content,
+                                retained_surface_count=(
+                                    1
+                                    if self.mode == "truncation_recovery_specialist_tree_retained"
+                                    else 0
+                                ),
+                            ),
+                            finish_reason="length",
+                            native_finish_reason="max_tokens",
+                        )
                 elif not logical_request_id.startswith("scheduler-request-"):
                     raise AssertionError(
                         "synthetic specialist truncation used an unexpected request identity"
@@ -1531,7 +1598,24 @@ class FakeOpenRouter:
                         body,
                         _truncated_candidate_review_wire(
                             content,
-                            retained_finding_count=1,
+                            retained_finding_count=(
+                                None
+                                if self.mode
+                                in {
+                                    "truncation_recovery_specialist_tree",
+                                    "truncation_recovery_specialist_tree_retained",
+                                }
+                                else 1
+                            ),
+                            retained_surface_count=(
+                                1
+                                if self.mode
+                                in {
+                                    "truncation_recovery_specialist_tree",
+                                    "truncation_recovery_specialist_tree_retained",
+                                }
+                                else None
+                            ),
                         ),
                         finish_reason="length",
                         native_finish_reason="max_tokens",

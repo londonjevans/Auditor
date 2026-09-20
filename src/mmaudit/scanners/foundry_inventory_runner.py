@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import signal
 import stat
@@ -11,8 +12,8 @@ import subprocess
 import sys
 import time
 import unicodedata
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
 
@@ -162,6 +163,17 @@ class FoundryInventoryRunLimits:
 
 
 @dataclass(frozen=True, slots=True)
+class FoundryCompilerInputSnapshot:
+    """Private immutable parser inputs; retained bytes alone grant no runtime authority."""
+
+    project_root: str
+    forge_list_json: bytes = field(repr=False)
+    build_info_jsons: tuple[bytes, ...] = field(repr=False)
+    sources: tuple[FoundrySourceInput, ...] = field(repr=False)
+    parser_limits: FoundryInventoryLimits
+
+
+@dataclass(frozen=True, slots=True)
 class FoundryInventoryRunResult:
     """Typed compiler inventories and their isolated runtime evidence."""
 
@@ -170,26 +182,141 @@ class FoundryInventoryRunResult:
     evidence: RepositorySuiteInventoryEvidence
     accounted_output_bytes: int
     generated_artifact_bytes: int
+    compiler_inputs: tuple[FoundryCompilerInputSnapshot, ...] = field(repr=False)
 
     def __post_init__(self) -> None:
         if not (
-            len(self.inventories) == len(self.statement_catalogs) == len(self.evidence.projects)
+            len(self.inventories)
+            == len(self.statement_catalogs)
+            == len(self.compiler_inputs)
+            == len(self.evidence.projects)
         ):
             raise ValueError("Foundry inventory result project counts differ")
-        for inventory, catalog, project in zip(
+        for inventory, catalog, snapshot, project in zip(
             self.inventories,
             self.statement_catalogs,
+            self.compiler_inputs,
             self.evidence.projects,
             strict=True,
         ):
             if not (
-                inventory.project_root == catalog.project_root == project.project_root
-                and inventory.compiler_version == catalog.compiler_version
-                and inventory.compiler_sha256 == catalog.compiler_sha256
+                inventory.project_root
+                == catalog.project_root
+                == snapshot.project_root
+                == project.project_root
+                and inventory.compiler_version
+                == catalog.compiler_version
+                == self.evidence.compiler_version
+                and inventory.compiler_sha256
+                == catalog.compiler_sha256
+                == self.evidence.compiler_sha256
             ):
                 raise ValueError("Foundry inventory result project identities differ")
         if self.accounted_output_bytes < 0 or self.generated_artifact_bytes < 0:
             raise ValueError("Foundry inventory byte accounting cannot be negative")
+
+
+def validated_foundry_compiler_input(
+    result: FoundryInventoryRunResult, *, project_root: str
+) -> tuple[FoundryCompilerInputSnapshot, RepositorySuiteInventoryEvidence]:
+    """Reparse retained inputs and join original inventory hashes without filesystem I/O.
+
+    This checks consistency, not authenticity: a reconstructed result cannot acquire
+    the original scanner's process-local execution or qualification authority.
+    """
+
+    if type(result) is not FoundryInventoryRunResult or type(project_root) is not str:
+        raise ValueError("compiler handoff requires an exact inventory result and project")
+    populations = (result.inventories, result.statement_catalogs, result.compiler_inputs)
+    expected_types = (
+        FoundryTestInventory,
+        FoundryCompilerStatementCatalog,
+        FoundryCompilerInputSnapshot,
+    )
+    for population, expected in zip(populations, expected_types, strict=True):
+        if type(population) is not tuple or any(type(item) is not expected for item in population):
+            raise ValueError("compiler handoff populations must be exact immutable inventories")
+    if type(result.evidence) is not RepositorySuiteInventoryEvidence:
+        raise ValueError("compiler handoff requires exact inventory evidence")
+    evidence = RepositorySuiteInventoryEvidence.model_validate(
+        result.evidence.model_dump(mode="python")
+    )
+    result.__post_init__()
+    selected = [
+        i for i, project in enumerate(evidence.projects) if project.project_root == project_root
+    ]
+    if len(selected) != 1:
+        raise ValueError("compiler handoff project is absent from the complete inventory")
+    index = selected[0]
+    snapshot = result.compiler_inputs[index]
+    project = evidence.projects[index]
+    if (
+        type(snapshot.forge_list_json) is not bytes
+        or type(snapshot.build_info_jsons) is not tuple
+        or not snapshot.build_info_jsons
+        or any(type(raw) is not bytes for raw in snapshot.build_info_jsons)
+        or type(snapshot.sources) is not tuple
+        or any(type(source) is not FoundrySourceInput for source in snapshot.sources)
+        or type(snapshot.parser_limits) is not FoundryInventoryLimits
+    ):
+        raise ValueError("compiler handoff requires immutable exact parser inputs")
+    limits = FoundryInventoryLimits.model_validate(snapshot.parser_limits.model_dump())
+    source_paths = tuple(source.path for source in snapshot.sources)
+    if any(type(path) is not str for path in source_paths) or source_paths != tuple(
+        sorted(set(source_paths))
+    ):
+        raise ValueError("compiler handoff sources must retain canonical unique order")
+    if (
+        len(snapshot.build_info_jsons) > limits.max_build_info_files
+        or any(len(raw) > limits.max_build_info_json_bytes for raw in snapshot.build_info_jsons)
+        or len(snapshot.forge_list_json) > limits.max_forge_json_bytes
+    ):
+        raise ValueError("compiler handoff exceeds the original parser limits")
+    build_hashes = tuple(sorted(_sha256_bytes(raw) for raw in snapshot.build_info_jsons))
+    if (
+        len(set(build_hashes)) != len(build_hashes)
+        or build_hashes != tuple(sorted(a.normalized_sha256 for a in project.build_info_artifacts))
+        or _sha256_bytes(snapshot.forge_list_json) != project.stdout_sha256
+        or len(snapshot.forge_list_json) != project.stdout_bytes
+    ):
+        raise ValueError("compiler handoff differs from original build or Forge output evidence")
+    inventory = parse_foundry_test_inventory(
+        forge_list_json=snapshot.forge_list_json,
+        build_info_jsons=snapshot.build_info_jsons,
+        sources=snapshot.sources,
+        project_root=project_root,
+        compiler_version=evidence.compiler_version,
+        compiler_sha256=evidence.compiler_sha256,
+        limits=limits,
+    )
+    catalog = parse_foundry_compiler_statement_catalog(
+        build_info_jsons=snapshot.build_info_jsons,
+        sources=snapshot.sources,
+        project_root=project_root,
+        compiler_version=evidence.compiler_version,
+        compiler_sha256=evidence.compiler_sha256,
+        limits=limits,
+    )
+    records = tuple(
+        sorted(
+            (_inventory_record(project_root, test) for test in inventory.tests),
+            key=lambda record: record.canonical_key,
+        )
+    )
+    if (
+        inventory != result.inventories[index]
+        or catalog != result.statement_catalogs[index]
+        or inventory.inventory_sha256 != project.parser_inventory_sha256
+        or records != project.records
+    ):
+        raise ValueError("compiler handoff differs from original parsed inventories")
+    return FoundryCompilerInputSnapshot(
+        project_root=project_root,
+        forge_list_json=snapshot.forge_list_json,
+        build_info_jsons=snapshot.build_info_jsons,
+        sources=snapshot.sources,
+        parser_limits=limits,
+    ), evidence
 
 
 @dataclass(frozen=True, slots=True)
@@ -261,6 +388,8 @@ def run_foundry_test_inventory(
     timeout_seconds: float,
     limits: FoundryInventoryRunLimits | None = None,
     parser_limits: FoundryInventoryLimits | None = None,
+    absolute_deadline: float | None = None,
+    verify_execution_inputs: Callable[[], None] | None = None,
 ) -> FoundryInventoryRunResult:
     """Run one isolated whole-project Forge inventory for each Foundry project.
 
@@ -274,8 +403,18 @@ def run_foundry_test_inventory(
     parse_bounds = parser_limits or FoundryInventoryLimits()
     if not isinstance(phase, RepositorySuiteInventoryPhase):
         raise FoundryInventoryInvalidError("Foundry inventory phase is invalid")
-    if not isinstance(timeout_seconds, (int, float)) or not 0 < timeout_seconds <= 86_400:
+    if type(timeout_seconds) not in {int, float} or not 0 < timeout_seconds <= 86_400:
         raise FoundryInventoryInvalidError("Foundry inventory timeout is invalid")
+    if absolute_deadline is not None and (
+        type(absolute_deadline) not in {int, float} or not math.isfinite(absolute_deadline)
+    ):
+        raise FoundryInventoryInvalidError("Foundry inventory deadline must be finite")
+    if verify_execution_inputs is not None and not callable(verify_execution_inputs):
+        raise FoundryInventoryInvalidError("Foundry inventory input guard is invalid")
+    deadline = time.monotonic() + float(timeout_seconds)
+    if absolute_deadline is not None:
+        deadline = min(deadline, absolute_deadline)
+    _verify_execution_boundary(verify_execution_inputs, deadline)
     _validate_hash(repository_sha256, "repository")
     _validate_hash(configuration_sha256, "configuration")
     _validate_hash(tool_sha256, "Forge executable")
@@ -334,7 +473,6 @@ def run_foundry_test_inventory(
         generated_root=generated_root,
         expected_sha256=compiler_sha256,
     )
-    deadline = time.monotonic() + float(timeout_seconds)
     project_executions: list[_ProjectExecution] = []
     total_stream_bytes = 0
     total_generated_bytes = 0
@@ -363,6 +501,8 @@ def run_foundry_test_inventory(
             timeout_seconds=remaining,
             bounds=bounds,
             remaining_total_output_bytes=remaining_output_bytes,
+            absolute_deadline=deadline,
+            verify_execution_inputs=verify_execution_inputs,
         )
         project_executions.append(execution)
         total_stream_bytes += len(execution.stdout) + len(execution.stderr)
@@ -398,6 +538,7 @@ def run_foundry_test_inventory(
 
     inventories: list[FoundryTestInventory] = []
     statement_catalogs: list[FoundryCompilerStatementCatalog] = []
+    compiler_inputs: list[FoundryCompilerInputSnapshot] = []
     project_evidence: list[RepositorySuiteProjectInventoryEvidence] = []
     try:
         for execution in project_executions:
@@ -448,6 +589,15 @@ def run_foundry_test_inventory(
                 )
             inventories.append(inventory)
             statement_catalogs.append(statement_catalog)
+            compiler_inputs.append(
+                FoundryCompilerInputSnapshot(
+                    project_root=execution.project_root,
+                    forge_list_json=execution.stdout,
+                    build_info_jsons=build_info_payloads,
+                    sources=tuple(source_inputs),
+                    parser_limits=parse_bounds,
+                )
+            )
             records = tuple(
                 sorted(
                     (
@@ -521,13 +671,36 @@ def run_foundry_test_inventory(
         inventory_record_count=len(record_hashes),
         safety_claim=False,
     )
-    return FoundryInventoryRunResult(
+    result = FoundryInventoryRunResult(
         inventories=tuple(inventories),
         statement_catalogs=tuple(statement_catalogs),
         evidence=evidence,
         accounted_output_bytes=total_stream_bytes,
         generated_artifact_bytes=total_generated_bytes,
+        compiler_inputs=tuple(compiler_inputs),
     )
+    _verify_execution_boundary(verify_execution_inputs, deadline)
+    return result
+
+
+def _verify_execution_boundary(guard: Callable[[], None] | None, deadline: float) -> None:
+    """A retained caller guard adds checks, never executable or isolation authority."""
+
+    if time.monotonic() >= deadline:
+        raise FoundryInventoryTimeoutError(
+            "Foundry inventory exceeded its deadline at execution boundary"
+        )
+    if guard is not None:
+        try:
+            guard()
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise FoundryInventoryInvalidError(
+                "Foundry inventory retained execution inputs changed"
+            ) from exc
+    if time.monotonic() >= deadline:
+        raise FoundryInventoryTimeoutError(
+            "Foundry inventory exceeded its deadline at execution boundary"
+        )
 
 
 def _validated_roots(private_dir: Path, workspace: Path) -> tuple[Path, Path]:
@@ -755,7 +928,10 @@ def _execute_project_inventory(
     timeout_seconds: float,
     bounds: FoundryInventoryRunLimits,
     remaining_total_output_bytes: int,
+    absolute_deadline: float,
+    verify_execution_inputs: Callable[[], None] | None,
 ) -> _ProjectExecution:
+    _verify_execution_boundary(verify_execution_inputs, absolute_deadline)
     if not 0 < remaining_total_output_bytes <= bounds.max_combined_output_bytes:
         raise FoundryInventoryInvalidError("Foundry inventory remaining output ceiling is invalid")
     project_root = project.project_root
@@ -822,6 +998,12 @@ def _execute_project_inventory(
         )
         _validate_wrapped_command(wrapped)
     except (OSError, RuntimeError, TypeError, ValueError) as exc:
+        try:
+            cleanup_isolation_backend(backend, private_dir)
+        except (OSError, RuntimeError, subprocess.TimeoutExpired, ValueError) as cleanup_exc:
+            raise FoundryInventoryInvalidError(
+                "Foundry inventory failed isolation setup and cleanup"
+            ) from cleanup_exc
         raise FoundryInventoryInvalidError(
             f"Foundry inventory isolation setup failed: {type(exc).__name__}"
         ) from exc
@@ -835,6 +1017,7 @@ def _execute_project_inventory(
     validation_error: FoundryInventoryRunnerError | None = None
     generated_usage = _GeneratedUsage(entries=0, files=0, bytes=0)
     try:
+        _verify_execution_boundary(verify_execution_inputs, absolute_deadline)
         with stdout_path.open("xb") as stdout_handle, stderr_path.open("xb") as stderr_handle:
             process = subprocess.Popen(
                 wrapped,
@@ -851,7 +1034,8 @@ def _execute_project_inventory(
                 ),
                 preexec_fn=_limit_inventory_process if os.name != "nt" else None,
             )
-            deadline = time.monotonic() + timeout_seconds
+            deadline = min(time.monotonic() + timeout_seconds, absolute_deadline)
+            _verify_execution_boundary(verify_execution_inputs, deadline)
             while process.poll() is None:
                 if time.monotonic() >= deadline:
                     timed_out = True
@@ -898,6 +1082,11 @@ def _execute_project_inventory(
                     break
                 time.sleep(_POLL_INTERVAL_SECONDS)
             return_code = process.wait(timeout=5)
+            _verify_execution_boundary(verify_execution_inputs, deadline)
+    except FoundryInventoryRunnerError as exc:
+        validation_error = exc
+        if process is not None:
+            _stop_process(process)
     except subprocess.TimeoutExpired:
         timed_out = True
         if process is not None:
@@ -922,6 +1111,7 @@ def _execute_project_inventory(
         ) from process_error
     if validation_error is not None:
         raise validation_error
+    _verify_execution_boundary(verify_execution_inputs, absolute_deadline)
     if timed_out:
         raise FoundryInventoryTimeoutError("Foundry inventory process exceeded its deadline")
     if overflowed:

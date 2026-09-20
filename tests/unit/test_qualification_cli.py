@@ -6,7 +6,6 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from typer.testing import CliRunner
 
 import mmaudit.cli as cli_module
 from mmaudit.constants import ExitCode
@@ -14,10 +13,11 @@ from mmaudit.models.candidate_benchmark import CandidateBenchmarkRunState
 from mmaudit.models.qualification import LineageReviewStatus
 from mmaudit.models.qualification_workflow import QualificationWorkflowBundle
 from mmaudit.models.schemas import ExecutionEvidenceKind
+from tests.cli_support import IsolatedLoopCliRunner
 from tests.qualification_support import synthetic_release_observation
 from tests.unit import test_qualification_workflow as workflow_fixtures
 
-runner = CliRunner()
+runner = IsolatedLoopCliRunner()
 
 
 def _workflow_fixture(
@@ -28,7 +28,7 @@ def _workflow_fixture(
         lineage_status=lineage_status
     )
     report = workflow_fixtures._as_real_report(
-        asyncio.run(workflow_fixtures._mock_report()),
+        asyncio.run(workflow_fixtures._mock_report(), loop_factory=asyncio.new_event_loop),
         candidate=registry.candidates[0],
     )
     bundle = workflow_fixtures._run(

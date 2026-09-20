@@ -6,6 +6,7 @@ import os
 import pickle
 import threading
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from decimal import Decimal
 from pathlib import Path
@@ -114,10 +115,30 @@ def _reseal_report(payload: dict[str, object]) -> ModelBenchmarkReport:
     return ModelBenchmarkReport.model_validate(payload)
 
 
+def test_candidate_report_fixture_preserves_the_callers_registered_event_loop() -> None:
+    """Synthetic report setup must not orphan a caller-owned selector loop."""
+
+    def exercise() -> None:
+        caller_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(caller_loop)
+        try:
+            candidate = _candidate_registry((CANDIDATE_ID,)).candidates[0]
+            assert len(_candidate_reports(candidate)) == 2
+            assert asyncio.get_event_loop() is caller_loop
+            assert not caller_loop.is_closed()
+        finally:
+            asyncio.set_event_loop(None)
+            caller_loop.close()
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        executor.submit(exercise).result(timeout=30)
+
+
 def _candidate_reports(candidate: CandidateModel) -> tuple[ModelBenchmarkReport, ...]:
     primary = qualification_fixtures._as_real_report(
         asyncio.run(
-            qualification_fixtures._mock_report(target=ModelBenchmarkTarget(model_id=CANDIDATE_ID))
+            qualification_fixtures._mock_report(target=ModelBenchmarkTarget(model_id=CANDIDATE_ID)),
+            loop_factory=asyncio.new_event_loop,
         ),
         candidate=candidate,
     )
@@ -128,7 +149,8 @@ def _candidate_reports(candidate: CandidateModel) -> tuple[ModelBenchmarkReport,
                     model_id=CANDIDATE_ID,
                     request_role="model_benchmark:falsifier:verifier",
                 )
-            )
+            ),
+            loop_factory=asyncio.new_event_loop,
         ),
         candidate=candidate,
     )

@@ -5,6 +5,7 @@ from __future__ import annotations
 import shutil
 import socket
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -24,6 +25,7 @@ from mmaudit.orchestration.managed_host_tools import (
     materialize_managed_host_tools,
 )
 from mmaudit.orchestration.managed_toolchain import ManagedToolchainRole
+from mmaudit.orchestration.mutation_pipeline import _tools
 from mmaudit.solidity import invariant_execution as invariant
 from tests.host_tool_material_support import setup_host_material_inputs
 from tests.managed_invariant_support import (
@@ -158,6 +160,59 @@ def _fake_execution(
     monkeypatch.setattr(invariant, "_external_executable_version", probe)
     monkeypatch.setattr(subprocess, "Popen", launch)
     return probes, launches
+
+
+@pytest.mark.parametrize("change", ["none", "expired", "probe-expiry", "probe-replacement"])
+def test_mutation_tools_use_only_bound_managed_probes_and_one_stage_deadline(
+    prepared, tmp_path, monkeypatch, change
+):
+    repository, material, _, _ = prepared
+    runner = _runner(prepared)
+    # Mutable convenience attributes must not replace the retained managed selection.
+    runner.forge_executable = Path("/unselected/forge")
+    runner.solc_executable = Path("/unselected/solc")
+    clock = [10.0]
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+    budget = invariant.InvariantExecutionBudget(8, 9.0 if change == "expired" else 20.0)
+    probes = []
+    versions = {entry.locator: entry.version for entry in material.manifest.files}
+
+    def probe(executable, **kwargs):
+        assert kwargs["absolute_deadline"] == budget.deadline
+        assert kwargs["expected_host_observation"].sha256
+        probes.append(executable)
+        if change == "probe-expiry":
+            clock[0] = 20.0
+        if change == "probe-replacement":
+            _change(material, ManagedToolchainRole.SOLC, "replacement")
+        return versions[executable.name]
+
+    monkeypatch.setattr(invariant, "_external_executable_version", probe)
+    private = tmp_path / "mutation-probes"
+    if change == "none":
+        forge, solc, _, compiler = _tools(runner, repository, private, budget)
+        assert probes == [forge, solc] and compiler == "1.2.3"
+        assert forge == material.executable_for(ManagedToolchainRole.FORGE)
+        assert solc == material.executable_for(ManagedToolchainRole.SOLC)
+    else:
+        with pytest.raises(ValueError, match=r"deadline|identity"):
+            _tools(runner, repository, private, budget)
+        assert len(probes) == (0 if change == "expired" else 1)
+    assert budget.attempts == 0 and not private.exists()
+
+
+@pytest.mark.parametrize("overlap", ["source", "private"])
+def test_managed_mutation_tools_refuse_material_root_overlap_before_any_probe(
+    prepared, tmp_path, overlap
+):
+    repository, material, _, _ = prepared
+    with pytest.raises(ValueError, match="overlaps"):
+        _tools(
+            _runner(prepared),
+            material.directory if overlap == "source" else repository,
+            material.directory if overlap == "private" else tmp_path / "mutation-probes",
+            invariant.InvariantExecutionBudget(8, time.monotonic() + 30),
+        )
 
 
 def test_prepared_tools_are_used_directly_across_clean_replay(prepared, tmp_path, monkeypatch):

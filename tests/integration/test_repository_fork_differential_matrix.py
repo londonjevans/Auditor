@@ -15,6 +15,7 @@ import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import httpx
 import pytest
@@ -32,7 +33,7 @@ from mmaudit.config import (
 from mmaudit.models.schemas import (
     AuditReport,
     ExecutionEvidenceKind,
-    PropertyCorpus,
+    LanguageCapabilityProfile,
     RepositoryDifferentialClassification,
     RepositoryDifferentialRunStatus,
     RepositoryExecutionStateKind,
@@ -61,8 +62,16 @@ from mmaudit.orchestration.replay import (
     ReplayComponentKind,
     ReplayComponentStatus,
 )
+from mmaudit.orchestration.run_status import (
+    assess_minimum_analysis_floor,
+    audit_quality_status_for_run_status,
+    minimum_analysis_floor_quality_gate,
+)
 from mmaudit.orchestration.verification import RunVerificationStatus, verify_run_evidence
 from mmaudit.reporting.json_report import write_json
+from mmaudit.repository.directory_custody import DirectoryCustodyObservation
+from mmaudit.repository.discovery import discover_repository
+from mmaudit.repository.ignore import IgnoreMatcher
 from mmaudit.scanners.base import scanner_workspace_sha256
 from mmaudit.scanners.clean_chain import TrustedCleanAnvilLauncher
 from mmaudit.scanners.fork_matrix import (
@@ -73,8 +82,15 @@ from mmaudit.scanners.fork_matrix import (
 )
 from mmaudit.scanners.foundry import FoundryForkScanner
 from mmaudit.scanners.runner import ScannerRunner
+from mmaudit.solidity.projects import discover_solidity_projects
 from mmaudit.solidity.reproduction import default_isolation_backend
-from tests.unit.test_manifest import _write_required_artifacts
+from tests.unit.test_manifest import (
+    _report as _current_report,
+)
+from tests.unit.test_manifest import (
+    _with_repository_capability,
+    _write_required_artifacts,
+)
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 _CLEAN_CHAIN_ID = 31_337
@@ -385,7 +401,7 @@ def _write_replay_bundle(
     baseline: ScannerRun,
     differential: RepositorySuiteDifferentialRun,
 ) -> tuple[RunEvidenceManifest, Path]:
-    run_dir.mkdir(mode=0o700)
+    run_dir.mkdir(mode=0o700, exist_ok=True)
     run_options = AuditRunOptions(
         scanner_only=True,
         skip_codeql=True,
@@ -397,86 +413,64 @@ def _write_replay_bundle(
         "code_egress_enabled": False,
         "fork_rpc_egress": fork_privacy.model_dump(mode="json"),
     }
-    report = AuditReport(
-        schema_version="1.0",
-        run_id="real-local-fork-differential",
-        generated_at=datetime.now(UTC),
-        completed=True,
-        incomplete_reasons=[],
-        repository=_synthetic_repository_map(repository_root),
-        configuration_hash=config.stable_hash(),
-        model_configuration_hash=config.model_hash(),
-        privacy=privacy,
-        scanner_runs=[baseline],
-        repository_suite_differential=differential,
-        usage=[],
-        budget_usd=config.execution.budget_usd,
-        accounted_cost_usd=0,
-        findings=[],
-        rejected_findings=[],
-        audit_profile=config.profile,
-        metadata={
-            "run_options": run_options.model_dump(mode="json"),
-            "configuration_provenance": {
-                "file_config_sha256": config.stable_hash(),
-                "environment_overrides_sha256": empty_overrides.stable_hash(),
-                "cli_overrides_sha256": empty_overrides.stable_hash(),
-                "run_options_sha256": run_options.stable_hash(),
-            },
-        },
-    )
-    _write_required_artifacts(run_dir, report)
-    empty_corpus = PropertyCorpus(
-        properties=[],
-        limitations=[],
-        corpus_hash=_canonical_sha256(
-            {
-                "schema_version": "1.0",
-                "property_hashes": [],
-                "limitations": [],
-            }
-        ),
-    )
-    artifacts: dict[str, dict[str, object]] = {
-        "scanner-results.json": {
-            "schema_version": "1.0",
-            "runs": [baseline.model_dump(mode="json")],
-        },
-        "solidity-projects.json": {"schema_version": "1.0", "projects": []},
-        "solidity-compilation.json": {"schema_version": "1.0", "results": []},
-        "solidity-invariants.json": {"schema_version": "1.0", "invariants": None},
-        "invariant-harness-plan.json": {
-            "schema_version": "1.0",
-            "harnesses": [],
-            "limitations": [],
-        },
-        "property-corpus.json": {
-            "schema_version": "1.0",
-            "corpus": empty_corpus.model_dump(mode="json"),
-        },
-        "invariant-execution-results.json": {
-            "schema_version": "1.0",
-            "harnesses": [],
-            "results": [],
-        },
-        "candidate-findings.json": {"schema_version": "1.0", "findings": []},
-        "reproduction-results.json": {
-            "schema_version": "1.0",
-            "test_specifications": [],
-            "results": [],
-            "falsification_decisions": [],
-        },
-        "formal-results.json": {"schema_version": "1.0", "runs": []},
-        "solidity-coverage.json": {
-            "schema_version": "1.0",
-            "evidence_authority": "comparison_required",
-            "coverage": None,
-        },
-        "model-review-coverage.json": {"schema_version": "1.0", "coverage": None},
-        "scope-assessment.json": {"schema_version": "1.0", "assessment": None},
+    repository = _synthetic_repository_map(repository_root)
+    current = _with_repository_capability(_current_report(config), repository, config)
+    discovery = discover_repository(repository_root, config.repository, IgnoreMatcher())
+    assert {item.relative_path for item in discovery.files} == {
+        item.path for item in repository.files
     }
-    for name, payload in artifacts.items():
-        write_json(run_dir / name, payload)
+    projects = discover_solidity_projects(discovery, config.smart_contracts)
+    assert projects and all(project.test_directories for project in projects)
+    generated_at = datetime.now(UTC)
+    floor = assess_minimum_analysis_floor(
+        repository=repository,
+        compilations=(),
+        scanner_runs=(baseline,),
+        usage=(),
+        required_model_roles=(),
+        coverage_metrics={},
+        scanner_only=True,
+    )
+    report = AuditReport.model_validate(
+        {
+            **current.model_dump(mode="python"),
+            "run_id": run_dir.name,
+            "generated_at": generated_at,
+            "completed": floor.minimum_floor_met,
+            "incomplete_reasons": floor.limitations,
+            "run_status": floor.run_status,
+            "quality_status": audit_quality_status_for_run_status(floor.run_status),
+            "minimum_analysis_floor": floor,
+            "quality_gates": [
+                minimum_analysis_floor_quality_gate(floor),
+                *(gate for gate in current.quality_gates if gate.gate != "minimum_analysis_floor"),
+            ],
+            "repository": repository,
+            "privacy": privacy,
+            "scanner_runs": [baseline],
+            "repository_suite_differential": differential,
+            "budget_usd": config.execution.budget_usd,
+            "audit_profile": config.profile,
+            "metadata": {
+                **current.metadata,
+                "solidity": {
+                    **current.metadata["solidity"],
+                    "projects": [project.model_dump(mode="json") for project in projects],
+                },
+                "scanner_only": floor.scanner_only,
+                "run_options": run_options.model_dump(mode="json"),
+                "configuration_provenance": {
+                    "file_config_sha256": config.stable_hash(),
+                    "environment_overrides_sha256": empty_overrides.stable_hash(),
+                    "cli_overrides_sha256": empty_overrides.stable_hash(),
+                    "run_options_sha256": run_options.stable_hash(),
+                },
+            },
+        }
+    )
+    assert report.schema_version == "1.4" and not report.completed
+    _write_required_artifacts(run_dir, report)
+    assert not report.formal_runs and not report.invariant_executions
     write_json(run_dir / "repository-suite-differential.json", differential)
     write_json(run_dir / "privacy-fork-rpc-egress.json", fork_privacy)
     write_json(run_dir / "final-findings.json", report)
@@ -522,7 +516,12 @@ def test_real_local_repository_fork_matrix_is_replay_ready_and_disposes_workspac
     root = tmp_path / "synthetic-repository"
     _write_synthetic_repository(root)
     root = root.resolve(strict=True)
-    baseline_private = (tmp_path / "baseline-private").resolve()
+    retained_run = tmp_path / "replay-evidence"
+    retained_private = retained_run / "private"
+    scanner_output = retained_private / "scanner-output"
+    for path in (retained_run, retained_private, scanner_output):
+        path.mkdir(mode=0o700)
+    baseline_private = scanner_output / "foundry_fork"
     matrix_private = (tmp_path / "matrix-private").resolve()
     pinned_home = tmp_path / "pinned-home"
     pinned_tmp = tmp_path / "pinned-tmp"
@@ -635,6 +634,7 @@ def test_real_local_repository_fork_matrix_is_replay_ready_and_disposes_workspac
         timeout_seconds=180,
     )
     config = config_factory(
+        language_profile=LanguageCapabilityProfile.SOLIDITY_EVM,
         execution={"scanner_timeout_seconds": 180},
         scanners={
             "foundry_fork": {
@@ -667,7 +667,33 @@ def test_real_local_repository_fork_matrix_is_replay_ready_and_disposes_workspac
     serialized_artifact = ""
     serialized_privacy = ""
     differential_projections: list[dict[str, object]] = []
+    replayed_scanner_runs: list[ScannerRun] = []
     replay_work = tmp_path / "offline-replay-work"
+    original_custody = replay_module._require_replay_root_custody
+
+    def observe_replay_custody(
+        run_root: DirectoryCustodyObservation,
+        source_root: DirectoryCustodyObservation,
+        configuration_root: DirectoryCustodyObservation | None,
+    ) -> None:
+        try:
+            original_custody(run_root, source_root, configuration_root)
+        except ValueError as exc:
+            changed: list[str] = []
+            for component, expected in source_root.component_identities:
+                metadata = component.lstat()
+                observed = (
+                    metadata.st_dev,
+                    metadata.st_ino,
+                    metadata.st_mode,
+                    metadata.st_nlink,
+                    metadata.st_ctime_ns,
+                )
+                if observed != expected:
+                    changed.append(f"{component}: {expected} -> {observed}")
+            raise ValueError(f"{exc}; observed component changes: {changed}") from exc
+
+    monkeypatch.setattr(replay_module, "_require_replay_root_custody", observe_replay_custody)
     try:
         _wait_for_anvil(endpoint)
         baseline = FoundryForkScanner(
@@ -729,7 +755,6 @@ def test_real_local_repository_fork_matrix_is_replay_ready_and_disposes_workspac
         manifest, manifest_path = _write_replay_bundle(
             run_dir=run_dir,
             repository_root=root,
-            configuration_root=root,
             config=config,
             baseline=baseline,
             differential=result,
@@ -770,6 +795,14 @@ def test_real_local_repository_fork_matrix_is_replay_ready_and_disposes_workspac
             backend=backend,
         )
         original_differential_projection = replay_module._repository_differential_projection
+        original_run_all = replay_scanner.run_all
+
+        async def capture_replay_scanners(*args: Any, **kwargs: Any) -> list[ScannerRun]:
+            observed = await original_run_all(*args, **kwargs)
+            replayed_scanner_runs.extend(observed)
+            return observed
+
+        monkeypatch.setattr(replay_scanner, "run_all", capture_replay_scanners)
 
         def capture_differential_projection(
             value: RepositorySuiteDifferentialRun,
@@ -952,7 +985,8 @@ def test_real_local_repository_fork_matrix_is_replay_ready_and_disposes_workspac
         )
         pytest.fail(
             f"replay components: {components}; projection differences: "
-            f"{', '.join(difference_paths)}",
+            f"{', '.join(difference_paths)}; observed scanner failures: "
+            f"{[(run.scanner, run.error) for run in replayed_scanner_runs if run.error]}",
             pytrace=False,
         )
     assert replay.missing_kinds == []

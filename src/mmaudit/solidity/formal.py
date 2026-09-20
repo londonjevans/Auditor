@@ -9,14 +9,17 @@ import re
 import shlex
 import shutil
 import signal
+import stat
 import subprocess
+import sys
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, replace
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from mmaudit.config import FormalConfig
+from mmaudit.config import FormalConfig, ScannerConfig, SmartContractsConfig
 from mmaudit.isolation.provenance import (
     isolation_attestation_sha256,
     isolation_execution_evidence,
@@ -44,13 +47,21 @@ from mmaudit.repository.ignore import normalize_relative_path
 from mmaudit.repository.secrets import is_sensitive_workspace_path
 from mmaudit.repository.workspace import validate_copyable_workspace
 from mmaudit.scanners.base import (
+    _cleanup_lingering_process_group,
+    _darwin_process_group_rss_bytes,
+    _darwin_uid_process_ceiling,
     _observe_scanner_executable,
+    _scanner_executable_identity,
     _ScannerExecutableObservation,
     isolated_executable_version_probe,
     sanitized_scanner_environment,
     scanner_trust_pin_error,
 )
 from mmaudit.scanners.diagnostics import ExecutableVersionProbeStatus
+from mmaudit.scanners.slither import (
+    _prepare_private_solc_select_state,
+    _validate_private_solc_select_state,
+)
 from mmaudit.solidity.engines.certora import (
     CertoraPreparation,
     parse_certora_results,
@@ -75,6 +86,9 @@ from mmaudit.solidity.reproduction import IsolationBackend, default_isolation_ba
 
 if TYPE_CHECKING:
     from mmaudit.orchestration.managed_host_tools import ManagedHostToolMaterialization
+
+_FORMAL_MEMORY_BYTES = 4 * 1024**3
+_MAX_PROPERTY_COMPILER_BYTES = 500_000_000
 
 _EXCLUDED_DYNAMIC_WORKSPACE_NAMES = frozenset(
     {
@@ -196,6 +210,48 @@ class FormalAdapter(ABC):
 
         del config
         return FormalEnvironmentExtension(variables={})
+
+    def version_environment(self, environment: dict[str, str]) -> dict[str, str]:
+        """Return fixed version-only startup settings without mutating campaign inputs."""
+
+        return dict(environment)
+
+    def prepare_workspace_with_dependencies(
+        self,
+        *,
+        repository_root: Path,
+        workspace: Path,
+        index: SoliditySymbolIndex,
+        property_corpus: PropertyCorpus | None,
+        config: FormalConfig,
+        dependencies: list[FormalDependencySpec],
+    ) -> PropertyEngineTranslation | CertoraPreparation | None:
+        """Prepare fixed inputs after the declared dependency checks."""
+
+        del repository_root, dependencies
+        return self.prepare_workspace(
+            workspace=workspace, index=index, property_corpus=property_corpus, config=config
+        )
+
+    def execution_environment_with_dependencies(
+        self,
+        *,
+        config: FormalConfig,
+        private_dir: Path,
+        dependencies: list[FormalDependencySpec],
+        environment: dict[str, str],
+    ) -> FormalEnvironmentExtension:
+        """Extend the sanitized environment without implicit dependency discovery."""
+
+        del private_dir, dependencies, environment
+        return self.execution_environment(config=config)
+
+    def validate_pre_execution_inputs(
+        self, *, private_dir: Path, dependencies: list[FormalDependencySpec]
+    ) -> None:
+        """Recheck adapter-owned private inputs immediately before dispatch."""
+
+        del private_dir, dependencies
 
     def build_command_with_dependencies(
         self,
@@ -453,10 +509,219 @@ class PropertyToolAdapter(FormalAdapter):
         return evidence
 
 
-class EchidnaAdapter(PropertyToolAdapter):
+class _CompiledPropertyToolAdapter(PropertyToolAdapter):
+    """Explicit private Foundry/Solc handoff, not transitive toolchain attestation."""
+
+    def __init__(
+        self,
+        *,
+        compiler_config: SmartContractsConfig | None = None,
+        forge_config: ScannerConfig | None = None,
+        compiler_dependencies: tuple[FormalDependencySpec, ...] | None = None,
+    ) -> None:
+        if compiler_dependencies is not None and (
+            compiler_config is not None or forge_config is not None
+        ):
+            raise ValueError("prepared compiler dependencies cannot mix with ambient configuration")
+        self.compiler_config = compiler_config
+        self.forge_config = forge_config
+        self._compiler_dependencies = compiler_dependencies
+
+    def dependencies(
+        self, *, repository_root: Path, config: FormalConfig
+    ) -> tuple[list[FormalDependencySpec], str]:
+        del config
+        if (
+            self._compiler_dependencies is None
+            and self.compiler_config is None
+            and self.forge_config is None
+        ):
+            return [], ""
+        try:
+            selected: tuple[FormalDependencySpec, ...]
+            if self._compiler_dependencies is None:
+                compiler = self.compiler_config
+                forge = self.forge_config
+                if (
+                    compiler is None
+                    or forge is None
+                    or compiler.solc_version is None
+                    or compiler.solc_sha256 is None
+                    or forge.version is None
+                    or forge.sha256 is None
+                ):
+                    return [], "property compiler requires paired Forge and Solc trust pins"
+                raw_solc = os.environ.get(compiler.solc_executable_env, "")
+                raw_forge = shutil.which("forge")
+                if not raw_solc or raw_forge is None:
+                    return [], "pinned property compiler executable is unavailable"
+                selected = (
+                    FormalDependencySpec(
+                        "forge", Path(raw_forge).resolve(strict=True), forge.version, forge.sha256
+                    ),
+                    FormalDependencySpec(
+                        "solc", Path(raw_solc), compiler.solc_version, compiler.solc_sha256
+                    ),
+                )
+            else:
+                selected = self._compiler_dependencies
+            if tuple(item.name for item in selected) != ("forge", "solc"):
+                return [], "property compiler requires exact pinned Forge and Solc dependencies"
+            for dependency in selected:
+                _observe_property_compiler(dependency, repository_root)
+            return list(selected), ""
+        except (OSError, ValueError):
+            return [], "property compiler executable or trust pin validation failed"
+
+    def prepare_workspace_with_dependencies(
+        self,
+        *,
+        repository_root: Path,
+        workspace: Path,
+        index: SoliditySymbolIndex,
+        property_corpus: PropertyCorpus | None,
+        config: FormalConfig,
+        dependencies: list[FormalDependencySpec],
+    ) -> PropertyEngineTranslation | CertoraPreparation | None:
+        expected, reason = self.dependencies(repository_root=repository_root, config=config)
+        if reason or dependencies != expected:
+            raise ValueError("property compiler dependencies changed before preparation")
+        preparation = self.prepare_workspace(
+            workspace=workspace, index=index, property_corpus=property_corpus, config=config
+        )
+        if not dependencies:
+            return preparation
+        if not (workspace / "foundry.toml").is_file():
+            raise ValueError("pinned property compiler handoff requires a Foundry project")
+        private_dir = workspace.parent
+        toolchain = private_dir / "toolchain"
+        toolchain.mkdir(mode=0o700)
+        for dependency in dependencies:
+            observation = _observe_property_compiler(dependency, repository_root)
+            destination = toolchain / dependency.name
+            flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+            descriptor = os.open(dependency.executable, flags | getattr(os, "O_CLOEXEC", 0))
+            with os.fdopen(descriptor, "rb") as source, destination.open("xb") as target:
+                if _scanner_executable_identity(os.fstat(source.fileno())) != observation.identity:
+                    raise ValueError("property compiler changed before private staging")
+                remaining = _MAX_PROPERTY_COMPILER_BYTES
+                while chunk := source.read(min(1024 * 1024, remaining + 1)):
+                    if len(chunk) > remaining:
+                        raise ValueError("property compiler exceeded its private staging bound")
+                    target.write(chunk)
+                    remaining -= len(chunk)
+                if _scanner_executable_identity(os.fstat(source.fileno())) != observation.identity:
+                    raise ValueError("property compiler changed during private staging")
+            destination.chmod(0o500)
+            if _observe_property_compiler(dependency, repository_root) != observation:
+                raise ValueError("property compiler changed during private staging")
+        _prepare_private_solc_select_state(private_dir)
+        self.validate_pre_execution_inputs(private_dir=private_dir, dependencies=dependencies)
+        if (
+            self.name == "medusa"
+            and isinstance(preparation, PropertyEngineTranslation)
+            and preparation.property_map
+        ):
+            document = json.loads(preparation.configuration)
+            platform = document["compilation"]["platformConfig"]
+            platform["target"] = str(workspace / preparation.source_path)
+            platform["args"] = ["--compile-force-framework", "foundry"]
+            configuration = json.dumps(document, sort_keys=True, indent=2) + "\n"
+            (workspace / preparation.configuration_path).write_text(configuration, encoding="utf-8")
+            preparation = replace(preparation, configuration=configuration)
+        return preparation
+
+    def build_command_with_dependencies(
+        self,
+        executable: Path,
+        workspace: Path,
+        output_path: Path,
+        index: SoliditySymbolIndex,
+        config: FormalConfig,
+        dependencies: list[FormalDependencySpec],
+    ) -> list[str]:
+        command = self.build_command(executable, workspace, output_path, index, config)
+        if dependencies and self.name == "echidna":
+            generated = workspace / "mmaudit-echidna" / "MMAuditEchidna.sol"
+            command[1] = str(generated if generated.is_file() else workspace)
+            command.extend(["--crytic-args", "--compile-force-framework foundry"])
+        return command
+
+    def execution_environment_with_dependencies(
+        self,
+        *,
+        config: FormalConfig,
+        private_dir: Path,
+        dependencies: list[FormalDependencySpec],
+        environment: dict[str, str],
+    ) -> FormalEnvironmentExtension:
+        if not dependencies:
+            return self.execution_environment(config=config)
+        self.validate_pre_execution_inputs(private_dir=private_dir, dependencies=dependencies)
+        toolchain = private_dir / "toolchain"
+        return FormalEnvironmentExtension(
+            variables={
+                "PATH": str(toolchain) + os.pathsep + environment.get("PATH", ""),
+                "FOUNDRY_SOLC": str(toolchain / "solc"),
+                "FOUNDRY_OFFLINE": "true",
+                "FOUNDRY_FFI": "false",
+            }
+        )
+
+    def validate_pre_execution_inputs(
+        self, *, private_dir: Path, dependencies: list[FormalDependencySpec]
+    ) -> None:
+        if not dependencies:
+            return
+        if [item.name for item in dependencies] != ["forge", "solc"]:
+            raise ValueError("private property compiler dependencies are incomplete")
+        toolchain = private_dir / "toolchain"
+        if (
+            toolchain.resolve(strict=True) != toolchain
+            or not stat.S_ISDIR(toolchain.lstat().st_mode)
+            or stat.S_IMODE(toolchain.stat().st_mode) != 0o700
+        ):
+            raise ValueError("private property compiler toolchain directory changed")
+        for dependency in dependencies:
+            staged = toolchain / dependency.name
+            if stat.S_IMODE(staged.lstat().st_mode) != 0o500:
+                raise ValueError("private property compiler executable mode changed")
+            try:
+                observed = _observe_scanner_executable(staged)
+            except (OSError, ValueError) as exc:
+                raise ValueError("private property compiler executable changed") from exc
+            if observed.sha256 != dependency.expected_sha256:
+                raise ValueError("private property compiler differs from its trust pin")
+        _validate_private_solc_select_state(private_dir)
+
+
+def _observe_property_compiler(
+    dependency: FormalDependencySpec, repository_root: Path
+) -> _ScannerExecutableObservation:
+    """Refuse repository tools and unbounded or mismatched files before a probe."""
+
+    if (
+        dependency.executable.resolve(strict=True).is_relative_to(
+            repository_root.resolve(strict=True)
+        )
+        or not 0 < dependency.executable.lstat().st_size <= _MAX_PROPERTY_COMPILER_BYTES
+    ):
+        raise ValueError("property compiler is not a bounded external executable")
+    observed = _observe_scanner_executable(dependency.executable)
+    if observed.sha256 != dependency.expected_sha256:
+        raise ValueError("property compiler does not match its trust pin")
+    return observed
+
+
+class EchidnaAdapter(_CompiledPropertyToolAdapter):
     name = "echidna"
     executable = "echidna"
     requires_preflight_trust = True
+
+    def version_environment(self, environment: dict[str, str]) -> dict[str, str]:
+        """Bound GHC startup for --version; the independent one-GiB monitor remains."""
+
+        return {**environment, "GHCRTS": "-N1 -M512m"}
 
     def applicable_with_corpus(
         self,
@@ -636,7 +901,7 @@ class EchidnaAdapter(PropertyToolAdapter):
         return _echidna_campaign_observation([*_json_documents(stdout), *_json_documents(stderr)])
 
 
-class MedusaAdapter(PropertyToolAdapter):
+class MedusaAdapter(_CompiledPropertyToolAdapter):
     name = "medusa"
     executable = "medusa"
     requires_preflight_trust = True
@@ -1559,11 +1824,16 @@ class _ManagedFormalSelection:
         self.verify()
         by_role = {role: spec for role, spec, _ in self.tools}
         solver = by_role.get(ManagedToolchainRole.HALMOS_Z3)
+        compilers = tuple(
+            by_role[role]
+            for role in (ManagedToolchainRole.FORGE, ManagedToolchainRole.SOLC)
+            if role in by_role
+        )
         adapters: list[FormalAdapter] = [
             SolcSMTCheckerAdapter(),
             MythrilAdapter(),
-            EchidnaAdapter(),
-            MedusaAdapter(),
+            EchidnaAdapter(compiler_dependencies=compilers),
+            MedusaAdapter(compiler_dependencies=compilers),
             FoundryInvariantAdapter(solc=by_role.get(ManagedToolchainRole.SOLC)),
             HalmosAdapter(solver_path=solver.executable if solver is not None else None),
             CertoraAdapter(),
@@ -1630,6 +1900,8 @@ class FormalRunner:
         backend: IsolationBackend | None = None,
         adapters: list[FormalAdapter] | None = None,
         host_tools: ManagedHostToolMaterialization | None = None,
+        compiler_config: SmartContractsConfig | None = None,
+        forge_config: ScannerConfig | None = None,
     ) -> None:
         self.config = config
         self._managed = (
@@ -1637,6 +1909,15 @@ class FormalRunner:
         )
         if self._managed is not None and adapters is not None:
             raise ValueError("managed formal execution requires the fixed built-in adapters")
+        if adapters is not None and (compiler_config is not None or forge_config is not None):
+            raise ValueError("custom formal adapters must declare their own compiler selection")
+        if host_tools is not None and (
+            (compiler_config is not None and compiler_config != host_tools.config.smart_contracts)
+            or (
+                forge_config is not None and forge_config != host_tools.config.scanners.foundry_fork
+            )
+        ):
+            raise ValueError("managed formal compiler configuration differs from prepared material")
         self.backend = backend
         if self.backend is None:
             if host_tools is None:
@@ -1652,8 +1933,8 @@ class FormalRunner:
             self.adapters = [
                 SolcSMTCheckerAdapter(),
                 MythrilAdapter(),
-                EchidnaAdapter(),
-                MedusaAdapter(),
+                EchidnaAdapter(compiler_config=compiler_config, forge_config=forge_config),
+                MedusaAdapter(compiler_config=compiler_config, forge_config=forge_config),
                 FoundryInvariantAdapter(),
                 HalmosAdapter(),
                 CertoraAdapter(),
@@ -1828,7 +2109,7 @@ class FormalRunner:
                     backend=self.backend,
                     workspace=workspace,
                     private_dir=private_dir,
-                    environment=environment,
+                    environment=adapter.version_environment(environment),
                     expected_host_observation=host_observation,
                 )
                 if self._managed is not None:
@@ -1945,11 +2226,13 @@ class FormalRunner:
                             "match the configured supported version"
                         ),
                     )
-            preparation = adapter.prepare_workspace(
+            preparation = adapter.prepare_workspace_with_dependencies(
+                repository_root=repository_root,
                 workspace=workspace,
                 index=index,
                 property_corpus=property_corpus,
                 config=self.config,
+                dependencies=dependency_specs,
             )
             if (
                 preparation is not None
@@ -1994,7 +2277,12 @@ class FormalRunner:
             )
             if self._managed is not None:
                 self._managed.verify()
-            environment_extension = adapter.execution_environment(config=self.config)
+            environment_extension = adapter.execution_environment_with_dependencies(
+                config=self.config,
+                private_dir=private_dir,
+                dependencies=dependency_specs,
+                environment=environment,
+            )
             if environment_extension.failure_reason:
                 return FormalToolRun(
                     tool=adapter.name,
@@ -2035,6 +2323,9 @@ class FormalRunner:
                 private_dir=private_dir,
                 rpc_port=1,
             )
+            adapter.validate_pre_execution_inputs(
+                private_dir=private_dir, dependencies=dependency_specs
+            )
             result = _bounded_process(
                 wrapped,
                 cwd=workspace,
@@ -2053,7 +2344,7 @@ class FormalRunner:
                 sensitive_values,
                 max_bytes=self.config.max_output_bytes,
             )
-        except (OSError, ValueError) as exc:
+        except (OSError, subprocess.SubprocessError, ValueError) as exc:
             _redact_sensitive_artifacts(
                 (stdout_path, stderr_path, output_path),
                 sensitive_values,
@@ -2081,7 +2372,7 @@ class FormalRunner:
                 backend=self.backend,
                 workspace=workspace,
                 private_dir=private_dir,
-                environment=environment,
+                environment=adapter.version_environment(environment),
             )
         status = FormalToolStatus.SUCCESS
         failure_reason: str | None = None
@@ -2091,6 +2382,18 @@ class FormalRunner:
         elif result == "output_exceeded":
             status = FormalToolStatus.FAILED
             failure_reason = "formal engine output exceeded its private output limit"
+        elif result == "memory_exceeded":
+            status = FormalToolStatus.FAILED
+            failure_reason = "formal engine exceeded its private process-group memory limit"
+        elif result == "memory_unavailable":
+            status = FormalToolStatus.FAILED
+            failure_reason = "formal engine process-group memory could not be observed"
+        elif result == "descendants_remaining":
+            status = FormalToolStatus.FAILED
+            failure_reason = "formal engine left descendants after its process-group leader exited"
+        elif type(result) is not int:
+            status = FormalToolStatus.FAILED
+            failure_reason = "formal engine returned an unrecognized execution outcome"
         elif isinstance(result, int) and result != 0:
             status = FormalToolStatus.INCONCLUSIVE
             failure_reason = f"formal engine exited with code {result}"
@@ -2473,8 +2776,22 @@ def _bounded_process(
     additional_output_paths: list[Path] | None = None,
     managed_selection: _ManagedFormalSelection | None = None,
 ) -> int | str:
+    """Supervise an isolated engine; unavailable bounds never establish success."""
+
     process: subprocess.Popen[bytes] | None = None
+    nproc_ceiling = _darwin_uid_process_ceiling(64)
     with stdout_path.open("wb") as stdout_handle, stderr_path.open("wb") as stderr_handle:
+
+        def output_exceeded() -> bool:
+            return (
+                os.fstat(stdout_handle.fileno()).st_size > max_output_bytes
+                or os.fstat(stderr_handle.fileno()).st_size > max_output_bytes
+                or any(
+                    path.is_file() and path.stat().st_size > max_output_bytes
+                    for path in (additional_output_paths or [])
+                )
+            )
+
         if managed_selection is not None:
             managed_selection.verify()
         process = subprocess.Popen(
@@ -2488,25 +2805,48 @@ def _bounded_process(
             creationflags=(
                 int(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)) if os.name == "nt" else 0
             ),
-            preexec_fn=_limit_process if os.name != "nt" else None,
+            preexec_fn=(
+                partial(_limit_process, nproc_ceiling=nproc_ceiling) if os.name != "nt" else None
+            ),
         )
         deadline = time.monotonic() + timeout
-        while process.poll() is None:
-            if time.monotonic() >= deadline:
-                _stop_process(process)
-                return "timed_out"
-            if (
-                stdout_path.stat().st_size > max_output_bytes
-                or stderr_path.stat().st_size > max_output_bytes
-                or any(
-                    path.is_file() and path.stat().st_size > max_output_bytes
-                    for path in (additional_output_paths or [])
+        result: int | str
+        try:
+            while process.poll() is None:
+                if time.monotonic() >= deadline:
+                    result = "timed_out"
+                    break
+                if output_exceeded():
+                    result = "output_exceeded"
+                    break
+                try:
+                    resident_bytes = _darwin_process_group_rss_bytes(process.pid)
+                except OSError:
+                    # The leader may exit between poll() and the kernel query.
+                    # Even that case must attest process-group absence below.
+                    try:
+                        result = process.wait(timeout=0.05)
+                    except subprocess.TimeoutExpired:
+                        result = "memory_unavailable"
+                    break
+                if resident_bytes > _FORMAL_MEMORY_BYTES:
+                    result = "memory_exceeded"
+                    break
+                time.sleep(0.05)
+            else:
+                result = process.wait(timeout=5)
+            if output_exceeded():
+                result = "output_exceeded"
+        finally:
+            try:
+                if process.poll() is None:
+                    _stop_process(process)
+            finally:
+                descendant_error = _cleanup_lingering_process_group(
+                    process,
+                    diagnostic="formal engine descendants outlived their process-group leader",
                 )
-            ):
-                _stop_process(process)
-                return "output_exceeded"
-            time.sleep(0.05)
-        return process.wait(timeout=5)
+        return "descendants_remaining" if descendant_error is not None else result
 
 
 def _isolated_tool_version(
@@ -3102,19 +3442,33 @@ def _redacted_command(
     return redacted
 
 
-def _limit_process() -> None:
+def _limit_process(*, nproc_ceiling: int | None = None) -> None:
+    """Install fixed bounds; Darwin resident memory is supervised by the parent."""
+
+    if sys.platform == "darwin" and (type(nproc_ceiling) is not int or nproc_ceiling <= 0):
+        raise RuntimeError("formal resource bounds require an observed UID process ceiling")
     try:
         import resource
-
+    except ImportError as exc:
+        raise RuntimeError("formal resource bounds are unavailable") from exc
+    try:
         resource.setrlimit(resource.RLIMIT_CPU, (600, 600))
         resource.setrlimit(resource.RLIMIT_FSIZE, (100_000_000, 100_000_000))
         resource.setrlimit(resource.RLIMIT_NOFILE, (256, 256))
         if hasattr(resource, "RLIMIT_NPROC"):
-            resource.setrlimit(resource.RLIMIT_NPROC, (64, 64))
+            limit = 64 if nproc_ceiling is None else nproc_ceiling
+            resource.setrlimit(resource.RLIMIT_NPROC, (limit, limit))
         if hasattr(resource, "RLIMIT_AS"):
-            resource.setrlimit(resource.RLIMIT_AS, (4 * 1024**3, 4 * 1024**3))
-    except (ImportError, OSError, ValueError):
-        return
+            try:
+                resource.setrlimit(resource.RLIMIT_AS, (_FORMAL_MEMORY_BYTES, _FORMAL_MEMORY_BYTES))
+            except (OSError, ValueError):
+                # Darwin's inherited shared-cache reservation can exceed this
+                # virtual-address limit. The parent independently checks the
+                # isolated group's resident bytes at the same fixed ceiling.
+                if sys.platform != "darwin":
+                    raise
+    except (OSError, ValueError) as exc:
+        raise RuntimeError("formal resource bounds could not be applied") from exc
 
 
 def _stop_process(process: subprocess.Popen[bytes]) -> None:

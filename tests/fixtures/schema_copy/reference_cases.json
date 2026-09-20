@@ -1,0 +1,41 @@
+{
+  "scope": "SYNTHETIC_SCHEMA_COPY_ISOLATION_NO_PROVIDER",
+  "cases": [
+    {
+      "id": "properties-and-default-order",
+      "schema": {
+        "z_last": {
+          "properties": {"z_field": {"type": "integer"}, "a_field": {"type": "string"}},
+          "required": ["a_field"],
+          "default": {"z_default": 1, "a_default": 2},
+          "type": "object"
+        },
+        "a_first": {"default": null, "type": "string"}
+      }
+    },
+    {
+      "id": "nested-unions-and-lists",
+      "schema": {
+        "z_branch": {"anyOf": [{"type": "string"}, {"type": "integer"}]},
+        "a_branch": {
+          "prefixItems": [{"const": "z"}, {"const": "a"}],
+          "examples": [[3, 1, 2], {"z": [true, false], "a": null}]
+        }
+      }
+    },
+    {
+      "id": "reference-names-and-empty-containers",
+      "schema": {
+        "z_node": {"properties": {"children": {"items": {"$ref": "#/$defs/z_node"}}}},
+        "a_empty": {"properties": {}, "examples": [], "default": []}
+      }
+    },
+    {
+      "id": "scalar-fidelity",
+      "schema": {
+        "z_text": {"const": "synthetic \"quote\" \\ slash \n λ"},
+        "a_numbers": {"examples": [0, -1, -0.0, 1.25, 1e-20, true, false, null]}
+      }
+    }
+  ]
+}

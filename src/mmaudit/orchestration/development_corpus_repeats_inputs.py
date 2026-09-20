@@ -95,6 +95,10 @@ def require_development_corpus_repeats_inputs(inputs: DevelopmentCorpusRepeatsIn
     if (
         prepared.plan.trials[0].manifest != loaded.material.manifest
         or first.source_files != loaded.material.source_files
+        or (
+            loaded.material.manifest.source_tree_evidence is not None
+            and first.source_custody != loaded
+        )
         or (first.discovery or first.endpoint_snapshot) != metadata
         or prepared.plan.benchmark.truth_file_content.encode() != inputs.truth_input.content
         or prepared.plan.benchmark.truth_file_sha256 != inputs.truth_input.binding.sha256
@@ -146,6 +150,9 @@ def read_development_corpus_repeats_inputs(
         maximum_completion_tokens=maximum_completion_tokens,
         maximum_trial_seconds=maximum_trial_seconds,
         maximum_run_seconds=maximum_run_seconds,
+        source_custody=loaded
+        if loaded.material.manifest.source_tree_evidence is not None
+        else None,
     )
     bindings = (
         (source_manifest.parent, loaded.manifest_binding),

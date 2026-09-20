@@ -1,0 +1,2 @@
+# Synthetic local namespace only; no dependency fetching.
+@local/=lib/

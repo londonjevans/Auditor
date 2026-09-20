@@ -1,0 +1,253 @@
+{
+  "$defs": {
+    "CalendarJournalKind": {
+      "enum": [
+        "PREPARED",
+        "POST_STARTED",
+        "POST_REPLAYED",
+        "POST_UNCERTAIN",
+        "LOOKUP_STARTED",
+        "LOOKUP_REPLAYED",
+        "LOOKUP_UNAVAILABLE",
+        "LOOKUP_UNCERTAIN"
+      ],
+      "type": "string"
+    },
+    "CalendarJournalPreparation": {
+      "additionalProperties": false,
+      "description": "Exact serialized request context; construction conveys no dispatch authority.",
+      "properties": {
+        "body_hex": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Body Hex",
+          "type": "string"
+        },
+        "calendar_origin": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Calendar Origin",
+          "type": "string"
+        },
+        "commitment_hex": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Commitment Hex",
+          "type": "string"
+        },
+        "file_convention": {
+          "const": "SHA256_BINARY_SUBJECT_DIGEST_V1",
+          "default": "SHA256_BINARY_SUBJECT_DIGEST_V1",
+          "title": "File Convention",
+          "type": "string"
+        },
+        "file_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "File Sha256",
+          "type": "string"
+        },
+        "headers": {
+          "items": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "type": "array"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "title": "Headers",
+          "type": "array"
+        },
+        "method": {
+          "const": "POST",
+          "default": "POST",
+          "title": "Method",
+          "type": "string"
+        },
+        "nonce_hex": {
+          "pattern": "^[0-9a-f]{32}$",
+          "title": "Nonce Hex",
+          "type": "string"
+        },
+        "phase": {
+          "$ref": "#/$defs/PublicationPhase"
+        },
+        "preparation_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Preparation Sha256",
+          "type": "string"
+        },
+        "relative_path": {
+          "const": "digest",
+          "default": "digest",
+          "title": "Relative Path",
+          "type": "string"
+        },
+        "subject_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Subject Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "subject_sha256",
+        "phase",
+        "file_sha256",
+        "nonce_hex",
+        "calendar_origin",
+        "headers",
+        "commitment_hex",
+        "body_hex",
+        "preparation_sha256"
+      ],
+      "title": "CalendarJournalPreparation",
+      "type": "object"
+    },
+    "PublicationPhase": {
+      "enum": [
+        "POPULATION_REGISTRATION",
+        "MEASURED_POPULATION"
+      ],
+      "type": "string"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/calendar_journal_event.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Canonical bounded local observations, including uncompleted dispatch intents.",
+  "properties": {
+    "artifact_kind": {
+      "const": "CALENDAR_RECOVERY_EVENT",
+      "default": "CALENDAR_RECOVERY_EVENT",
+      "title": "Artifact Kind",
+      "type": "string"
+    },
+    "event_index": {
+      "exclusiveMaximum": 35,
+      "minimum": 0,
+      "title": "Event Index",
+      "type": "integer"
+    },
+    "event_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Event Sha256",
+      "type": "string"
+    },
+    "external_comparison_required": {
+      "const": true,
+      "default": true,
+      "title": "External Comparison Required",
+      "type": "boolean"
+    },
+    "external_publication_verified": {
+      "const": false,
+      "default": false,
+      "title": "External Publication Verified",
+      "type": "boolean"
+    },
+    "failure": {
+      "anyOf": [
+        {
+          "enum": [
+            "EXCHANGE_REFUSED",
+            "CANCELLED"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Failure"
+    },
+    "kind": {
+      "$ref": "#/$defs/CalendarJournalKind"
+    },
+    "model_qualification_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Model Qualification Authorized",
+      "type": "boolean"
+    },
+    "policy_adoption_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Policy Adoption Authorized",
+      "type": "boolean"
+    },
+    "pre_dispatch_anchoring_verified": {
+      "const": false,
+      "default": false,
+      "title": "Pre Dispatch Anchoring Verified",
+      "type": "boolean"
+    },
+    "preparation": {
+      "$ref": "#/$defs/CalendarJournalPreparation"
+    },
+    "previous_event_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Previous Event Sha256"
+    },
+    "provider_call_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Provider Call Authorized",
+      "type": "boolean"
+    },
+    "release_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Release Authorized",
+      "type": "boolean"
+    },
+    "response_body_hex": {
+      "anyOf": [
+        {
+          "maxLength": 20000,
+          "pattern": "^[0-9a-f]+$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Response Body Hex"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "serialized_authority": {
+      "const": false,
+      "default": false,
+      "title": "Serialized Authority",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "event_index",
+    "previous_event_sha256",
+    "kind",
+    "preparation",
+    "event_sha256"
+  ],
+  "title": "CalendarJournalEvent",
+  "type": "object"
+}

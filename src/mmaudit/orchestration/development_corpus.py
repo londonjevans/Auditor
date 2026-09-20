@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Literal
 
 import httpx
+from pydantic import BaseModel
 
 from mmaudit.benchmark.development_corpus import (
     MAX_DEVELOPMENT_CORPUS_SCORE_BYTES,
@@ -25,6 +26,7 @@ from mmaudit.benchmark.development_corpus_control_measurement import (
 )
 from mmaudit.models.development_audit import development_ledger_request_id
 from mmaudit.models.development_corpus import (
+    MAX_DEVELOPMENT_CORPUS_FILES,
     MAX_DEVELOPMENT_CORPUS_RESULT_BYTES,
     DevelopmentCorpusAccountingEntry,
     DevelopmentCorpusMaterial,
@@ -42,7 +44,6 @@ from mmaudit.models.development_routing import DevelopmentRoutingEvidence, Devel
 from mmaudit.models.development_transport import review_development_corpus_shard
 from mmaudit.operator_secrets import OperatorSecrets
 from mmaudit.orchestration.cost_ledger import AtomicCostLedger, CostEntryStatus
-from mmaudit.orchestration.development_audit import _write
 from mmaudit.orchestration.development_budget import development_uncertain_reservations
 from mmaudit.orchestration.development_corpus_control_measurement import (
     write_development_corpus_control_measurement,
@@ -125,7 +126,7 @@ def _rebuild(prepared: PreparedDevelopmentCorpus) -> PreparedDevelopmentCorpus:
         type(prepared) is not PreparedDevelopmentCorpus
         or type(prepared.plan) is not DevelopmentCorpusPlan
         or type(prepared.shards) is not tuple
-        or not 1 <= len(prepared.shards) <= 64
+        or not 1 <= len(prepared.shards) <= MAX_DEVELOPMENT_CORPUS_FILES
         or any(type(s) is not PreparedDevelopmentCorpusShard for s in prepared.shards)
     ):
         raise DevelopmentCorpusError("development corpus requires exact prepared plan/shard types")
@@ -139,6 +140,7 @@ def _rebuild(prepared: PreparedDevelopmentCorpus) -> PreparedDevelopmentCorpus:
         run_id=plan.run_id,
         maximum_completion_tokens=first.estimate.maximum_completion_tokens,
         maximum_run_seconds=plan.maximum_run_seconds,
+        source_custody=first.source_custody,
     )
     if rebuilt != prepared:
         raise DevelopmentCorpusError(
@@ -183,10 +185,14 @@ def _report(
         accounting=tuple(accounting),
         unobserved_shard_ids=gaps,
         completed_shard_count=len(complete),
-        selected_primary_line_count=sum(s.line_count for s in prepared.plan.manifest.sources),
+        selected_primary_line_count=sum(
+            s.line_count for s in prepared.plan.manifest.primary_sources
+        ),
         primary_lines_with_observed_responses=sum(
             s.line_count
-            for s, p in zip(prepared.plan.manifest.sources, prepared.plan.shards, strict=True)
+            for s, p in zip(
+                prepared.plan.manifest.primary_sources, prepared.plan.shards, strict=True
+            )
             if p.shard_id in complete
         ),
         candidate_claim_count=sum(
@@ -203,6 +209,36 @@ def _report(
             s.reserved_usd for s in accounting if s.status is CostEntryStatus.RESERVED
         ),
         elapsed_seconds=elapsed,
+    )
+
+
+def _write(
+    output_dir: Path,
+    filename: str,
+    model: BaseModel,
+    *,
+    max_bytes: int = MAX_DEVELOPMENT_CORPUS_RESULT_BYTES,
+) -> ManifestFileBinding:
+    """Retain bounded corpus artifacts without widening the fixed-fixture audit writer."""
+
+    if type(max_bytes) is not int or not 0 < max_bytes <= MAX_DEVELOPMENT_CORPUS_RESULT_BYTES:
+        raise DevelopmentCorpusError("development corpus output byte bound is invalid")
+    expected = model.model_dump(mode="json")
+
+    def validate(content: bytes) -> None:
+        restored = type(model).model_validate_json(content, strict=True)
+        if restored.model_dump(mode="json") != expected:
+            raise DevelopmentCorpusError(
+                "development corpus output differs from its exact observation"
+            )
+
+    return write_json_evidence(
+        evidence_root=output_dir,
+        relative_path=filename,
+        value=expected,
+        max_bytes=max_bytes,
+        validate_content=validate,
+        require_private_parent=True,
     )
 
 

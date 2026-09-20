@@ -1,9 +1,2484 @@
 {
+  "$comment": "Runtime consumers recompute the entire versioned dependency, argument/return and lexical member context from exact retained source bytes. Import or declaration bindings are not complete static call closure, filesystem custody, deployment, compilation or audit completeness. Any tree receipt requires actual root replay. Version1.9 requires a complete tree receipt and source-recomputed graph/syntax/typed-call composition; Version1.10 additionally requires exact disjoint primary/context membership over all retained sources. Version1.11 additionally binds the original complete tree; a derived bundle cannot detach original-root custody. CALL_CLOSED is only the recorded static supplied-tree dependency relation, not audit authority.",
   "$defs": {
+    "DependencyArgumentExpression": {
+      "additionalProperties": false,
+      "properties": {
+        "byte_end": {
+          "exclusiveMinimum": 0,
+          "maximum": 262144,
+          "title": "Byte End",
+          "type": "integer"
+        },
+        "byte_start": {
+          "exclusiveMaximum": 262144,
+          "minimum": 0,
+          "title": "Byte Start",
+          "type": "integer"
+        },
+        "expression_type": {
+          "$ref": "#/$defs/DependencyExpressionType"
+        },
+        "nested_call_offsets": {
+          "items": {
+            "type": "integer"
+          },
+          "maxItems": 4096,
+          "title": "Nested Call Offsets",
+          "type": "array"
+        },
+        "shortfalls": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 64,
+          "title": "Shortfalls",
+          "type": "array"
+        },
+        "value_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 4096,
+          "title": "Value Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "byte_start",
+        "byte_end",
+        "expression_type",
+        "value_ids",
+        "nested_call_offsets",
+        "shortfalls"
+      ],
+      "title": "DependencyArgumentExpression",
+      "type": "object"
+    },
+    "DependencyBaseArgumentCall": {
+      "additionalProperties": false,
+      "properties": {
+        "call_byte_start": {
+          "exclusiveMaximum": 262144,
+          "minimum": 0,
+          "title": "Call Byte Start",
+          "type": "integer"
+        },
+        "owner_type_id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Owner Type Id",
+          "type": "string"
+        },
+        "source": {
+          "maxLength": 512,
+          "pattern": "^(?:[A-Za-z0-9][A-Za-z0-9._-]*/)*[A-Za-z0-9][A-Za-z0-9._-]*\\.sol$",
+          "title": "Source",
+          "type": "string"
+        },
+        "target_id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Target Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "call_byte_start",
+        "owner_type_id",
+        "target_id"
+      ],
+      "title": "DependencyBaseArgumentCall",
+      "type": "object"
+    },
+    "DependencyCallBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "byte_end": {
+          "exclusiveMinimum": 0,
+          "maximum": 262144,
+          "title": "Byte End",
+          "type": "integer"
+        },
+        "byte_start": {
+          "exclusiveMaximum": 262144,
+          "minimum": 0,
+          "title": "Byte Start",
+          "type": "integer"
+        },
+        "implementation_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 4096,
+          "title": "Implementation Ids",
+          "type": "array"
+        },
+        "member": {
+          "maxLength": 512,
+          "pattern": "^[A-Za-z_$][A-Za-z0-9_$]*$",
+          "title": "Member",
+          "type": "string"
+        },
+        "member_dispatch": {
+          "const": "NOT_ESTABLISHED",
+          "default": "NOT_ESTABLISHED",
+          "title": "Member Dispatch",
+          "type": "string"
+        },
+        "receiver": {
+          "$ref": "#/$defs/DependencyTypeBinding"
+        },
+        "receiver_form": {
+          "enum": [
+            "TYPE_CAST",
+            "TYPE_MEMBER",
+            "UNSUPPORTED_EXPRESSION"
+          ],
+          "title": "Receiver Form",
+          "type": "string"
+        },
+        "shortfalls": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 32,
+          "title": "Shortfalls",
+          "type": "array"
+        },
+        "source": {
+          "maxLength": 512,
+          "pattern": "^(?:[A-Za-z0-9][A-Za-z0-9._-]*/)*[A-Za-z0-9][A-Za-z0-9._-]*\\.sol$",
+          "title": "Source",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "byte_start",
+        "byte_end",
+        "member",
+        "receiver_form",
+        "receiver",
+        "implementation_ids",
+        "shortfalls"
+      ],
+      "title": "DependencyCallBinding",
+      "type": "object"
+    },
+    "DependencyCallContext": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "else": {
+            "properties": {
+              "calls": {
+                "items": {
+                  "properties": {
+                    "constructor_binding": {
+                      "type": "null"
+                    },
+                    "dispatch": {
+                      "not": {
+                        "enum": [
+                          "CREATION",
+                          "BASE_CONSTRUCTOR"
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "if": {
+            "properties": {
+              "policy": {
+                "const": "SOURCE_CALL_MODIFIER_AND_CONSTRUCTOR_RESOLUTION_V3"
+              }
+            },
+            "required": [
+              "policy"
+            ]
+          }
+        }
+      ],
+      "properties": {
+        "calls": {
+          "items": {
+            "$ref": "#/$defs/DependencyTypedCall"
+          },
+          "maxItems": 4096,
+          "title": "Calls",
+          "type": "array"
+        },
+        "complete_static_resolution": {
+          "const": false,
+          "default": false,
+          "title": "Complete Static Resolution",
+          "type": "boolean"
+        },
+        "gaps": {
+          "items": {
+            "$ref": "#/$defs/DependencyTargetGap"
+          },
+          "maxItems": 4096,
+          "title": "Gaps",
+          "type": "array"
+        },
+        "policy": {
+          "default": "SOURCE_ARGUMENT_RETURN_CALL_RESOLUTION_V1",
+          "enum": [
+            "SOURCE_ARGUMENT_RETURN_CALL_RESOLUTION_V1",
+            "SOURCE_CALL_AND_MODIFIER_RESOLUTION_V2",
+            "SOURCE_CALL_MODIFIER_AND_CONSTRUCTOR_RESOLUTION_V3"
+          ],
+          "title": "Policy",
+          "type": "string"
+        },
+        "primaries": {
+          "items": {
+            "$ref": "#/$defs/DependencyTypedMembers"
+          },
+          "maxItems": 256,
+          "minItems": 1,
+          "title": "Primaries",
+          "type": "array"
+        },
+        "scope": {
+          "const": "LEXICAL_CALL_CANDIDATES_NOT_COMPLETE_SOLIDITY_OR_DEPLOYED_DISPATCH",
+          "default": "LEXICAL_CALL_CANDIDATES_NOT_COMPLETE_SOLIDITY_OR_DEPLOYED_DISPATCH",
+          "title": "Scope",
+          "type": "string"
+        },
+        "scoped_context_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Scoped Context Sha256",
+          "type": "string"
+        },
+        "source_inventory_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Inventory Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_inventory_sha256",
+        "scoped_context_sha256",
+        "calls",
+        "gaps",
+        "primaries"
+      ],
+      "title": "DependencyCallContext",
+      "type": "object"
+    },
+    "DependencyCandidateReference": {
+      "additionalProperties": false,
+      "description": "A lexical candidate, including graph-missed calls; never a complete type/call proof.",
+      "properties": {
+        "basis": {
+          "const": "LEXICAL_CANDIDATE_NOT_COMPLETE_SEMANTIC_CALL_INVENTORY",
+          "default": "LEXICAL_CANDIDATE_NOT_COMPLETE_SEMANTIC_CALL_INVENTORY",
+          "title": "Basis",
+          "type": "string"
+        },
+        "byte_end": {
+          "exclusiveMinimum": 0,
+          "maximum": 262144,
+          "title": "Byte End",
+          "type": "integer"
+        },
+        "byte_start": {
+          "exclusiveMaximum": 262144,
+          "minimum": 0,
+          "title": "Byte Start",
+          "type": "integer"
+        },
+        "kind": {
+          "$ref": "#/$defs/DependencyReferenceKind"
+        },
+        "line": {
+          "maximum": 10000,
+          "minimum": 1,
+          "title": "Line",
+          "type": "integer"
+        },
+        "source": {
+          "maxLength": 512,
+          "pattern": "^(?:[A-Za-z0-9][A-Za-z0-9._-]*/)*[A-Za-z0-9][A-Za-z0-9._-]*\\.sol$",
+          "title": "Source",
+          "type": "string"
+        },
+        "spelling": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Spelling",
+          "type": "string"
+        },
+        "target_resolution": {
+          "const": "NOT_ESTABLISHED",
+          "default": "NOT_ESTABLISHED",
+          "title": "Target Resolution",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "byte_start",
+        "byte_end",
+        "line",
+        "kind",
+        "spelling"
+      ],
+      "title": "DependencyCandidateReference",
+      "type": "object"
+    },
+    "DependencyClosureStatus": {
+      "enum": [
+        "NOT_ESTABLISHED",
+        "IMPORT_CLOSED",
+        "CALL_CLOSED"
+      ],
+      "type": "string"
+    },
+    "DependencyConstructorBinding": {
+      "additionalProperties": false,
+      "description": "Nominal constructor source dependencies, not initialization order or deployability.",
+      "properties": {
+        "base_argument_calls": {
+          "items": {
+            "$ref": "#/$defs/DependencyBaseArgumentCall"
+          },
+          "maxItems": 4096,
+          "title": "Base Argument Calls",
+          "type": "array"
+        },
+        "constructor_member_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 4096,
+          "title": "Constructor Member Ids",
+          "type": "array"
+        },
+        "implicit_type_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 4096,
+          "title": "Implicit Type Ids",
+          "type": "array"
+        },
+        "required_type_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 4096,
+          "minItems": 1,
+          "title": "Required Type Ids",
+          "type": "array"
+        },
+        "target_id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Target Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "target_id",
+        "required_type_ids",
+        "constructor_member_ids",
+        "implicit_type_ids",
+        "base_argument_calls"
+      ],
+      "title": "DependencyConstructorBinding",
+      "type": "object"
+    },
+    "DependencyExpressionType": {
+      "additionalProperties": false,
+      "properties": {
+        "integer_value": {
+          "anyOf": [
+            {
+              "maxLength": 79,
+              "pattern": "^-?(?:0|[1-9][0-9]*)$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Integer Value"
+        },
+        "kind": {
+          "enum": [
+            "BUILTIN",
+            "NOMINAL",
+            "INTEGER_LITERAL",
+            "STRING_LITERAL",
+            "UNKNOWN"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "shortfall": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Shortfall"
+        },
+        "spelling": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Spelling",
+          "type": "string"
+        },
+        "target_id": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Id"
+        }
+      },
+      "required": [
+        "kind",
+        "spelling"
+      ],
+      "title": "DependencyExpressionType",
+      "type": "object"
+    },
+    "DependencyFunctionDeclaration": {
+      "additionalProperties": false,
+      "properties": {
+        "body_byte_end": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "maximum": 262144,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Body Byte End"
+        },
+        "body_byte_start": {
+          "anyOf": [
+            {
+              "exclusiveMaximum": 262144,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Body Byte Start"
+        },
+        "byte_end": {
+          "exclusiveMinimum": 0,
+          "maximum": 262144,
+          "title": "Byte End",
+          "type": "integer"
+        },
+        "byte_start": {
+          "exclusiveMaximum": 262144,
+          "minimum": 0,
+          "title": "Byte Start",
+          "type": "integer"
+        },
+        "id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "function",
+            "constructor",
+            "modifier",
+            "fallback",
+            "receive"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 512,
+          "pattern": "^[A-Za-z_$][A-Za-z0-9_$]*$",
+          "title": "Name",
+          "type": "string"
+        },
+        "owner_type_id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Owner Type Id",
+          "type": "string"
+        },
+        "parameters": {
+          "items": {
+            "$ref": "#/$defs/DependencyTypeBinding"
+          },
+          "maxItems": 64,
+          "title": "Parameters",
+          "type": "array"
+        },
+        "returns": {
+          "items": {
+            "$ref": "#/$defs/DependencyTypeBinding"
+          },
+          "maxItems": 64,
+          "title": "Returns",
+          "type": "array"
+        },
+        "scope_id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Scope Id",
+          "type": "string"
+        },
+        "source": {
+          "maxLength": 512,
+          "pattern": "^(?:[A-Za-z0-9][A-Za-z0-9._-]*/)*[A-Za-z0-9][A-Za-z0-9._-]*\\.sol$",
+          "title": "Source",
+          "type": "string"
+        },
+        "source_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Sha256",
+          "type": "string"
+        },
+        "visibility": {
+          "enum": [
+            "public",
+            "external",
+            "private",
+            "internal",
+            "UNSPECIFIED"
+          ],
+          "title": "Visibility",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "source",
+        "source_sha256",
+        "owner_type_id",
+        "byte_start",
+        "byte_end",
+        "scope_id",
+        "kind",
+        "name",
+        "parameters",
+        "returns",
+        "visibility",
+        "body_byte_start",
+        "body_byte_end"
+      ],
+      "title": "DependencyFunctionDeclaration",
+      "type": "object"
+    },
+    "DependencyGraphFact": {
+      "additionalProperties": false,
+      "properties": {
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "fact_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Fact Sha256",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/SolidityGraphKind"
+        },
+        "line_end": {
+          "minimum": 1,
+          "title": "Line End",
+          "type": "integer"
+        },
+        "line_start": {
+          "minimum": 1,
+          "title": "Line Start",
+          "type": "integer"
+        },
+        "provenance": {
+          "$ref": "#/$defs/SolidityProvenance"
+        },
+        "resolution": {
+          "const": "NOT_ESTABLISHED",
+          "default": "NOT_ESTABLISHED",
+          "title": "Resolution",
+          "type": "string"
+        },
+        "source": {
+          "maxLength": 512,
+          "pattern": "^(?:[A-Za-z0-9][A-Za-z0-9._-]*/)*[A-Za-z0-9][A-Za-z0-9._-]*\\.sol$",
+          "title": "Source",
+          "type": "string"
+        },
+        "source_id": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Source Id",
+          "type": "string"
+        },
+        "target_id": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Target Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "line_start",
+        "line_end",
+        "kind",
+        "provenance",
+        "confidence",
+        "fact_sha256",
+        "source_id",
+        "target_id"
+      ],
+      "title": "DependencyGraphFact",
+      "type": "object"
+    },
+    "DependencyGraphFactJoin": {
+      "additionalProperties": false,
+      "properties": {
+        "call_indices": {
+          "items": {
+            "type": "integer"
+          },
+          "maxItems": 4096,
+          "title": "Call Indices",
+          "type": "array"
+        },
+        "graph_fact_index": {
+          "exclusiveMaximum": 4096,
+          "minimum": 0,
+          "title": "Graph Fact Index",
+          "type": "integer"
+        },
+        "inheritance_indices": {
+          "items": {
+            "type": "integer"
+          },
+          "maxItems": 4096,
+          "title": "Inheritance Indices",
+          "type": "array"
+        },
+        "shortfalls": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 32,
+          "title": "Shortfalls",
+          "type": "array"
+        }
+      },
+      "required": [
+        "graph_fact_index",
+        "call_indices",
+        "inheritance_indices",
+        "shortfalls"
+      ],
+      "title": "DependencyGraphFactJoin",
+      "type": "object"
+    },
+    "DependencyGraphSymbolBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "declaration_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 4096,
+          "title": "Declaration Ids",
+          "type": "array"
+        },
+        "graph_symbol_id": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Graph Symbol Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "graph_symbol_id",
+        "declaration_ids"
+      ],
+      "title": "DependencyGraphSymbolBinding",
+      "type": "object"
+    },
+    "DependencyImport": {
+      "additionalProperties": false,
+      "properties": {
+        "byte_end": {
+          "exclusiveMinimum": 0,
+          "maximum": 262144,
+          "title": "Byte End",
+          "type": "integer"
+        },
+        "byte_start": {
+          "exclusiveMaximum": 262144,
+          "minimum": 0,
+          "title": "Byte Start",
+          "type": "integer"
+        },
+        "import_path": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Import Path"
+        },
+        "line": {
+          "maximum": 10000,
+          "minimum": 1,
+          "title": "Line",
+          "type": "integer"
+        },
+        "shortfall": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ImportShortfall"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "source": {
+          "maxLength": 512,
+          "pattern": "^(?:[A-Za-z0-9][A-Za-z0-9._-]*/)*[A-Za-z0-9][A-Za-z0-9._-]*\\.sol$",
+          "title": "Source",
+          "type": "string"
+        },
+        "target": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "pattern": "^(?:[A-Za-z0-9][A-Za-z0-9._-]*/)*[A-Za-z0-9][A-Za-z0-9._-]*\\.sol$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target"
+        }
+      },
+      "required": [
+        "source",
+        "byte_start",
+        "byte_end",
+        "line"
+      ],
+      "title": "DependencyImport",
+      "type": "object"
+    },
+    "DependencyInheritanceBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "base": {
+          "$ref": "#/$defs/DependencyTypeBinding"
+        },
+        "inheritor_id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Inheritor Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "inheritor_id",
+        "base"
+      ],
+      "title": "DependencyInheritanceBinding",
+      "type": "object"
+    },
+    "DependencyLexicalScope": {
+      "additionalProperties": false,
+      "properties": {
+        "byte_end": {
+          "exclusiveMinimum": 0,
+          "maximum": 262144,
+          "title": "Byte End",
+          "type": "integer"
+        },
+        "byte_start": {
+          "exclusiveMaximum": 262144,
+          "minimum": 0,
+          "title": "Byte Start",
+          "type": "integer"
+        },
+        "id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "CONTRACT",
+            "FUNCTION",
+            "BLOCK",
+            "FOR"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "owner_type_id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Owner Type Id",
+          "type": "string"
+        },
+        "parent_id": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Parent Id"
+        },
+        "source": {
+          "maxLength": 512,
+          "pattern": "^(?:[A-Za-z0-9][A-Za-z0-9._-]*/)*[A-Za-z0-9][A-Za-z0-9._-]*\\.sol$",
+          "title": "Source",
+          "type": "string"
+        },
+        "source_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "source",
+        "source_sha256",
+        "owner_type_id",
+        "byte_start",
+        "byte_end",
+        "kind",
+        "parent_id"
+      ],
+      "title": "DependencyLexicalScope",
+      "type": "object"
+    },
+    "DependencyParseGap": {
+      "additionalProperties": false,
+      "properties": {
+        "byte_offset": {
+          "maximum": 262144,
+          "minimum": 0,
+          "title": "Byte Offset",
+          "type": "integer"
+        },
+        "reason": {
+          "enum": [
+            "LEXICAL_ERROR",
+            "UNBALANCED_DELIMITER",
+            "IMPORT_NOT_TOP_LEVEL"
+          ],
+          "title": "Reason",
+          "type": "string"
+        },
+        "source": {
+          "maxLength": 512,
+          "pattern": "^(?:[A-Za-z0-9][A-Za-z0-9._-]*/)*[A-Za-z0-9][A-Za-z0-9._-]*\\.sol$",
+          "title": "Source",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "byte_offset",
+        "reason"
+      ],
+      "title": "DependencyParseGap",
+      "type": "object"
+    },
+    "DependencyPrimaryClosure": {
+      "additionalProperties": false,
+      "properties": {
+        "call_closure": {
+          "$ref": "#/$defs/StaticClosureStatus",
+          "default": "NOT_ESTABLISHED"
+        },
+        "call_members": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 256,
+              "minItems": 1,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Call Members"
+        },
+        "call_shortfall": {
+          "anyOf": [
+            {
+              "enum": [
+                "COMPLETE_STATIC_TARGET_AND_IMPLEMENTER_RESOLUTION_UNAVAILABLE",
+                "STATIC_CLOSURE_SHORTFALLS_RECORDED"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": "COMPLETE_STATIC_TARGET_AND_IMPLEMENTER_RESOLUTION_UNAVAILABLE",
+          "title": "Call Shortfall"
+        },
+        "import_closure": {
+          "$ref": "#/$defs/ImportClosureStatus"
+        },
+        "import_members": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 256,
+          "minItems": 1,
+          "title": "Import Members",
+          "type": "array"
+        },
+        "primary": {
+          "maxLength": 512,
+          "pattern": "^(?:[A-Za-z0-9][A-Za-z0-9._-]*/)*[A-Za-z0-9][A-Za-z0-9._-]*\\.sol$",
+          "title": "Primary",
+          "type": "string"
+        }
+      },
+      "required": [
+        "primary",
+        "import_members",
+        "import_closure"
+      ],
+      "title": "DependencyPrimaryClosure",
+      "type": "object"
+    },
+    "DependencyReferenceKind": {
+      "enum": [
+        "MEMBER_CALL",
+        "INHERITANCE_HEADER",
+        "NEW_TYPE",
+        "ASSEMBLY",
+        "USING"
+      ],
+      "type": "string"
+    },
+    "DependencyScopedCall": {
+      "additionalProperties": false,
+      "properties": {
+        "argument_count": {
+          "anyOf": [
+            {
+              "maximum": 64,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Argument Count"
+        },
+        "byte_end": {
+          "exclusiveMinimum": 0,
+          "maximum": 262144,
+          "title": "Byte End",
+          "type": "integer"
+        },
+        "byte_start": {
+          "exclusiveMaximum": 262144,
+          "minimum": 0,
+          "title": "Byte Start",
+          "type": "integer"
+        },
+        "implementation_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 4096,
+          "title": "Implementation Ids",
+          "type": "array"
+        },
+        "implementation_member_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 4096,
+          "title": "Implementation Member Ids",
+          "type": "array"
+        },
+        "member": {
+          "maxLength": 512,
+          "pattern": "^[A-Za-z_$][A-Za-z0-9_$]*$",
+          "title": "Member",
+          "type": "string"
+        },
+        "member_declaration_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 4096,
+          "title": "Member Declaration Ids",
+          "type": "array"
+        },
+        "member_resolution": {
+          "enum": [
+            "DECLARATIONS_BOUND",
+            "NOT_ESTABLISHED"
+          ],
+          "title": "Member Resolution",
+          "type": "string"
+        },
+        "receiver": {
+          "$ref": "#/$defs/DependencyTypeBinding"
+        },
+        "receiver_form": {
+          "enum": [
+            "VALUE",
+            "TYPE_CAST",
+            "TYPE_MEMBER",
+            "THIS",
+            "UNSUPPORTED"
+          ],
+          "title": "Receiver Form",
+          "type": "string"
+        },
+        "receiver_value_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 4096,
+          "title": "Receiver Value Ids",
+          "type": "array"
+        },
+        "scope_id": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Scope Id"
+        },
+        "shortfalls": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 64,
+          "title": "Shortfalls",
+          "type": "array"
+        },
+        "source": {
+          "maxLength": 512,
+          "pattern": "^(?:[A-Za-z0-9][A-Za-z0-9._-]*/)*[A-Za-z0-9][A-Za-z0-9._-]*\\.sol$",
+          "title": "Source",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "byte_start",
+        "byte_end",
+        "scope_id",
+        "member",
+        "argument_count",
+        "receiver_form",
+        "receiver",
+        "receiver_value_ids",
+        "member_declaration_ids",
+        "implementation_ids",
+        "implementation_member_ids",
+        "shortfalls",
+        "member_resolution"
+      ],
+      "title": "DependencyScopedCall",
+      "type": "object"
+    },
+    "DependencyScopedContext": {
+      "additionalProperties": false,
+      "properties": {
+        "calls": {
+          "items": {
+            "$ref": "#/$defs/DependencyScopedCall"
+          },
+          "maxItems": 4096,
+          "title": "Calls",
+          "type": "array"
+        },
+        "complete_static_resolution": {
+          "const": false,
+          "default": false,
+          "title": "Complete Static Resolution",
+          "type": "boolean"
+        },
+        "functions": {
+          "items": {
+            "$ref": "#/$defs/DependencyFunctionDeclaration"
+          },
+          "maxItems": 4096,
+          "title": "Functions",
+          "type": "array"
+        },
+        "gaps": {
+          "items": {
+            "$ref": "#/$defs/DependencyTargetGap"
+          },
+          "maxItems": 4096,
+          "title": "Gaps",
+          "type": "array"
+        },
+        "policy": {
+          "default": "MODERN_LEXICAL_VALUES_AND_NOMINAL_MEMBERS_V1",
+          "enum": [
+            "MODERN_LEXICAL_VALUES_AND_NOMINAL_MEMBERS_V1",
+            "MODERN_LEXICAL_VALUES_AND_MODIFIER_HEADERS_V2",
+            "MODERN_LEXICAL_VALUES_AND_CONSTRUCTOR_HEADERS_V3"
+          ],
+          "title": "Policy",
+          "type": "string"
+        },
+        "primaries": {
+          "items": {
+            "$ref": "#/$defs/DependencyScopedMembers"
+          },
+          "maxItems": 256,
+          "minItems": 1,
+          "title": "Primaries",
+          "type": "array"
+        },
+        "scope": {
+          "const": "SOURCE_DECLARATIONS_NOT_COMPLETE_TYPECHECK_OR_DEPLOYED_DISPATCH",
+          "default": "SOURCE_DECLARATIONS_NOT_COMPLETE_TYPECHECK_OR_DEPLOYED_DISPATCH",
+          "title": "Scope",
+          "type": "string"
+        },
+        "scopes": {
+          "items": {
+            "$ref": "#/$defs/DependencyLexicalScope"
+          },
+          "maxItems": 4096,
+          "title": "Scopes",
+          "type": "array"
+        },
+        "source_inventory_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Inventory Sha256",
+          "type": "string"
+        },
+        "supplied_type_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 4096,
+          "title": "Supplied Type Ids",
+          "type": "array"
+        },
+        "target_context_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Target Context Sha256",
+          "type": "string"
+        },
+        "values": {
+          "items": {
+            "$ref": "#/$defs/DependencyValueDeclaration"
+          },
+          "maxItems": 4096,
+          "title": "Values",
+          "type": "array"
+        }
+      },
+      "required": [
+        "source_inventory_sha256",
+        "target_context_sha256",
+        "supplied_type_ids",
+        "scopes",
+        "values",
+        "functions",
+        "calls",
+        "gaps",
+        "primaries"
+      ],
+      "title": "DependencyScopedContext",
+      "type": "object"
+    },
+    "DependencyScopedMembers": {
+      "additionalProperties": false,
+      "properties": {
+        "gap_indices": {
+          "items": {
+            "type": "integer"
+          },
+          "maxItems": 4096,
+          "title": "Gap Indices",
+          "type": "array"
+        },
+        "members": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 256,
+          "minItems": 1,
+          "title": "Members",
+          "type": "array"
+        },
+        "primary": {
+          "maxLength": 512,
+          "pattern": "^(?:[A-Za-z0-9][A-Za-z0-9._-]*/)*[A-Za-z0-9][A-Za-z0-9._-]*\\.sol$",
+          "title": "Primary",
+          "type": "string"
+        },
+        "unresolved_call_indices": {
+          "items": {
+            "type": "integer"
+          },
+          "maxItems": 4096,
+          "title": "Unresolved Call Indices",
+          "type": "array"
+        }
+      },
+      "required": [
+        "primary",
+        "members",
+        "unresolved_call_indices",
+        "gap_indices"
+      ],
+      "title": "DependencyScopedMembers",
+      "type": "object"
+    },
+    "DependencySource": {
+      "additionalProperties": false,
+      "properties": {
+        "filename": {
+          "maxLength": 512,
+          "pattern": "^(?:[A-Za-z0-9][A-Za-z0-9._-]*/)*[A-Za-z0-9][A-Za-z0-9._-]*\\.sol$",
+          "title": "Filename",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "size": {
+          "exclusiveMinimum": 0,
+          "maximum": 262144,
+          "title": "Size",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "filename",
+        "sha256",
+        "size"
+      ],
+      "title": "DependencySource",
+      "type": "object"
+    },
+    "DependencySourceSyntax": {
+      "additionalProperties": false,
+      "properties": {
+        "parsed_token_count": {
+          "maximum": 131072,
+          "minimum": 0,
+          "title": "Parsed Token Count",
+          "type": "integer"
+        },
+        "source": {
+          "maxLength": 512,
+          "pattern": "^(?:[A-Za-z0-9][A-Za-z0-9._-]*/)*[A-Za-z0-9][A-Za-z0-9._-]*\\.sol$",
+          "title": "Source",
+          "type": "string"
+        },
+        "source_bytes": {
+          "exclusiveMinimum": 0,
+          "maximum": 262144,
+          "title": "Source Bytes",
+          "type": "integer"
+        },
+        "source_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Sha256",
+          "type": "string"
+        },
+        "syntax_coverage": {
+          "enum": [
+            "SUPPORTED_GRAMMAR_ACCOUNTED",
+            "NOT_ESTABLISHED"
+          ],
+          "title": "Syntax Coverage",
+          "type": "string"
+        },
+        "token_count": {
+          "maximum": 131072,
+          "minimum": 0,
+          "title": "Token Count",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "source",
+        "source_sha256",
+        "source_bytes",
+        "token_count",
+        "parsed_token_count",
+        "syntax_coverage"
+      ],
+      "title": "DependencySourceSyntax",
+      "type": "object"
+    },
+    "DependencyStaticCallLines": {
+      "additionalProperties": false,
+      "properties": {
+        "call_index": {
+          "exclusiveMaximum": 4096,
+          "minimum": 0,
+          "title": "Call Index",
+          "type": "integer"
+        },
+        "line_end": {
+          "maximum": 10000,
+          "minimum": 1,
+          "title": "Line End",
+          "type": "integer"
+        },
+        "line_start": {
+          "maximum": 10000,
+          "minimum": 1,
+          "title": "Line Start",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "call_index",
+        "line_start",
+        "line_end"
+      ],
+      "title": "DependencyStaticCallLines",
+      "type": "object"
+    },
+    "DependencyStaticEdge": {
+      "additionalProperties": false,
+      "description": "One exact source-to-source dependency; its referenced declaration is retained too.",
+      "properties": {
+        "basis": {
+          "$ref": "#/$defs/_EdgeBasis"
+        },
+        "evidence_index": {
+          "exclusiveMaximum": 4096,
+          "minimum": 0,
+          "title": "Evidence Index",
+          "type": "integer"
+        },
+        "kind": {
+          "$ref": "#/$defs/SolidityGraphKind"
+        },
+        "source": {
+          "maxLength": 512,
+          "pattern": "^(?:[A-Za-z0-9][A-Za-z0-9._-]*/)*[A-Za-z0-9][A-Za-z0-9._-]*\\.sol$",
+          "title": "Source",
+          "type": "string"
+        },
+        "target": {
+          "maxLength": 512,
+          "pattern": "^(?:[A-Za-z0-9][A-Za-z0-9._-]*/)*[A-Za-z0-9][A-Za-z0-9._-]*\\.sol$",
+          "title": "Target",
+          "type": "string"
+        },
+        "target_declaration_id": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Declaration Id"
+        }
+      },
+      "required": [
+        "kind",
+        "source",
+        "target",
+        "basis",
+        "evidence_index"
+      ],
+      "title": "DependencyStaticEdge",
+      "type": "object"
+    },
+    "DependencyStaticPrimary": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "else": {
+            "properties": {
+              "shortfall_indices": {
+                "minItems": 1
+              }
+            }
+          },
+          "if": {
+            "properties": {
+              "call_closure": {
+                "const": "CALL_CLOSED"
+              }
+            },
+            "required": [
+              "call_closure"
+            ]
+          },
+          "then": {
+            "properties": {
+              "shortfall_indices": {
+                "maxItems": 0
+              }
+            }
+          }
+        }
+      ],
+      "properties": {
+        "call_closure": {
+          "$ref": "#/$defs/StaticClosureStatus"
+        },
+        "edge_indices": {
+          "items": {
+            "type": "integer"
+          },
+          "maxItems": 4096,
+          "title": "Edge Indices",
+          "type": "array"
+        },
+        "members": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 256,
+          "minItems": 1,
+          "title": "Members",
+          "type": "array"
+        },
+        "primary": {
+          "maxLength": 512,
+          "pattern": "^(?:[A-Za-z0-9][A-Za-z0-9._-]*/)*[A-Za-z0-9][A-Za-z0-9._-]*\\.sol$",
+          "title": "Primary",
+          "type": "string"
+        },
+        "shortfall_indices": {
+          "items": {
+            "type": "integer"
+          },
+          "maxItems": 4096,
+          "title": "Shortfall Indices",
+          "type": "array"
+        }
+      },
+      "required": [
+        "primary",
+        "members",
+        "edge_indices",
+        "shortfall_indices",
+        "call_closure"
+      ],
+      "title": "DependencyStaticPrimary",
+      "type": "object"
+    },
+    "DependencyStaticShortfall": {
+      "additionalProperties": false,
+      "properties": {
+        "evidence_index": {
+          "exclusiveMaximum": 4096,
+          "minimum": 0,
+          "title": "Evidence Index",
+          "type": "integer"
+        },
+        "global_scope": {
+          "title": "Global Scope",
+          "type": "boolean"
+        },
+        "population": {
+          "$ref": "#/$defs/_Population"
+        },
+        "reason": {
+          "maxLength": 128,
+          "pattern": "^[A-Z_]+$",
+          "title": "Reason",
+          "type": "string"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "pattern": "^(?:[A-Za-z0-9][A-Za-z0-9._-]*/)*[A-Za-z0-9][A-Za-z0-9._-]*\\.sol$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source"
+        }
+      },
+      "required": [
+        "global_scope",
+        "population",
+        "evidence_index",
+        "reason"
+      ],
+      "title": "DependencyStaticShortfall",
+      "type": "object"
+    },
+    "DependencySyntaxCall": {
+      "additionalProperties": false,
+      "properties": {
+        "byte_end": {
+          "exclusiveMinimum": 0,
+          "maximum": 262144,
+          "title": "Byte End",
+          "type": "integer"
+        },
+        "byte_start": {
+          "exclusiveMaximum": 262144,
+          "minimum": 0,
+          "title": "Byte Start",
+          "type": "integer"
+        },
+        "call_byte_start": {
+          "exclusiveMaximum": 262144,
+          "exclusiveMinimum": 0,
+          "title": "Call Byte Start",
+          "type": "integer"
+        },
+        "kind": {
+          "$ref": "#/$defs/SyntaxCallKind"
+        },
+        "source": {
+          "maxLength": 512,
+          "pattern": "^(?:[A-Za-z0-9][A-Za-z0-9._-]*/)*[A-Za-z0-9][A-Za-z0-9._-]*\\.sol$",
+          "title": "Source",
+          "type": "string"
+        },
+        "typed_call_index": {
+          "anyOf": [
+            {
+              "exclusiveMaximum": 4096,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Typed Call Index"
+        },
+        "typed_match": {
+          "enum": [
+            "EXACT_SPAN",
+            "SPAN_MISMATCH",
+            "MISSING_TYPED_CALL"
+          ],
+          "title": "Typed Match",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "byte_start",
+        "call_byte_start",
+        "byte_end",
+        "kind",
+        "typed_call_index",
+        "typed_match"
+      ],
+      "title": "DependencySyntaxCall",
+      "type": "object"
+    },
+    "DependencySyntaxContext": {
+      "additionalProperties": false,
+      "properties": {
+        "call_context_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Call Context Sha256",
+          "type": "string"
+        },
+        "calls": {
+          "items": {
+            "$ref": "#/$defs/DependencySyntaxCall"
+          },
+          "maxItems": 4096,
+          "title": "Calls",
+          "type": "array"
+        },
+        "complete_static_resolution": {
+          "const": false,
+          "default": false,
+          "title": "Complete Static Resolution",
+          "type": "boolean"
+        },
+        "gaps": {
+          "items": {
+            "$ref": "#/$defs/DependencySyntaxGap"
+          },
+          "maxItems": 256,
+          "title": "Gaps",
+          "type": "array"
+        },
+        "policy": {
+          "default": "SOURCE_GRAMMAR_AND_TYPED_CALL_CENSUS_V1",
+          "enum": [
+            "SOURCE_GRAMMAR_AND_TYPED_CALL_CENSUS_V1",
+            "SOURCE_GRAMMAR_AND_MODIFIER_CENSUS_V2",
+            "SOURCE_GRAMMAR_AND_CONSTRUCTOR_CENSUS_V3"
+          ],
+          "title": "Policy",
+          "type": "string"
+        },
+        "scope": {
+          "const": "SUPPORTED_SYNTAX_NOT_TYPECHECK_COMPILATION_OR_CALL_CLOSURE",
+          "default": "SUPPORTED_SYNTAX_NOT_TYPECHECK_COMPILATION_OR_CALL_CLOSURE",
+          "title": "Scope",
+          "type": "string"
+        },
+        "source_inventory_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Inventory Sha256",
+          "type": "string"
+        },
+        "sources": {
+          "items": {
+            "$ref": "#/$defs/DependencySourceSyntax"
+          },
+          "maxItems": 256,
+          "minItems": 1,
+          "title": "Sources",
+          "type": "array"
+        },
+        "unmatched_typed_call_indices": {
+          "items": {
+            "type": "integer"
+          },
+          "maxItems": 4096,
+          "title": "Unmatched Typed Call Indices",
+          "type": "array"
+        }
+      },
+      "required": [
+        "source_inventory_sha256",
+        "call_context_sha256",
+        "sources",
+        "calls",
+        "gaps",
+        "unmatched_typed_call_indices"
+      ],
+      "title": "DependencySyntaxContext",
+      "type": "object"
+    },
+    "DependencySyntaxGap": {
+      "additionalProperties": false,
+      "properties": {
+        "byte_end": {
+          "maximum": 262144,
+          "minimum": 0,
+          "title": "Byte End",
+          "type": "integer"
+        },
+        "byte_start": {
+          "maximum": 262144,
+          "minimum": 0,
+          "title": "Byte Start",
+          "type": "integer"
+        },
+        "failure_byte_offset": {
+          "maximum": 262144,
+          "minimum": 0,
+          "title": "Failure Byte Offset",
+          "type": "integer"
+        },
+        "reason": {
+          "enum": [
+            "UNSUPPORTED_OR_MALFORMED_SYNTAX",
+            "UNSUPPORTED_PRAGMA",
+            "UNSUPPORTED_TYPE",
+            "UNSUPPORTED_ASSEMBLY",
+            "UNSUPPORTED_USING",
+            "INVALID_STRING_LITERAL",
+            "LEXICAL_ERROR"
+          ],
+          "title": "Reason",
+          "type": "string"
+        },
+        "source": {
+          "maxLength": 512,
+          "pattern": "^(?:[A-Za-z0-9][A-Za-z0-9._-]*/)*[A-Za-z0-9][A-Za-z0-9._-]*\\.sol$",
+          "title": "Source",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "byte_start",
+        "byte_end",
+        "failure_byte_offset",
+        "reason"
+      ],
+      "title": "DependencySyntaxGap",
+      "type": "object"
+    },
+    "DependencyTargetContext": {
+      "additionalProperties": false,
+      "properties": {
+        "calls": {
+          "items": {
+            "$ref": "#/$defs/DependencyCallBinding"
+          },
+          "maxItems": 4096,
+          "title": "Calls",
+          "type": "array"
+        },
+        "complete_static_resolution": {
+          "const": false,
+          "default": false,
+          "title": "Complete Static Resolution",
+          "type": "boolean"
+        },
+        "declarations": {
+          "items": {
+            "$ref": "#/$defs/DependencyTypeDeclaration"
+          },
+          "maxItems": 4096,
+          "title": "Declarations",
+          "type": "array"
+        },
+        "gaps": {
+          "items": {
+            "$ref": "#/$defs/DependencyTargetGap"
+          },
+          "maxItems": 4096,
+          "title": "Gaps",
+          "type": "array"
+        },
+        "inheritance": {
+          "items": {
+            "$ref": "#/$defs/DependencyInheritanceBinding"
+          },
+          "maxItems": 4096,
+          "title": "Inheritance",
+          "type": "array"
+        },
+        "policy": {
+          "const": "SOURCE_NAMESPACE_AND_EXPLICIT_TYPE_RECEIVERS_V1",
+          "default": "SOURCE_NAMESPACE_AND_EXPLICIT_TYPE_RECEIVERS_V1",
+          "title": "Policy",
+          "type": "string"
+        },
+        "primaries": {
+          "items": {
+            "$ref": "#/$defs/DependencyTargetMembers"
+          },
+          "maxItems": 256,
+          "minItems": 1,
+          "title": "Primaries",
+          "type": "array"
+        },
+        "scope": {
+          "const": "SUPPLIED_DECLARATIONS_NOT_FILESYSTEM_OR_DEPLOYMENT_COMPLETENESS",
+          "default": "SUPPLIED_DECLARATIONS_NOT_FILESYSTEM_OR_DEPLOYMENT_COMPLETENESS",
+          "title": "Scope",
+          "type": "string"
+        },
+        "solidity_typecheck": {
+          "const": "NOT_PERFORMED",
+          "default": "NOT_PERFORMED",
+          "title": "Solidity Typecheck",
+          "type": "string"
+        },
+        "source_inventory_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Inventory Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_inventory_sha256",
+        "declarations",
+        "inheritance",
+        "calls",
+        "gaps",
+        "primaries"
+      ],
+      "title": "DependencyTargetContext",
+      "type": "object"
+    },
+    "DependencyTargetGap": {
+      "additionalProperties": false,
+      "properties": {
+        "byte_start": {
+          "exclusiveMaximum": 262144,
+          "minimum": 0,
+          "title": "Byte Start",
+          "type": "integer"
+        },
+        "reason": {
+          "maxLength": 128,
+          "pattern": "^[A-Z_]+$",
+          "title": "Reason",
+          "type": "string"
+        },
+        "source": {
+          "maxLength": 512,
+          "pattern": "^(?:[A-Za-z0-9][A-Za-z0-9._-]*/)*[A-Za-z0-9][A-Za-z0-9._-]*\\.sol$",
+          "title": "Source",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "byte_start",
+        "reason"
+      ],
+      "title": "DependencyTargetGap",
+      "type": "object"
+    },
+    "DependencyTargetMembers": {
+      "additionalProperties": false,
+      "properties": {
+        "gap_indices": {
+          "items": {
+            "type": "integer"
+          },
+          "maxItems": 4096,
+          "title": "Gap Indices",
+          "type": "array"
+        },
+        "members": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 256,
+          "minItems": 1,
+          "title": "Members",
+          "type": "array"
+        },
+        "primary": {
+          "maxLength": 512,
+          "pattern": "^(?:[A-Za-z0-9][A-Za-z0-9._-]*/)*[A-Za-z0-9][A-Za-z0-9._-]*\\.sol$",
+          "title": "Primary",
+          "type": "string"
+        },
+        "unresolved_call_indices": {
+          "items": {
+            "type": "integer"
+          },
+          "maxItems": 4096,
+          "title": "Unresolved Call Indices",
+          "type": "array"
+        }
+      },
+      "required": [
+        "primary",
+        "members",
+        "unresolved_call_indices",
+        "gap_indices"
+      ],
+      "title": "DependencyTargetMembers",
+      "type": "object"
+    },
+    "DependencyTypeBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "byte_start": {
+          "exclusiveMaximum": 262144,
+          "minimum": 0,
+          "title": "Byte Start",
+          "type": "integer"
+        },
+        "candidate_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 4096,
+          "title": "Candidate Ids",
+          "type": "array"
+        },
+        "shortfall": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "pattern": "^[A-Z_]+$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Shortfall"
+        },
+        "source": {
+          "maxLength": 512,
+          "pattern": "^(?:[A-Za-z0-9][A-Za-z0-9._-]*/)*[A-Za-z0-9][A-Za-z0-9._-]*\\.sol$",
+          "title": "Source",
+          "type": "string"
+        },
+        "spelling": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Spelling",
+          "type": "string"
+        },
+        "target_id": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Id"
+        }
+      },
+      "required": [
+        "source",
+        "byte_start",
+        "spelling",
+        "candidate_ids"
+      ],
+      "title": "DependencyTypeBinding",
+      "type": "object"
+    },
+    "DependencyTypeDeclaration": {
+      "additionalProperties": false,
+      "properties": {
+        "abstract": {
+          "title": "Abstract",
+          "type": "boolean"
+        },
+        "byte_end": {
+          "exclusiveMinimum": 0,
+          "maximum": 262144,
+          "title": "Byte End",
+          "type": "integer"
+        },
+        "byte_start": {
+          "exclusiveMaximum": 262144,
+          "minimum": 0,
+          "title": "Byte Start",
+          "type": "integer"
+        },
+        "id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "contract",
+            "interface",
+            "library"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 512,
+          "pattern": "^[A-Za-z_$][A-Za-z0-9_$]*$",
+          "title": "Name",
+          "type": "string"
+        },
+        "source": {
+          "maxLength": 512,
+          "pattern": "^(?:[A-Za-z0-9][A-Za-z0-9._-]*/)*[A-Za-z0-9][A-Za-z0-9._-]*\\.sol$",
+          "title": "Source",
+          "type": "string"
+        },
+        "source_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "source",
+        "source_sha256",
+        "name",
+        "kind",
+        "abstract",
+        "byte_start",
+        "byte_end"
+      ],
+      "title": "DependencyTypeDeclaration",
+      "type": "object"
+    },
+    "DependencyTypedCall": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "dispatch": {
+                "enum": [
+                  "CREATION",
+                  "BASE_CONSTRUCTOR"
+                ]
+              },
+              "resolution": {
+                "const": "STATIC_DECLARATIONS_BOUND"
+              }
+            },
+            "required": [
+              "dispatch",
+              "resolution"
+            ]
+          },
+          "then": {
+            "properties": {
+              "constructor_binding": {
+                "$ref": "#/$defs/DependencyConstructorBinding"
+              }
+            },
+            "required": [
+              "constructor_binding"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "dispatch": {
+                "not": {
+                  "enum": [
+                    "CREATION",
+                    "BASE_CONSTRUCTOR"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "dispatch"
+            ]
+          },
+          "then": {
+            "properties": {
+              "constructor_binding": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ],
+      "properties": {
+        "arguments": {
+          "items": {
+            "$ref": "#/$defs/DependencyArgumentExpression"
+          },
+          "maxItems": 64,
+          "title": "Arguments",
+          "type": "array"
+        },
+        "byte_end": {
+          "exclusiveMinimum": 0,
+          "maximum": 262144,
+          "title": "Byte End",
+          "type": "integer"
+        },
+        "byte_start": {
+          "exclusiveMaximum": 262144,
+          "minimum": 0,
+          "title": "Byte Start",
+          "type": "integer"
+        },
+        "call_byte_start": {
+          "exclusiveMaximum": 262144,
+          "minimum": 0,
+          "title": "Call Byte Start",
+          "type": "integer"
+        },
+        "callee": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Callee",
+          "type": "string"
+        },
+        "candidate_member_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 4096,
+          "title": "Candidate Member Ids",
+          "type": "array"
+        },
+        "constructor_binding": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DependencyConstructorBinding"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "dispatch": {
+          "enum": [
+            "MEMBER",
+            "LIBRARY",
+            "INTERNAL",
+            "CONVERSION",
+            "INTRINSIC",
+            "UNRESOLVED",
+            "MODIFIER",
+            "IMPLICIT_MODIFIER",
+            "CREATION",
+            "BASE_CONSTRUCTOR"
+          ],
+          "title": "Dispatch",
+          "type": "string"
+        },
+        "implementation_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 4096,
+          "title": "Implementation Ids",
+          "type": "array"
+        },
+        "implementation_member_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 4096,
+          "title": "Implementation Member Ids",
+          "type": "array"
+        },
+        "member_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 4096,
+          "title": "Member Ids",
+          "type": "array"
+        },
+        "receiver": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DependencyArgumentExpression"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resolution": {
+          "enum": [
+            "STATIC_DECLARATIONS_BOUND",
+            "NOT_ESTABLISHED"
+          ],
+          "title": "Resolution",
+          "type": "string"
+        },
+        "result_types": {
+          "items": {
+            "$ref": "#/$defs/DependencyExpressionType"
+          },
+          "maxItems": 64,
+          "title": "Result Types",
+          "type": "array"
+        },
+        "scope_id": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Scope Id"
+        },
+        "shortfalls": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 64,
+          "title": "Shortfalls",
+          "type": "array"
+        },
+        "source": {
+          "maxLength": 512,
+          "pattern": "^(?:[A-Za-z0-9][A-Za-z0-9._-]*/)*[A-Za-z0-9][A-Za-z0-9._-]*\\.sol$",
+          "title": "Source",
+          "type": "string"
+        },
+        "source_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "source_sha256",
+        "byte_start",
+        "byte_end",
+        "call_byte_start",
+        "scope_id",
+        "callee",
+        "dispatch",
+        "receiver",
+        "arguments",
+        "result_types",
+        "candidate_member_ids",
+        "member_ids",
+        "implementation_ids",
+        "implementation_member_ids",
+        "shortfalls",
+        "resolution"
+      ],
+      "title": "DependencyTypedCall",
+      "type": "object"
+    },
+    "DependencyTypedMembers": {
+      "additionalProperties": false,
+      "properties": {
+        "gap_indices": {
+          "items": {
+            "type": "integer"
+          },
+          "maxItems": 4096,
+          "title": "Gap Indices",
+          "type": "array"
+        },
+        "members": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 256,
+          "minItems": 1,
+          "title": "Members",
+          "type": "array"
+        },
+        "primary": {
+          "maxLength": 512,
+          "pattern": "^(?:[A-Za-z0-9][A-Za-z0-9._-]*/)*[A-Za-z0-9][A-Za-z0-9._-]*\\.sol$",
+          "title": "Primary",
+          "type": "string"
+        },
+        "unresolved_call_indices": {
+          "items": {
+            "type": "integer"
+          },
+          "maxItems": 4096,
+          "title": "Unresolved Call Indices",
+          "type": "array"
+        }
+      },
+      "required": [
+        "primary",
+        "members",
+        "unresolved_call_indices",
+        "gap_indices"
+      ],
+      "title": "DependencyTypedMembers",
+      "type": "object"
+    },
+    "DependencyValueDeclaration": {
+      "additionalProperties": false,
+      "properties": {
+        "byte_end": {
+          "exclusiveMinimum": 0,
+          "maximum": 262144,
+          "title": "Byte End",
+          "type": "integer"
+        },
+        "byte_start": {
+          "exclusiveMaximum": 262144,
+          "minimum": 0,
+          "title": "Byte Start",
+          "type": "integer"
+        },
+        "id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "STATE",
+            "PARAMETER",
+            "RETURN",
+            "LOCAL"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 512,
+          "pattern": "^[A-Za-z_$][A-Za-z0-9_$]*$",
+          "title": "Name",
+          "type": "string"
+        },
+        "name_byte_start": {
+          "exclusiveMaximum": 262144,
+          "minimum": 0,
+          "title": "Name Byte Start",
+          "type": "integer"
+        },
+        "owner_type_id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Owner Type Id",
+          "type": "string"
+        },
+        "scope_id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Scope Id",
+          "type": "string"
+        },
+        "source": {
+          "maxLength": 512,
+          "pattern": "^(?:[A-Za-z0-9][A-Za-z0-9._-]*/)*[A-Za-z0-9][A-Za-z0-9._-]*\\.sol$",
+          "title": "Source",
+          "type": "string"
+        },
+        "source_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Sha256",
+          "type": "string"
+        },
+        "value_type": {
+          "$ref": "#/$defs/DependencyTypeBinding"
+        },
+        "visibility": {
+          "enum": [
+            "public",
+            "private",
+            "internal",
+            "UNSPECIFIED"
+          ],
+          "title": "Visibility",
+          "type": "string"
+        },
+        "visible_from": {
+          "maximum": 262144,
+          "minimum": 0,
+          "title": "Visible From",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "source",
+        "source_sha256",
+        "owner_type_id",
+        "byte_start",
+        "byte_end",
+        "scope_id",
+        "kind",
+        "name",
+        "name_byte_start",
+        "visible_from",
+        "visibility",
+        "value_type"
+      ],
+      "title": "DependencyValueDeclaration",
+      "type": "object"
+    },
+    "DevelopmentCorpusPartitionOrigin": {
+      "additionalProperties": false,
+      "description": "A mandatory original-tree binding, not independent provenance or lineage evidence.",
+      "properties": {
+        "policy": {
+          "const": "ORIGINAL_TREE_STATIC_CLOSURE_MINIMAL_SOURCE_UNION_V1",
+          "default": "ORIGINAL_TREE_STATIC_CLOSURE_MINIMAL_SOURCE_UNION_V1",
+          "title": "Policy",
+          "type": "string"
+        },
+        "reference_manifest_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Reference Manifest Sha256",
+          "type": "string"
+        },
+        "reference_replay_required": {
+          "const": true,
+          "default": true,
+          "title": "Reference Replay Required",
+          "type": "boolean"
+        },
+        "reference_static_closure_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Reference Static Closure Sha256",
+          "type": "string"
+        },
+        "reference_tree_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Reference Tree Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "reference_manifest_sha256",
+        "reference_tree_sha256",
+        "reference_static_closure_sha256"
+      ],
+      "title": "DevelopmentCorpusPartitionOrigin",
+      "type": "object"
+    },
     "DevelopmentCorpusScope": {
       "enum": [
         "OPERATOR_SUPPLIED_SYNTHETIC",
-        "OPERATOR_SUPPLIED_PUBLIC"
+        "OPERATOR_SUPPLIED_PUBLIC",
+        "OPERATOR_SUPPLIED_PROTOCOL"
       ],
       "type": "string"
     },
@@ -30,7 +2505,7 @@
         },
         "size": {
           "exclusiveMinimum": 0,
-          "maximum": 65536,
+          "maximum": 262144,
           "title": "Size",
           "type": "integer"
         }
@@ -43,11 +2518,1929 @@
       ],
       "title": "DevelopmentCorpusSource",
       "type": "object"
+    },
+    "DevelopmentCorpusSourcePartition": {
+      "$comment": "Runtime requires canonical disjoint primary/context roles whose union exactly equals retained sources.",
+      "additionalProperties": false,
+      "description": "Every retained source has exactly one role; context is not primary review.",
+      "properties": {
+        "context_filenames": {
+          "items": {
+            "maxLength": 512,
+            "minLength": 1,
+            "pattern": "^(?:[A-Za-z0-9][A-Za-z0-9._-]*/)*[A-Za-z0-9][A-Za-z0-9._-]*\\.sol$",
+            "type": "string"
+          },
+          "maxItems": 256,
+          "title": "Context Filenames",
+          "type": "array",
+          "uniqueItems": true
+        },
+        "primary_filenames": {
+          "items": {
+            "maxLength": 512,
+            "minLength": 1,
+            "pattern": "^(?:[A-Za-z0-9][A-Za-z0-9._-]*/)*[A-Za-z0-9][A-Za-z0-9._-]*\\.sol$",
+            "type": "string"
+          },
+          "maxItems": 256,
+          "minItems": 1,
+          "title": "Primary Filenames",
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "primary_filenames",
+        "context_filenames"
+      ],
+      "title": "DevelopmentCorpusSourcePartition",
+      "type": "object"
+    },
+    "DevelopmentCorpusTreeDirectory": {
+      "additionalProperties": false,
+      "description": "Exact child-name/type digest; no non-source file contents are read or retained.",
+      "properties": {
+        "entries_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Entries Sha256",
+          "type": "string"
+        },
+        "entry_count": {
+          "maximum": 4096,
+          "minimum": 0,
+          "title": "Entry Count",
+          "type": "integer"
+        },
+        "path": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "entry_count",
+        "entries_sha256"
+      ],
+      "title": "DevelopmentCorpusTreeDirectory",
+      "type": "object"
+    },
+    "DevelopmentCorpusTreeEvidence": {
+      "additionalProperties": false,
+      "description": "An enumeration receipt, never proof of the filesystem from a self-hash alone.",
+      "properties": {
+        "directories": {
+          "items": {
+            "$ref": "#/$defs/DevelopmentCorpusTreeDirectory"
+          },
+          "maxItems": 512,
+          "minItems": 1,
+          "title": "Directories",
+          "type": "array"
+        },
+        "non_source_file_count": {
+          "maximum": 4096,
+          "minimum": 0,
+          "title": "Non Source File Count",
+          "type": "integer"
+        },
+        "policy": {
+          "const": "ALL_RECURSIVE_SOLIDITY_NO_EXCLUSIONS_V1",
+          "default": "ALL_RECURSIVE_SOLIDITY_NO_EXCLUSIONS_V1",
+          "title": "Policy",
+          "type": "string"
+        },
+        "root_replay_required": {
+          "const": true,
+          "default": true,
+          "title": "Root Replay Required",
+          "type": "boolean"
+        },
+        "solidity_file_count": {
+          "exclusiveMinimum": 0,
+          "maximum": 256,
+          "title": "Solidity File Count",
+          "type": "integer"
+        },
+        "source_inventory_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Inventory Sha256",
+          "type": "string"
+        },
+        "tree_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Tree Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_inventory_sha256",
+        "solidity_file_count",
+        "non_source_file_count",
+        "directories",
+        "tree_sha256"
+      ],
+      "title": "DevelopmentCorpusTreeEvidence",
+      "type": "object"
+    },
+    "DevelopmentDependencyClosure": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "else": {
+            "properties": {
+              "schema_version": {
+                "enum": [
+                  "1.1",
+                  "1.2",
+                  "1.3",
+                  "1.4",
+                  "1.5",
+                  "1.6",
+                  "1.7"
+                ]
+              },
+              "target_context": {
+                "$ref": "#/$defs/DependencyTargetContext"
+              }
+            },
+            "required": [
+              "schema_version",
+              "target_context"
+            ]
+          },
+          "if": {
+            "properties": {
+              "schema_version": {
+                "const": "1.0"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "target_context": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "else": {
+            "properties": {
+              "scoped_context": {
+                "type": "null"
+              }
+            }
+          },
+          "if": {
+            "properties": {
+              "schema_version": {
+                "enum": [
+                  "1.2",
+                  "1.3",
+                  "1.4",
+                  "1.5",
+                  "1.6",
+                  "1.7"
+                ]
+              }
+            },
+            "required": [
+              "schema_version"
+            ]
+          },
+          "then": {
+            "properties": {
+              "scoped_context": {
+                "$ref": "#/$defs/DependencyScopedContext"
+              }
+            },
+            "required": [
+              "scoped_context"
+            ]
+          }
+        },
+        {
+          "else": {
+            "properties": {
+              "call_context": {
+                "type": "null"
+              }
+            }
+          },
+          "if": {
+            "properties": {
+              "schema_version": {
+                "enum": [
+                  "1.3",
+                  "1.4",
+                  "1.5",
+                  "1.6",
+                  "1.7"
+                ]
+              }
+            },
+            "required": [
+              "schema_version"
+            ]
+          },
+          "then": {
+            "properties": {
+              "call_context": {
+                "$ref": "#/$defs/DependencyCallContext"
+              }
+            },
+            "required": [
+              "call_context"
+            ]
+          }
+        },
+        {
+          "else": {
+            "properties": {
+              "syntax_context": {
+                "type": "null"
+              }
+            }
+          },
+          "if": {
+            "properties": {
+              "schema_version": {
+                "enum": [
+                  "1.4",
+                  "1.5",
+                  "1.6",
+                  "1.7"
+                ]
+              }
+            },
+            "required": [
+              "schema_version"
+            ]
+          },
+          "then": {
+            "properties": {
+              "syntax_context": {
+                "$ref": "#/$defs/DependencySyntaxContext"
+              }
+            },
+            "required": [
+              "syntax_context"
+            ]
+          }
+        },
+        {
+          "else": {
+            "properties": {
+              "dependency_closure": {
+                "enum": [
+                  "NOT_ESTABLISHED",
+                  "IMPORT_CLOSED"
+                ]
+              },
+              "primaries": {
+                "items": {
+                  "properties": {
+                    "call_closure": {
+                      "const": "NOT_ESTABLISHED"
+                    },
+                    "call_members": {
+                      "type": "null"
+                    },
+                    "call_shortfall": {
+                      "const": "COMPLETE_STATIC_TARGET_AND_IMPLEMENTER_RESOLUTION_UNAVAILABLE"
+                    }
+                  }
+                }
+              },
+              "static_call_closure": {
+                "type": "null"
+              }
+            }
+          },
+          "if": {
+            "properties": {
+              "schema_version": {
+                "const": "1.7"
+              }
+            },
+            "required": [
+              "schema_version"
+            ]
+          },
+          "then": {
+            "properties": {
+              "dependency_closure": {
+                "enum": [
+                  "NOT_ESTABLISHED",
+                  "CALL_CLOSED"
+                ]
+              },
+              "primaries": {
+                "items": {
+                  "properties": {
+                    "call_members": {
+                      "minItems": 1,
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "call_members"
+                  ]
+                }
+              },
+              "static_call_closure": {
+                "$ref": "#/$defs/DevelopmentStaticCallClosure"
+              }
+            },
+            "required": [
+              "static_call_closure"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "dependency_closure": {
+                "const": "CALL_CLOSED"
+              }
+            },
+            "required": [
+              "dependency_closure"
+            ]
+          },
+          "then": {
+            "properties": {
+              "static_call_closure": {
+                "properties": {
+                  "call_closure": {
+                    "const": "CALL_CLOSED"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "dependency_closure": {
+                "const": "NOT_ESTABLISHED"
+              }
+            },
+            "required": [
+              "dependency_closure"
+            ]
+          },
+          "then": {
+            "properties": {
+              "static_call_closure": {
+                "properties": {
+                  "call_closure": {
+                    "const": "NOT_ESTABLISHED"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "else": {
+            "else": {
+              "properties": {
+                "scoped_context": {
+                  "properties": {
+                    "policy": {
+                      "const": "MODERN_LEXICAL_VALUES_AND_NOMINAL_MEMBERS_V1"
+                    }
+                  }
+                }
+              }
+            },
+            "if": {
+              "properties": {
+                "schema_version": {
+                  "enum": [
+                    "1.6",
+                    "1.7"
+                  ]
+                }
+              },
+              "required": [
+                "schema_version"
+              ]
+            },
+            "then": {
+              "properties": {
+                "scoped_context": {
+                  "properties": {
+                    "policy": {
+                      "const": "MODERN_LEXICAL_VALUES_AND_CONSTRUCTOR_HEADERS_V3"
+                    }
+                  },
+                  "required": [
+                    "policy"
+                  ]
+                }
+              }
+            }
+          },
+          "if": {
+            "properties": {
+              "schema_version": {
+                "const": "1.5"
+              }
+            },
+            "required": [
+              "schema_version"
+            ]
+          },
+          "then": {
+            "properties": {
+              "scoped_context": {
+                "properties": {
+                  "policy": {
+                    "const": "MODERN_LEXICAL_VALUES_AND_MODIFIER_HEADERS_V2"
+                  }
+                },
+                "required": [
+                  "policy"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "else": {
+            "else": {
+              "properties": {
+                "call_context": {
+                  "properties": {
+                    "policy": {
+                      "const": "SOURCE_ARGUMENT_RETURN_CALL_RESOLUTION_V1"
+                    }
+                  }
+                }
+              }
+            },
+            "if": {
+              "properties": {
+                "schema_version": {
+                  "enum": [
+                    "1.6",
+                    "1.7"
+                  ]
+                }
+              },
+              "required": [
+                "schema_version"
+              ]
+            },
+            "then": {
+              "properties": {
+                "call_context": {
+                  "properties": {
+                    "policy": {
+                      "const": "SOURCE_CALL_MODIFIER_AND_CONSTRUCTOR_RESOLUTION_V3"
+                    }
+                  },
+                  "required": [
+                    "policy"
+                  ]
+                }
+              }
+            }
+          },
+          "if": {
+            "properties": {
+              "schema_version": {
+                "const": "1.5"
+              }
+            },
+            "required": [
+              "schema_version"
+            ]
+          },
+          "then": {
+            "properties": {
+              "call_context": {
+                "properties": {
+                  "policy": {
+                    "const": "SOURCE_CALL_AND_MODIFIER_RESOLUTION_V2"
+                  }
+                },
+                "required": [
+                  "policy"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "else": {
+            "else": {
+              "properties": {
+                "syntax_context": {
+                  "properties": {
+                    "policy": {
+                      "const": "SOURCE_GRAMMAR_AND_TYPED_CALL_CENSUS_V1"
+                    }
+                  }
+                }
+              }
+            },
+            "if": {
+              "properties": {
+                "schema_version": {
+                  "enum": [
+                    "1.6",
+                    "1.7"
+                  ]
+                }
+              },
+              "required": [
+                "schema_version"
+              ]
+            },
+            "then": {
+              "properties": {
+                "syntax_context": {
+                  "properties": {
+                    "policy": {
+                      "const": "SOURCE_GRAMMAR_AND_CONSTRUCTOR_CENSUS_V3"
+                    }
+                  },
+                  "required": [
+                    "policy"
+                  ]
+                }
+              }
+            }
+          },
+          "if": {
+            "properties": {
+              "schema_version": {
+                "const": "1.5"
+              }
+            },
+            "required": [
+              "schema_version"
+            ]
+          },
+          "then": {
+            "properties": {
+              "syntax_context": {
+                "properties": {
+                  "policy": {
+                    "const": "SOURCE_GRAMMAR_AND_MODIFIER_CENSUS_V2"
+                  }
+                },
+                "required": [
+                  "policy"
+                ]
+              }
+            }
+          }
+        }
+      ],
+      "description": "Self-hashes bind evidence; the source consumer must additionally recompute it.",
+      "properties": {
+        "audit_complete": {
+          "const": false,
+          "default": false,
+          "title": "Audit Complete",
+          "type": "boolean"
+        },
+        "call_context": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DependencyCallContext"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "candidate_references": {
+          "items": {
+            "$ref": "#/$defs/DependencyCandidateReference"
+          },
+          "maxItems": 4096,
+          "title": "Candidate References",
+          "type": "array"
+        },
+        "dependency_closure": {
+          "$ref": "#/$defs/DependencyClosureStatus"
+        },
+        "graph_artifact_byte_limit": {
+          "maximum": 2097152,
+          "minimum": 1024,
+          "title": "Graph Artifact Byte Limit",
+          "type": "integer"
+        },
+        "graph_edge_omission_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Graph Edge Omission Sha256",
+          "type": "string"
+        },
+        "graph_edge_omissions": {
+          "items": {
+            "$ref": "#/$defs/SolidityGraphOmission"
+          },
+          "maxItems": 64,
+          "title": "Graph Edge Omissions",
+          "type": "array"
+        },
+        "graph_fact_omission_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Graph Fact Omission Sha256",
+          "type": "string"
+        },
+        "graph_fact_omissions": {
+          "items": {
+            "$ref": "#/$defs/SolidityGraphFactOmission"
+          },
+          "maxItems": 3,
+          "title": "Graph Fact Omissions",
+          "type": "array"
+        },
+        "graph_facts": {
+          "items": {
+            "$ref": "#/$defs/DependencyGraphFact"
+          },
+          "maxItems": 4096,
+          "title": "Graph Facts",
+          "type": "array"
+        },
+        "graph_generation_complete": {
+          "title": "Graph Generation Complete",
+          "type": "boolean"
+        },
+        "graph_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Graph Sha256",
+          "type": "string"
+        },
+        "graph_warnings": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 4096,
+          "title": "Graph Warnings",
+          "type": "array"
+        },
+        "graph_warnings_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Graph Warnings Sha256",
+          "type": "string"
+        },
+        "imports": {
+          "items": {
+            "$ref": "#/$defs/DependencyImport"
+          },
+          "maxItems": 4096,
+          "title": "Imports",
+          "type": "array"
+        },
+        "parse_gaps": {
+          "items": {
+            "$ref": "#/$defs/DependencyParseGap"
+          },
+          "maxItems": 4096,
+          "title": "Parse Gaps",
+          "type": "array"
+        },
+        "parse_scope": {
+          "const": "DEPENDENCY_LEXER_NOT_SOLIDITY_COMPILATION",
+          "default": "DEPENDENCY_LEXER_NOT_SOLIDITY_COMPILATION",
+          "title": "Parse Scope",
+          "type": "string"
+        },
+        "primaries": {
+          "items": {
+            "$ref": "#/$defs/DependencyPrimaryClosure"
+          },
+          "maxItems": 256,
+          "minItems": 1,
+          "title": "Primaries",
+          "type": "array"
+        },
+        "qualification_eligible": {
+          "const": false,
+          "default": false,
+          "title": "Qualification Eligible",
+          "type": "boolean"
+        },
+        "remapping_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Remapping Sha256",
+          "type": "string"
+        },
+        "remapping_text": {
+          "maxLength": 32768,
+          "title": "Remapping Text",
+          "type": "string"
+        },
+        "resolution_policy": {
+          "const": "LOCAL_RELATIVE_UNIQUE_LONGEST_PREFIX_IMPORTS_V1",
+          "default": "LOCAL_RELATIVE_UNIQUE_LONGEST_PREFIX_IMPORTS_V1",
+          "title": "Resolution Policy",
+          "type": "string"
+        },
+        "runtime_authority": {
+          "const": false,
+          "default": false,
+          "title": "Runtime Authority",
+          "type": "boolean"
+        },
+        "schema_version": {
+          "default": "1.0",
+          "enum": [
+            "1.0",
+            "1.1",
+            "1.2",
+            "1.3",
+            "1.4",
+            "1.5",
+            "1.6",
+            "1.7"
+          ],
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "scope": {
+          "const": "EXACT_SUPPLIED_SOURCE_SET_NOT_FILESYSTEM_OR_DEPLOYMENT_COMPLETENESS",
+          "default": "EXACT_SUPPLIED_SOURCE_SET_NOT_FILESYSTEM_OR_DEPLOYMENT_COMPLETENESS",
+          "title": "Scope",
+          "type": "string"
+        },
+        "scoped_context": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DependencyScopedContext"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "source_inventory": {
+          "items": {
+            "$ref": "#/$defs/DependencySource"
+          },
+          "maxItems": 256,
+          "minItems": 1,
+          "title": "Source Inventory",
+          "type": "array"
+        },
+        "source_inventory_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Inventory Sha256",
+          "type": "string"
+        },
+        "static_call_closure": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DevelopmentStaticCallClosure"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "syntax_context": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DependencySyntaxContext"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "target_context": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DependencyTargetContext"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "unsupported_remapping_lines": {
+          "items": {
+            "type": "integer"
+          },
+          "maxItems": 4096,
+          "title": "Unsupported Remapping Lines",
+          "type": "array"
+        },
+        "witness_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Witness Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_inventory",
+        "source_inventory_sha256",
+        "remapping_text",
+        "remapping_sha256",
+        "unsupported_remapping_lines",
+        "imports",
+        "parse_gaps",
+        "candidate_references",
+        "graph_sha256",
+        "graph_generation_complete",
+        "graph_artifact_byte_limit",
+        "graph_edge_omissions",
+        "graph_fact_omissions",
+        "graph_warnings",
+        "graph_edge_omission_sha256",
+        "graph_fact_omission_sha256",
+        "graph_warnings_sha256",
+        "graph_facts",
+        "primaries",
+        "dependency_closure",
+        "witness_sha256"
+      ],
+      "title": "DevelopmentDependencyClosure",
+      "type": "object"
+    },
+    "DevelopmentStaticCallClosure": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "else": {
+            "properties": {
+              "shortfalls": {
+                "minItems": 1
+              }
+            }
+          },
+          "if": {
+            "properties": {
+              "call_closure": {
+                "const": "CALL_CLOSED"
+              }
+            },
+            "required": [
+              "call_closure"
+            ]
+          },
+          "then": {
+            "properties": {
+              "shortfalls": {
+                "maxItems": 0
+              }
+            }
+          }
+        }
+      ],
+      "properties": {
+        "audit_complete": {
+          "const": false,
+          "default": false,
+          "title": "Audit Complete",
+          "type": "boolean"
+        },
+        "call_closure": {
+          "$ref": "#/$defs/StaticClosureStatus"
+        },
+        "call_lines": {
+          "items": {
+            "$ref": "#/$defs/DependencyStaticCallLines"
+          },
+          "maxItems": 4096,
+          "title": "Call Lines",
+          "type": "array"
+        },
+        "closure_inputs_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Closure Inputs Sha256",
+          "type": "string"
+        },
+        "edges": {
+          "items": {
+            "$ref": "#/$defs/DependencyStaticEdge"
+          },
+          "maxItems": 4096,
+          "title": "Edges",
+          "type": "array"
+        },
+        "edges_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Edges Sha256",
+          "type": "string"
+        },
+        "graph_joins": {
+          "items": {
+            "$ref": "#/$defs/DependencyGraphFactJoin"
+          },
+          "maxItems": 4096,
+          "title": "Graph Joins",
+          "type": "array"
+        },
+        "graph_symbols": {
+          "items": {
+            "$ref": "#/$defs/DependencyGraphSymbolBinding"
+          },
+          "maxItems": 8192,
+          "title": "Graph Symbols",
+          "type": "array"
+        },
+        "minimum_original_graph_confidence": {
+          "default": 0.9,
+          "maximum": 0.9,
+          "minimum": 0.9,
+          "title": "Minimum Original Graph Confidence",
+          "type": "number"
+        },
+        "original_graph_facts_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Original Graph Facts Sha256",
+          "type": "string"
+        },
+        "original_graph_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Original Graph Sha256",
+          "type": "string"
+        },
+        "policy": {
+          "const": "SOURCE_GRAPH_SYNTAX_TYPED_CALL_CLOSURE_V1",
+          "default": "SOURCE_GRAPH_SYNTAX_TYPED_CALL_CLOSURE_V1",
+          "title": "Policy",
+          "type": "string"
+        },
+        "primaries": {
+          "items": {
+            "$ref": "#/$defs/DependencyStaticPrimary"
+          },
+          "maxItems": 256,
+          "minItems": 1,
+          "title": "Primaries",
+          "type": "array"
+        },
+        "proof_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Proof Sha256",
+          "type": "string"
+        },
+        "qualification_eligible": {
+          "const": false,
+          "default": false,
+          "title": "Qualification Eligible",
+          "type": "boolean"
+        },
+        "required_graph_kinds": {
+          "default": [
+            "contract_creation",
+            "delegatecall",
+            "dependency",
+            "external_call",
+            "inheritance",
+            "internal_call",
+            "low_level_call",
+            "modifier"
+          ],
+          "items": {
+            "$ref": "#/$defs/SolidityGraphKind"
+          },
+          "title": "Required Graph Kinds",
+          "type": "array"
+        },
+        "runtime_authority": {
+          "const": false,
+          "default": false,
+          "title": "Runtime Authority",
+          "type": "boolean"
+        },
+        "scope": {
+          "const": "SUPPORTED_STATIC_SUPPLIED_TREE_NOT_DEPLOYMENT_OR_REACHABILITY",
+          "default": "SUPPORTED_STATIC_SUPPLIED_TREE_NOT_DEPLOYMENT_OR_REACHABILITY",
+          "title": "Scope",
+          "type": "string"
+        },
+        "shortfalls": {
+          "items": {
+            "$ref": "#/$defs/DependencyStaticShortfall"
+          },
+          "maxItems": 4096,
+          "title": "Shortfalls",
+          "type": "array"
+        },
+        "source_inventory_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Inventory Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_inventory_sha256",
+        "original_graph_sha256",
+        "original_graph_facts_sha256",
+        "closure_inputs_sha256",
+        "graph_symbols",
+        "call_lines",
+        "graph_joins",
+        "edges",
+        "edges_sha256",
+        "shortfalls",
+        "primaries",
+        "call_closure",
+        "proof_sha256"
+      ],
+      "title": "DevelopmentStaticCallClosure",
+      "type": "object"
+    },
+    "ImportClosureStatus": {
+      "enum": [
+        "NOT_ESTABLISHED",
+        "IMPORT_CLOSED"
+      ],
+      "type": "string"
+    },
+    "ImportShortfall": {
+      "enum": [
+        "MALFORMED_IMPORT",
+        "UNSUPPORTED_IMPORT_PATH",
+        "OUTSIDE_SUPPLIED_NAMESPACE",
+        "MISSING_SUPPLIED_SOURCE",
+        "AMBIGUOUS_REMAPPING"
+      ],
+      "type": "string"
+    },
+    "SolidityGraphFactKind": {
+      "description": "Non-edge semantic graph populations subject to the same artifact bound.",
+      "enum": [
+        "graph_node",
+        "storage_entry",
+        "warning"
+      ],
+      "title": "SolidityGraphFactKind",
+      "type": "string"
+    },
+    "SolidityGraphFactOmission": {
+      "additionalProperties": false,
+      "description": "Bounded evidence for emitted non-edge candidates excluded during generation.",
+      "properties": {
+        "candidate_count": {
+          "exclusiveMinimum": 0,
+          "maximum": 9223372036854775807,
+          "title": "Candidate Count",
+          "type": "integer"
+        },
+        "commitment_scheme": {
+          "const": "count-xor-sum-v1",
+          "default": "count-xor-sum-v1",
+          "title": "Commitment Scheme",
+          "type": "string"
+        },
+        "evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evidence Sha256",
+          "type": "string"
+        },
+        "fact_kind": {
+          "$ref": "#/$defs/SolidityGraphFactKind"
+        },
+        "omitted_canonical_bytes": {
+          "exclusiveMinimum": 0,
+          "maximum": 9223372036854775807,
+          "title": "Omitted Canonical Bytes",
+          "type": "integer"
+        },
+        "omitted_count": {
+          "exclusiveMinimum": 0,
+          "maximum": 9223372036854775807,
+          "title": "Omitted Count",
+          "type": "integer"
+        },
+        "omitted_sample_sha256s": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 16,
+          "title": "Omitted Sample Sha256S",
+          "type": "array"
+        },
+        "omitted_stream_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Omitted Stream Sha256",
+          "type": "string"
+        },
+        "reason": {
+          "$ref": "#/$defs/SolidityGraphOmissionReason",
+          "default": "artifact_budget_excluded"
+        },
+        "retained_count": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "title": "Retained Count",
+          "type": "integer"
+        },
+        "retained_occurrence_count": {
+          "default": 0,
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "title": "Retained Occurrence Count",
+          "type": "integer"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "fact_kind",
+        "candidate_count",
+        "retained_count",
+        "omitted_count",
+        "omitted_canonical_bytes",
+        "omitted_stream_sha256",
+        "evidence_sha256"
+      ],
+      "title": "SolidityGraphFactOmission",
+      "type": "object"
+    },
+    "SolidityGraphKind": {
+      "enum": [
+        "inheritance",
+        "modifier",
+        "internal_call",
+        "external_call",
+        "low_level_call",
+        "delegatecall",
+        "contract_creation",
+        "state_read",
+        "state_write",
+        "state_dependency",
+        "asset_flow",
+        "privilege",
+        "governance",
+        "dependency",
+        "proxy",
+        "storage_layout",
+        "upgrade_compatibility",
+        "initializer",
+        "oracle_dependency",
+        "event_state",
+        "event_flow",
+        "cross_chain",
+        "offchain_dependency",
+        "signature_replay",
+        "reentrancy",
+        "state_growth",
+        "sensitive_reachability"
+      ],
+      "title": "SolidityGraphKind",
+      "type": "string"
+    },
+    "SolidityGraphOmission": {
+      "additionalProperties": false,
+      "description": "Bounded commitment to emitted edge candidates excluded during generation.",
+      "properties": {
+        "analytical_omitted_count": {
+          "default": 0,
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "title": "Analytical Omitted Count",
+          "type": "integer"
+        },
+        "analytical_population_sample_sha256s": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 16,
+          "title": "Analytical Population Sample Sha256S",
+          "type": "array"
+        },
+        "candidate_count": {
+          "exclusiveMinimum": 0,
+          "maximum": 9223372036854775807,
+          "title": "Candidate Count",
+          "type": "integer"
+        },
+        "commitment_scheme": {
+          "const": "count-xor-sum-and-analytic-populations-v1",
+          "default": "count-xor-sum-and-analytic-populations-v1",
+          "title": "Commitment Scheme",
+          "type": "string"
+        },
+        "evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evidence Sha256",
+          "type": "string"
+        },
+        "graph": {
+          "$ref": "#/$defs/SolidityGraphKind"
+        },
+        "omitted_canonical_bytes": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "title": "Omitted Canonical Bytes",
+          "type": "integer"
+        },
+        "omitted_count": {
+          "exclusiveMinimum": 0,
+          "maximum": 9223372036854775807,
+          "title": "Omitted Count",
+          "type": "integer"
+        },
+        "omitted_sample_sha256s": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 16,
+          "title": "Omitted Sample Sha256S",
+          "type": "array"
+        },
+        "omitted_stream_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Omitted Stream Sha256",
+          "type": "string"
+        },
+        "reason": {
+          "$ref": "#/$defs/SolidityGraphOmissionReason",
+          "default": "artifact_budget_excluded"
+        },
+        "retained_count": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "title": "Retained Count",
+          "type": "integer"
+        },
+        "retained_occurrence_count": {
+          "default": 0,
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "title": "Retained Occurrence Count",
+          "type": "integer"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "graph",
+        "candidate_count",
+        "retained_count",
+        "omitted_count",
+        "omitted_canonical_bytes",
+        "omitted_stream_sha256",
+        "evidence_sha256"
+      ],
+      "title": "SolidityGraphOmission",
+      "type": "object"
+    },
+    "SolidityGraphOmissionReason": {
+      "description": "Typed reason that a generated semantic-graph edge population is incomplete.",
+      "enum": [
+        "artifact_budget_excluded"
+      ],
+      "title": "SolidityGraphOmissionReason",
+      "type": "string"
+    },
+    "SolidityProvenance": {
+      "enum": [
+        "compiler",
+        "fallback",
+        "static_tool",
+        "heuristic",
+        "model_suggested"
+      ],
+      "title": "SolidityProvenance",
+      "type": "string"
+    },
+    "StaticClosureStatus": {
+      "enum": [
+        "NOT_ESTABLISHED",
+        "CALL_CLOSED"
+      ],
+      "type": "string"
+    },
+    "SyntaxCallKind": {
+      "enum": [
+        "EXPRESSION",
+        "CREATION",
+        "INHERITANCE_ARGUMENTS",
+        "MODIFIER_ARGUMENTS",
+        "EVENT",
+        "ERROR",
+        "IMPLICIT_MODIFIER"
+      ],
+      "type": "string"
+    },
+    "_EdgeBasis": {
+      "enum": [
+        "IMPORT",
+        "INHERITANCE",
+        "TYPED_CALL",
+        "DECLARED_TYPE"
+      ],
+      "type": "string"
+    },
+    "_Population": {
+      "enum": [
+        "IMPORT",
+        "REMAP",
+        "PARSE",
+        "TARGET",
+        "SCOPE",
+        "CALL",
+        "SYNTAX",
+        "GRAPH",
+        "EDGE_OMISSION",
+        "FACT_OMISSION",
+        "GRAPH_WARNING",
+        "DECLARED_TYPE",
+        "CONTEXT"
+      ],
+      "type": "string"
     }
   },
   "$id": "https://mmaudit.local/schemas/development_corpus_manifest.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
+  "allOf": [
+    {
+      "else": {
+        "properties": {
+          "dependency_closure": {
+            "enum": [
+              "NOT_ESTABLISHED",
+              "IMPORT_CLOSED"
+            ]
+          }
+        }
+      },
+      "if": {
+        "properties": {
+          "schema_version": {
+            "enum": [
+              "1.9",
+              "1.10",
+              "1.11"
+            ]
+          }
+        },
+        "required": [
+          "schema_version"
+        ]
+      },
+      "then": {
+        "properties": {
+          "dependency_closure": {
+            "enum": [
+              "NOT_ESTABLISHED",
+              "CALL_CLOSED"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "dependency_closure": {
+            "const": "NOT_ESTABLISHED"
+          }
+        },
+        "required": [
+          "dependency_closure"
+        ]
+      },
+      "then": {
+        "properties": {
+          "dependency_evidence": {
+            "properties": {
+              "dependency_closure": {
+                "const": "NOT_ESTABLISHED"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "dependency_closure": {
+            "const": "IMPORT_CLOSED"
+          }
+        },
+        "required": [
+          "dependency_closure"
+        ]
+      },
+      "then": {
+        "properties": {
+          "dependency_evidence": {
+            "properties": {
+              "dependency_closure": {
+                "const": "IMPORT_CLOSED"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "dependency_closure": {
+            "const": "CALL_CLOSED"
+          }
+        },
+        "required": [
+          "dependency_closure"
+        ]
+      },
+      "then": {
+        "properties": {
+          "dependency_evidence": {
+            "properties": {
+              "dependency_closure": {
+                "const": "CALL_CLOSED"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "else": {
+        "properties": {
+          "dependency_evidence": {
+            "$ref": "#/$defs/DevelopmentDependencyClosure"
+          },
+          "schema_version": {
+            "enum": [
+              "1.1",
+              "1.2",
+              "1.3",
+              "1.4",
+              "1.5",
+              "1.6",
+              "1.7",
+              "1.8",
+              "1.9",
+              "1.10",
+              "1.11"
+            ]
+          }
+        },
+        "required": [
+          "schema_version",
+          "dependency_evidence"
+        ]
+      },
+      "if": {
+        "properties": {
+          "schema_version": {
+            "const": "1.0"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "dependency_closure": {
+            "const": "NOT_ESTABLISHED"
+          },
+          "dependency_evidence": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "schema_version": {
+            "const": "1.1"
+          }
+        },
+        "required": [
+          "schema_version"
+        ]
+      },
+      "then": {
+        "properties": {
+          "dependency_evidence": {
+            "properties": {
+              "schema_version": {
+                "const": "1.0"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "schema_version": {
+            "const": "1.2"
+          }
+        },
+        "required": [
+          "schema_version"
+        ]
+      },
+      "then": {
+        "properties": {
+          "dependency_evidence": {
+            "properties": {
+              "schema_version": {
+                "const": "1.1"
+              }
+            },
+            "required": [
+              "schema_version"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "schema_version": {
+            "const": "1.3"
+          }
+        },
+        "required": [
+          "schema_version"
+        ]
+      },
+      "then": {
+        "properties": {
+          "dependency_evidence": {
+            "properties": {
+              "schema_version": {
+                "const": "1.1"
+              }
+            },
+            "required": [
+              "schema_version"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "schema_version": {
+            "const": "1.4"
+          }
+        },
+        "required": [
+          "schema_version"
+        ]
+      },
+      "then": {
+        "properties": {
+          "dependency_evidence": {
+            "properties": {
+              "schema_version": {
+                "const": "1.2"
+              }
+            },
+            "required": [
+              "schema_version"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "schema_version": {
+            "const": "1.5"
+          }
+        },
+        "required": [
+          "schema_version"
+        ]
+      },
+      "then": {
+        "properties": {
+          "dependency_evidence": {
+            "properties": {
+              "schema_version": {
+                "const": "1.3"
+              }
+            },
+            "required": [
+              "schema_version"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "schema_version": {
+            "const": "1.6"
+          }
+        },
+        "required": [
+          "schema_version"
+        ]
+      },
+      "then": {
+        "properties": {
+          "dependency_evidence": {
+            "properties": {
+              "schema_version": {
+                "const": "1.4"
+              }
+            },
+            "required": [
+              "schema_version"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "schema_version": {
+            "const": "1.7"
+          }
+        },
+        "required": [
+          "schema_version"
+        ]
+      },
+      "then": {
+        "properties": {
+          "dependency_evidence": {
+            "properties": {
+              "schema_version": {
+                "const": "1.5"
+              }
+            },
+            "required": [
+              "schema_version"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "schema_version": {
+            "const": "1.8"
+          }
+        },
+        "required": [
+          "schema_version"
+        ]
+      },
+      "then": {
+        "properties": {
+          "dependency_evidence": {
+            "properties": {
+              "schema_version": {
+                "const": "1.6"
+              }
+            },
+            "required": [
+              "schema_version"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "schema_version": {
+            "const": "1.9"
+          }
+        },
+        "required": [
+          "schema_version"
+        ]
+      },
+      "then": {
+        "properties": {
+          "dependency_evidence": {
+            "properties": {
+              "schema_version": {
+                "const": "1.7"
+              }
+            },
+            "required": [
+              "schema_version"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "schema_version": {
+            "const": "1.10"
+          }
+        },
+        "required": [
+          "schema_version"
+        ]
+      },
+      "then": {
+        "properties": {
+          "dependency_evidence": {
+            "properties": {
+              "schema_version": {
+                "const": "1.7"
+              }
+            },
+            "required": [
+              "schema_version"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "schema_version": {
+            "const": "1.11"
+          }
+        },
+        "required": [
+          "schema_version"
+        ]
+      },
+      "then": {
+        "properties": {
+          "dependency_evidence": {
+            "properties": {
+              "schema_version": {
+                "const": "1.7"
+              }
+            },
+            "required": [
+              "schema_version"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "else": {
+        "properties": {
+          "inventory_scope": {
+            "const": "EXPLICIT_MANIFEST_ONLY"
+          },
+          "source_tree_evidence": {
+            "type": "null"
+          }
+        }
+      },
+      "if": {
+        "anyOf": [
+          {
+            "properties": {
+              "schema_version": {
+                "enum": [
+                  "1.3",
+                  "1.9",
+                  "1.10",
+                  "1.11"
+                ]
+              }
+            },
+            "required": [
+              "schema_version"
+            ]
+          },
+          {
+            "properties": {
+              "schema_version": {
+                "enum": [
+                  "1.4",
+                  "1.5",
+                  "1.6",
+                  "1.7",
+                  "1.8"
+                ]
+              },
+              "source_tree_evidence": {
+                "not": {
+                  "type": "null"
+                }
+              }
+            },
+            "required": [
+              "schema_version",
+              "source_tree_evidence"
+            ]
+          }
+        ]
+      },
+      "then": {
+        "properties": {
+          "inventory_scope": {
+            "const": "LOCAL_TREE_SNAPSHOT_REQUIRES_ROOT_REPLAY"
+          },
+          "source_tree_evidence": {
+            "$ref": "#/$defs/DevelopmentCorpusTreeEvidence"
+          }
+        },
+        "required": [
+          "source_tree_evidence",
+          "inventory_scope"
+        ]
+      }
+    },
+    {
+      "else": {
+        "properties": {
+          "source_partition": {
+            "type": "null"
+          }
+        }
+      },
+      "if": {
+        "properties": {
+          "schema_version": {
+            "enum": [
+              "1.10",
+              "1.11"
+            ]
+          }
+        },
+        "required": [
+          "schema_version"
+        ]
+      },
+      "then": {
+        "properties": {
+          "source_partition": {
+            "$ref": "#/$defs/DevelopmentCorpusSourcePartition"
+          }
+        },
+        "required": [
+          "source_partition"
+        ]
+      }
+    },
+    {
+      "else": {
+        "properties": {
+          "source_origin": {
+            "type": "null"
+          }
+        }
+      },
+      "if": {
+        "properties": {
+          "schema_version": {
+            "const": "1.11"
+          }
+        },
+        "required": [
+          "schema_version"
+        ]
+      },
+      "then": {
+        "properties": {
+          "source_origin": {
+            "$ref": "#/$defs/DevelopmentCorpusPartitionOrigin"
+          }
+        },
+        "required": [
+          "source_origin"
+        ]
+      }
+    }
+  ],
   "description": "Declared selected files only; a digest does not authenticate provenance or completeness.",
   "properties": {
     "artifact_kind": {
@@ -68,10 +4461,19 @@
       "type": "string"
     },
     "dependency_closure": {
-      "const": "NOT_ESTABLISHED",
-      "default": "NOT_ESTABLISHED",
-      "title": "Dependency Closure",
-      "type": "string"
+      "$ref": "#/$defs/DependencyClosureStatus",
+      "default": "NOT_ESTABLISHED"
+    },
+    "dependency_evidence": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DevelopmentDependencyClosure"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "findings_validated": {
       "const": false,
@@ -80,8 +4482,11 @@
       "type": "boolean"
     },
     "inventory_scope": {
-      "const": "EXPLICIT_MANIFEST_ONLY",
       "default": "EXPLICIT_MANIFEST_ONLY",
+      "enum": [
+        "EXPLICIT_MANIFEST_ONLY",
+        "LOCAL_TREE_SNAPSHOT_REQUIRES_ROOT_REPLAY"
+      ],
       "title": "Inventory Scope",
       "type": "string"
     },
@@ -109,26 +4514,72 @@
       "type": "boolean"
     },
     "schema_version": {
-      "const": "1.0",
       "default": "1.0",
+      "enum": [
+        "1.0",
+        "1.1",
+        "1.2",
+        "1.3",
+        "1.4",
+        "1.5",
+        "1.6",
+        "1.7",
+        "1.8",
+        "1.9",
+        "1.10",
+        "1.11"
+      ],
       "title": "Schema Version",
       "type": "string"
     },
+    "source_origin": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DevelopmentCorpusPartitionOrigin"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "source_partition": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DevelopmentCorpusSourcePartition"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
     "source_scope": {
       "$ref": "#/$defs/DevelopmentCorpusScope"
+    },
+    "source_tree_evidence": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DevelopmentCorpusTreeEvidence"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "sources": {
       "items": {
         "$ref": "#/$defs/DevelopmentCorpusSource"
       },
-      "maxItems": 64,
+      "maxItems": 256,
       "minItems": 1,
       "title": "Sources",
       "type": "array"
     },
     "total_source_bytes": {
       "exclusiveMinimum": 0,
-      "maximum": 524288,
+      "maximum": 8388608,
       "title": "Total Source Bytes",
       "type": "integer"
     }

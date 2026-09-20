@@ -1,8 +1,9 @@
 """Deterministic replay of trusted built-in scanner normalization.
 
 This module never discovers or imports repository-provided adapters.  It reparses
-manifest-bound stdout with a closed set of built-in parser classes and compares the
-entire normalized finding inventory.  The only tolerated delta is the
+manifest-bound stdout with a closed set of built-in parser classes, or original
+Foundry per-test artifacts, and compares the entire normalized finding inventory.
+The only tolerated delta is the
 ``metadata.location_validation`` annotation added later by the trusted host.
 """
 
@@ -26,6 +27,7 @@ from mmaudit.models.schemas import (
     ScannerStatus,
 )
 from mmaudit.scanners.base import ScannerAdapter
+from mmaudit.scanners.foundry_normalization import reparse_retained_foundry_findings
 from mmaudit.scanners.gitleaks import GitleaksScanner
 from mmaudit.scanners.osv import OsvScanner
 from mmaudit.scanners.semgrep import SemgrepScanner
@@ -38,6 +40,7 @@ __all__ = [
     "ScannerNormalizationReplayError",
     "reparse_trusted_scanner_stdout",
     "trusted_stdout_scanner_names",
+    "validate_real_foundry_normalization_replay",
     "validate_real_scanner_normalization_replay",
 ]
 
@@ -172,6 +175,33 @@ def validate_real_scanner_normalization_replay(
     if replayed != expected:
         raise ScannerNormalizationReplayError(
             "retained scanner stdout differs from the complete normalized finding inventory"
+        )
+    return replayed
+
+
+def validate_real_foundry_normalization_replay(
+    *,
+    run: ScannerRun,
+    repository_root: Path,
+    artifact_root: Path,
+    retained_manifest: bytes,
+) -> tuple[ScannerFinding, ...]:
+    """Require Foundry findings to match original auxiliary machine-output replay."""
+
+    try:
+        replayed = reparse_retained_foundry_findings(
+            run=run,
+            repository_root=_canonical_repository_root(repository_root),
+            artifact_root=_canonical_repository_root(artifact_root),
+            retained_manifest=retained_manifest,
+        )
+    except ValueError as exc:
+        raise ScannerNormalizationReplayError(
+            f"retained Foundry suite failed trusted normalization: {type(exc).__name__}"
+        ) from exc
+    if replayed != _without_host_location_validation(run.findings):
+        raise ScannerNormalizationReplayError(
+            "retained Foundry suite differs from the complete normalized finding inventory"
         )
     return replayed
 

@@ -52,6 +52,7 @@ from mmaudit.models.reasoning import (
     resolve_reasoning_request_role,
 )
 from mmaudit.models.scheduler import (
+    SchedulerAnalysisInputInventory,
     SchedulerArtifact,
     SchedulerAuditModelSelectionBinding,
     SchedulerBindings,
@@ -996,13 +997,20 @@ def _assurance_policy_selection(
     now: datetime,
     *,
     current_pricing: dict[str, str] | None = None,
+    source_inventory: SchedulerShardInventory | None = None,
+    token_capacity: tuple[int, int, int] | None = None,
 ) -> _AssurancePolicySelectionFixture:
+    inventory = source_inventory or _assurance_scheduler_inventory()
     cache_key = ":".join(
         (
             config.stable_hash(),
+            now.isoformat(),
             scheduler_canonical_sha256(current_pricing or {}),
+            inventory.inventory_sha256,
         )
     )
+    if token_capacity is not None:
+        cache_key += ":" + scheduler_canonical_sha256(list(token_capacity))
     cached = _ASSURANCE_POLICY_SELECTION_CACHE.get(cache_key)
     if cached is not None:
         return cached
@@ -1033,6 +1041,7 @@ def _assurance_policy_selection(
         model_ids=model_ids,
         roots=tuple(sorted(configured_roots)),
         created_at=authority_base,
+        token_capacity=token_capacity,
     )
     qualification = _synthetic_production_qualification(
         config,
@@ -1041,7 +1050,7 @@ def _assurance_policy_selection(
     )
     policy = _policy_bundle(
         qualification,
-        source_sha256_override=_assurance_scheduler_inventory().source_tree_sha256,
+        source_sha256_override=inventory.source_tree_sha256,
         base_time=authority_base,
     )
     with tempfile.TemporaryDirectory(prefix="mmaudit-assurance-policy-") as directory:
@@ -1055,6 +1064,7 @@ def _assurance_policy_selection(
         audit_selection=capability,
         verified_at=now,
         current_pricing=current_pricing,
+        token_capacity=token_capacity,
     )
     fixture = _AssurancePolicySelectionFixture(
         qualification=qualification,
@@ -1072,9 +1082,15 @@ def _complete_assurance_scheduler_fixture(
     audit_model_selection_evidence: AuditModelSelectionEvidenceBundle,
     audit_model_refresh: SyntheticRefreshRuntime,
     now: datetime,
+    *,
+    source_inventory: SchedulerShardInventory | None = None,
+    analysis_input_inventory: SchedulerAnalysisInputInventory | None = None,
+    privacy_evidence_custody: SchedulerPrivacyEvidenceCustody | None = None,
+    candidate_falsifier_models: tuple[str, str] | None = None,
+    original_cost_baseline: SchedulerCostLedgerBaseline | None = None,
 ) -> CompleteSchedulerFixture:
-    inventory = _assurance_scheduler_inventory()
-    cost_baseline = SchedulerCostLedgerBaseline.build(
+    inventory = source_inventory or _assurance_scheduler_inventory()
+    cost_baseline = original_cost_baseline or SchedulerCostLedgerBaseline.build(
         cap_usd_exact="250",
         spent_usd_exact="0",
         active_reserved_usd_exact="0",
@@ -1085,7 +1101,7 @@ def _complete_assurance_scheduler_fixture(
         ledger_snapshot_sha256=hashlib.sha256(b"assurance:pre-campaign-cost-ledger").hexdigest(),
     )
     provenance_sha256 = hashlib.sha256(b"assurance:privacy-provenance").hexdigest()
-    privacy_custody = SchedulerPrivacyEvidenceCustody.build(
+    privacy_custody = privacy_evidence_custody or SchedulerPrivacyEvidenceCustody.build(
         source_sha256=inventory.source_tree_sha256,
         source_provenance_size=128,
         source_provenance_artifact_sha256=hashlib.sha256(
@@ -1220,10 +1236,12 @@ def _complete_assurance_scheduler_fixture(
         del pass_kind
         if role.startswith("candidate_falsifier:"):
             fallback_index = 0 if task_key.endswith(":1") else 1
-            model_id = config.models.role("falsifier").fallbacks[fallback_index]
+            reviewers = candidate_falsifier_models or config.models.role("falsifier").fallbacks
+            model_id = reviewers[fallback_index]
         elif role == "candidate_falsifier":
             fallback_index = 0 if task_key.endswith("-1") else 1
-            model_id = config.models.role("falsifier").fallbacks[fallback_index]
+            reviewers = candidate_falsifier_models or config.models.role("falsifier").fallbacks
+            model_id = reviewers[fallback_index]
         elif role.startswith("whole_protocol_review:"):
             index = int(role.rsplit(":", 1)[1])
             model_id = f"specialist-{index}/model-{index}"
@@ -1306,6 +1324,7 @@ def _complete_assurance_scheduler_fixture(
     return build_complete_scheduler_fixture(
         seed="maximum-assurance-runtime",
         manifest=manifest,
+        analysis_input_inventory=analysis_input_inventory,
         real_usage=True,
         blind_model_tasks=blind_tasks,
         model_tasks=model_tasks,
@@ -2849,6 +2868,7 @@ def _assurance_promoted_recursive_surface_fixture(
     authorities: _AssurancePolicySelectionFixture,
     root: Path,
     parent_retained_count: int = 0,
+    bridge_retained_count: int = 0,
 ) -> tuple[
     _PromotedRecursiveParentSurfaceFixture,
     SoliditySymbolIndex,
@@ -2909,6 +2929,7 @@ def _assurance_promoted_recursive_surface_fixture(
         usage_transform=lambda usage: _bind_promoted_assurance_usage(usage, authorities),
         include_scheduler_test_refresh_pricing=False,
         recursive_parent_retained_count=parent_retained_count,
+        recursive_bridge_retained_count=bridge_retained_count,
     )
     return fixture, index, graphs, invariants, audited_suite
 
@@ -3037,6 +3058,7 @@ def _runtime_with_promoted_recursive_parent_surface(
     authorities: _AssurancePolicySelectionFixture,
     root: Path,
     parent_retained_count: int = 0,
+    bridge_retained_count: int = 0,
 ) -> tuple[AssuranceRuntime, _PromotedRecursiveParentSurfaceFixture]:
     fixture, index, graphs, invariants, audited_suite = (
         _assurance_promoted_recursive_surface_fixture(
@@ -3045,6 +3067,7 @@ def _runtime_with_promoted_recursive_parent_surface(
             authorities=authorities,
             root=root,
             parent_retained_count=parent_retained_count,
+            bridge_retained_count=bridge_retained_count,
         )
     )
     ordinary_evidence = _authorized_promoted_assurance_ordinary_evidence(
@@ -3517,6 +3540,49 @@ def test_maximum_assurance_critical_taxonomy_gap_blocks_complete(config_factory)
     ]
 
 
+def test_synthetic_assurance_selection_cache_keeps_observation_times_separate(
+    config_factory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(globals(), "_ASSURANCE_POLICY_SELECTION_CACHE", {})
+    config = _maximum_config(config_factory)
+    observed_at = datetime(2026, 9, 19, 0, 0, tzinfo=UTC)
+    later = observed_at + timedelta(hours=3)
+    original = _assurance_policy_selection(config, observed_at)
+    assert _assurance_policy_selection(config, observed_at) is original
+    runtime = original.refresh_runtime
+    assert (
+        runtime.guard.require_current(
+            now=observed_at,
+            technical_qualification=runtime.technical_qualification,
+            audit_selection=runtime.audit_selection,
+            **runtime.runtime_bindings,
+        )
+        is runtime.guard
+    )
+    with pytest.raises(ValueError, match="refresh guard is future-dated or expired"):
+        runtime.guard.require_current(
+            now=later,
+            technical_qualification=runtime.technical_qualification,
+            audit_selection=runtime.audit_selection,
+            **runtime.runtime_bindings,
+        )
+
+    refreshed = _assurance_policy_selection(config, later)
+    assert refreshed is not original
+    assert refreshed.refresh_runtime.verified_at == later
+    assert _assurance_policy_selection(config, later) is refreshed
+    refreshed_runtime = refreshed.refresh_runtime
+    assert (
+        refreshed_runtime.guard.require_current(
+            now=later,
+            technical_qualification=refreshed_runtime.technical_qualification,
+            audit_selection=refreshed_runtime.audit_selection,
+            **refreshed_runtime.runtime_bindings,
+        )
+        is refreshed_runtime.guard
+    )
+
+
 def test_maximum_assurance_accepts_bounded_refreshed_prices_without_mutating_baseline(
     config_factory,
 ) -> None:
@@ -3688,7 +3754,8 @@ def test_maximum_assurance_rejects_coherently_swapped_refresh_custody(
 ) -> None:
     config = _maximum_config(config_factory)
     runtime = _complete_runtime(config)
-    fixture = _assurance_policy_selection(config, datetime.now(UTC).replace(microsecond=0))
+    assert runtime.audit_model_refresh_evidence is not None
+    fixture = _assurance_policy_selection(config, runtime.audit_model_refresh_evidence.verified_at)
     original = fixture.refresh_runtime
     swapped = synthetic_refresh_runtime_for_authorities(
         config=config,
@@ -4980,9 +5047,10 @@ def test_assurance_accepts_only_exact_promoted_parent_and_child_custody(
 ) -> None:
     config = _maximum_config(config_factory)
     base_runtime = _complete_runtime(config)
+    assert base_runtime.audit_model_refresh_evidence is not None
     authorities = _assurance_policy_selection(
         config,
-        datetime.now(UTC).replace(microsecond=0),
+        base_runtime.audit_model_refresh_evidence.verified_at,
     )
     runtime, fixture = _runtime_with_promoted_parent_surface(
         config=config,
@@ -5065,9 +5133,10 @@ def test_assurance_direct_consumption_requires_complete_parent_and_child_partiti
 ) -> None:
     config = _maximum_config(config_factory)
     base_runtime = _complete_runtime(config)
+    assert base_runtime.audit_model_refresh_evidence is not None
     authorities = _assurance_policy_selection(
         config,
-        datetime.now(UTC).replace(microsecond=0),
+        base_runtime.audit_model_refresh_evidence.verified_at,
     )
     runtime, fixture = _runtime_with_promoted_parent_surface(
         config=config,
@@ -5218,9 +5287,10 @@ def test_assurance_accepts_only_exact_promoted_recursive_tree_custody(
 ) -> None:
     config = _maximum_config(config_factory)
     base_runtime = _complete_runtime(config)
+    assert base_runtime.audit_model_refresh_evidence is not None
     authorities = _assurance_policy_selection(
         config,
-        datetime.now(UTC).replace(microsecond=0),
+        base_runtime.audit_model_refresh_evidence.verified_at,
     )
     runtime, fixture = _runtime_with_promoted_recursive_parent_surface(
         config=config,
@@ -5361,9 +5431,10 @@ def test_assurance_recursive_consumption_requires_complete_parent_and_leaf_parti
 ) -> None:
     config = _maximum_config(config_factory)
     base_runtime = _complete_runtime(config)
+    assert base_runtime.audit_model_refresh_evidence is not None
     authorities = _assurance_policy_selection(
         config,
-        datetime.now(UTC).replace(microsecond=0),
+        base_runtime.audit_model_refresh_evidence.verified_at,
     )
     runtime, fixture = _runtime_with_promoted_recursive_parent_surface(
         config=config,
@@ -5510,9 +5581,10 @@ def test_assurance_joins_promoted_specialist_parent_to_exact_child_outcomes(
 ) -> None:
     config = _maximum_config(config_factory)
     base_runtime = _complete_runtime(config)
+    assert base_runtime.audit_model_refresh_evidence is not None
     authorities = _assurance_policy_selection(
         config,
-        datetime.now(UTC).replace(microsecond=0),
+        base_runtime.audit_model_refresh_evidence.verified_at,
     )
     runtime, fixture = _runtime_with_promoted_parent_surface(
         config=config,

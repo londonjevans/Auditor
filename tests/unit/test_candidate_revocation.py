@@ -37,6 +37,9 @@ from scripts.generate_release_schemas import MODELS, rendered_schema
 
 ROOT = Path(__file__).resolve().parents[2]
 ACTIVE_SELECTION_PLAN_PATH = ROOT / "config" / "models.selection-plan.json"
+UNAVAILABLE_SELECTION_PLAN_PATH = (
+    ROOT / "tests" / "fixtures" / "model_selection" / "unavailable-plan-v1.7.json"
+)
 REVOKED_SELECTION_PLAN_PATH = (
     ROOT / "tests" / "fixtures" / "model_selection" / "revoked-active-plan-v1.4.json"
 )
@@ -135,7 +138,8 @@ def test_historical_selection_plan_remains_parseable_evidence_but_is_not_runnabl
 
 
 def test_active_unavailable_plan_cannot_resurrect_the_revoked_candidate_route() -> None:
-    plan = load_candidate_selection_plan(ACTIVE_SELECTION_PLAN_PATH)
+    # Preserve the historical unavailable-plan case independently of today's active plan.
+    plan = load_candidate_selection_plan(UNAVAILABLE_SELECTION_PLAN_PATH)
     unavailable = plan.authenticated_runner_unavailability
     assert plan.authenticated_runner_selection is None
     assert unavailable is not None
@@ -165,6 +169,38 @@ def test_active_unavailable_plan_cannot_resurrect_the_revoked_candidate_route() 
     assert unavailable.revocation_entry_sha256s == (
         "67eb2be8bb4d51d8223c2893736c0adeea60bd73d7671ee22f39cc6f4dee6ec4",
     )
+
+
+def test_current_active_plan_does_not_resurrect_revoked_routes_or_grant_authority() -> None:
+    before = ACTIVE_SELECTION_PLAN_PATH.read_bytes()
+    plan = load_candidate_selection_plan(ACTIVE_SELECTION_PLAN_PATH)
+    assignment = plan.authenticated_runner_selection
+    assert assignment is not None and plan.authenticated_runner_unavailability is None
+    assert require_candidate_selection_plan_currently_eligible(plan) == plan
+    assert plan.plan_sha256 != PLAN_SHA256
+    selected_routes = {
+        (constraint.role.value, constraint.exact_model_id, constraint.provider_endpoint)
+        for constraint in assignment.route_constraints
+    }
+    registry = load_candidate_selection_revocation_registry()
+    revoked_routes = {
+        (entry.role.value, entry.exact_model_id, entry.provider_endpoint)
+        for entry in registry.entries
+    }
+    assert selected_routes.isdisjoint(revoked_routes)
+    for name in (
+        "serialized_authority",
+        "provider_call_authorized",
+        "source_egress_authorized",
+        "qualification_authorized",
+        "production_selection_authorized",
+        "runner_authority_authorized",
+        "benchmark_authorized",
+        "seal_publication_authorized",
+        "release_authorized",
+    ):
+        assert getattr(plan, name) is False
+    assert ACTIVE_SELECTION_PLAN_PATH.read_bytes() == before
 
 
 def test_entry_and_registry_self_hash_tampering_is_rejected() -> None:

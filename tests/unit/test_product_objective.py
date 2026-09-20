@@ -65,8 +65,8 @@ CANDIDATE_SELECTION_PLAN_SCHEMA_RAW_SHA256 = (
     "ab26b52af8a99cde03302afe553c4ee73f0474d3ff9d1014d929379feea8a005"
 )
 CURRENT_CANDIDATE_SELECTION_PLAN_SCHEMA_RAW_SHA256 = (
-    # PLANANCESTRY v1.8 requires an active assignment and the exact retained V1 profile.
-    "001fa29df0ccd261fd7b2513cc322109a362498df027597c97d245c898439ba3"
+    # ENDPOINTTRIAL adds a separately staged v1.12; the active plan remains exact v1.11.
+    "d14653e81bffa279c48ccc8be71e1a30fd310b77951e64840c3fb9a4998f4138"
 )
 
 
@@ -109,8 +109,8 @@ def test_product_objective_authorities_bind_exact_path_and_digest() -> None:
         assert f"`{OBJECTIVE_SHA256}`" in header
 
 
-def test_active_candidate_selection_plan_is_exactly_unavailable_and_nonauthorizing() -> None:
-    plan_path = ROOT / "config/models.selection-plan.json"
+def test_archived_candidate_selection_plan_is_exactly_unavailable_and_nonauthorizing() -> None:
+    plan_path = ROOT / "tests/fixtures/model_selection/unavailable-plan-v1.7.json"
     plan_bytes = plan_path.read_bytes()
     plan = json.loads(plan_bytes)
 
@@ -211,6 +211,51 @@ def test_active_candidate_selection_plan_is_exactly_unavailable_and_nonauthorizi
             (ROOT / "schemas/candidate_selection_plan.schema.json").read_bytes()
         ).hexdigest()
         == CURRENT_CANDIDATE_SELECTION_PLAN_SCHEMA_RAW_SHA256
+    )
+
+
+def test_active_role_refresh_preserves_objective_and_grants_no_execution_authority() -> None:
+    from mmaudit.models.candidate_plan_ancestry import (
+        COST_PREDECESSOR_PLAN_SHA256,
+        LEGACY_COST_PREDECESSOR_PLAN_SHA256,
+        LEGACY_COST_PREDECESSOR_RAW_SHA256,
+        resolve_verified_candidate_selection_plan_ancestry,
+        validate_candidate_selection_plan_reactivation,
+    )
+    from mmaudit.models.candidate_selection import load_candidate_selection_plan
+
+    plan = load_candidate_selection_plan(ROOT / "config/models.selection-plan.json")
+    assert plan.schema_version == "1.11"
+    assert plan.objective_sha256 == OBJECTIVE_SHA256
+    assert plan.predecessor_plan_sha256 == LEGACY_COST_PREDECESSOR_PLAN_SHA256
+    binding = plan.operator_cost_transition_binding
+    selection = plan.authenticated_runner_selection
+    assert binding is not None and selection is not None
+    assert binding.operator_decision_id == "OP-COSTLEGACY-2026-09-11"
+    assert binding.predecessor_raw_sha256 == LEGACY_COST_PREDECESSOR_RAW_SHA256
+    predecessor = load_candidate_selection_plan(
+        ROOT / "tests/fixtures/model_selection/provider-ceiling-plan-v1.9.json"
+    )
+    assert predecessor.plan_sha256 == COST_PREDECESSOR_PLAN_SHA256
+    assert predecessor.predecessor_plan_sha256 == ACTIVE_SELECTION_PLAN_SHA256
+    previous_binding = predecessor.ancestry_route_transition_binding
+    assert previous_binding is not None
+    assert previous_binding.unavailable_predecessor_raw_sha256 == ACTIVE_SELECTION_PLAN_RAW_SHA256
+    assert plan.entries == predecessor.entries
+    assert plan.source_bindings == predecessor.source_bindings
+    assert selection.route_predicate_profile.schema_version == "1.3"
+    assert binding.security_requirements_relaxed is False
+    assert selection.distinct_root_lineages_verified is False
+    assert len(selection.route_predicate_profile.predicate_ids) == 29
+    for artifact in (plan, binding):
+        for name, value in artifact.model_dump(mode="json").items():
+            if name.endswith("_authorized") or name == "serialized_authority":
+                assert value is False
+    assert (
+        validate_candidate_selection_plan_reactivation(
+            resolve_verified_candidate_selection_plan_ancestry(), successor=plan
+        )
+        == plan
     )
 
 
@@ -2118,9 +2163,15 @@ def test_historical_execution_order_cannot_claim_complete_queue_authority() -> N
     historical_id_list = re.findall(r"^\d+\. `?(V3-[A-Z0-9-]+)", historical, flags=re.MULTILINE)
     historical_ids = set(historical_id_list)
 
-    assert len(ticket_id_list) == len(ticket_ids) == 104
+    dependency_context_tickets = {
+        "V3-DEPCLOSURE-001",
+        "V3-CONTEXTSRC-001",
+        "V3-AUTOPARTITION-001",
+    }
+    assert dependency_context_tickets <= ticket_ids
+    assert len(ticket_id_list) == len(ticket_ids) == 113
     assert len(historical_id_list) == len(historical_ids) == 46
-    assert ticket_ids - historical_ids == {
+    assert ticket_ids - historical_ids - dependency_context_tickets == {
         "V3-AUTHLINEAGE-001",
         "V3-AUTHLINEAGE-PUBLIC-001",
         "V3-AUTHLINEAGE-RECEIPT-001",
@@ -2130,6 +2181,10 @@ def test_historical_execution_order_cannot_claim_complete_queue_authority() -> N
         "V3-BASELINE-001",
         "V3-BENCHSCORE-001",
         "V3-CANDROUTE-001",
+        "V3-COSTLEGACY-001",
+        "V3-ENDPOINTTRIAL-001",
+        "V3-COSTREFUSAL-001",
+        "V3-COSTRECON-001",
         "V3-DEVAUDIT-001",
         "V3-DEVBENCH-001",
         "V3-DEVCARRY-001",
@@ -2141,6 +2196,7 @@ def test_historical_execution_order_cannot_claim_complete_queue_authority() -> N
         "V3-DEVTELEMETRY-001",
         "V3-CORPUSJUDGE-001",
         "V3-CORPUSSCORE-001",
+        "V3-CORPUSSOURCE-001",
         "V3-CORPUSENSEMBLE-001",
         "V3-CORPUSRESUME-001",
         "V3-RESUMEMETA-001",
@@ -2163,6 +2219,7 @@ def test_historical_execution_order_cannot_claim_complete_queue_authority() -> N
         "V3-OUTPUT-001",
         "V3-PIPEPERF-001",
         "V3-PLANCONSTRAINTS-001",
+        "V3-PLANROUTES-001",
         "V3-PRICELEXEME-001",
         "V3-PRICEOVERRIDES-001",
         "V3-PRICECAPTIER-001",
@@ -2182,3 +2239,32 @@ def test_historical_execution_order_cannot_claim_complete_queue_authority() -> N
     }
     assert "not current completion authority" in queue
     assert "must not be used as completion authority" in " ".join(historical.split())
+
+
+def test_dependency_context_plan_preserves_unknowns_and_does_not_grant_audit_authority() -> None:
+    queue = (ROOT / "docs/remediation/v3/work_queue.md").read_text(encoding="utf-8")
+
+    def ticket(ticket_id: str) -> str:
+        heading = f"## {ticket_id} —"
+        assert queue.count(heading) == 1
+        return queue.split(heading, maxsplit=1)[1].split("\n## ", maxsplit=1)[0]
+
+    closure = ticket("V3-DEPCLOSURE-001")
+    context = ticket("V3-CONTEXTSRC-001")
+    partition = ticket("V3-AUTOPARTITION-001")
+    for item in (closure, context, partition):
+        assert re.search(
+            r"^- \*\*Status:\*\* `(QUEUED|IN_PROGRESS|PARTIAL|COMPLETE|BLOCKED_TECHNICAL|BLOCKED_SAFETY)`$",
+            item,
+            re.MULTILINE,
+        )
+        assert "AUTHRUNNER" in item
+    assert "IMPORT_CLOSED" in closure and "CALL_CLOSED" in closure
+    assert "not already a complete closure primitive" in closure
+    assert "every unresolved/omitted/ambiguous dependency" in closure
+    assert "not deployment wiring, reachability or complete semantic dependency proof" in closure
+    assert "no file silently disappears" in context
+    assert "a completed model observation is not a validated audit" in context
+    assert "V3-DEPCLOSURE-001" in context
+    assert "V3-DEPCLOSURE-001" in partition and "V3-CONTEXTSRC-001" in partition
+    assert "rather than promising provider latency or completion" in partition

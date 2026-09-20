@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from decimal import Decimal
-from typing import Any, Literal, Self
+from typing import TYPE_CHECKING, Any, Literal, Self
 
 from pydantic import Field, model_validator
 
@@ -14,6 +14,8 @@ from mmaudit.models.development_audit import (
     development_ledger_request_id,
 )
 from mmaudit.models.development_corpus import (
+    MAX_DEVELOPMENT_CORPUS_CLAIMS,
+    MAX_DEVELOPMENT_CORPUS_FILES,
     DevelopmentCorpusAccountingEntry,
     DevelopmentCorpusManifest,
     DevelopmentCorpusObservation,
@@ -49,6 +51,9 @@ from mmaudit.models.development_review import (
 from mmaudit.models.development_routing import DevelopmentRoutingContext
 from mmaudit.orchestration.cost_ledger import CostEntryStatus
 from mmaudit.orchestration.manifest import canonical_sha256
+
+if TYPE_CHECKING:
+    from mmaudit.repository.development_corpus import LoadedDevelopmentCorpus
 
 MAX_DEVELOPMENT_CORPUS_ENSEMBLE_BYTES = 256_000_000
 _RUN_ID = r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$"
@@ -123,6 +128,7 @@ def prepare_development_corpus_ensemble(
     candidate_maximum_completion_tokens: int = 4096,
     reviewer_maximum_completion_tokens: tuple[int, int] = (4096, 4096),
     maximum_run_seconds: float = 600.0,
+    source_custody: LoadedDevelopmentCorpus | None = None,
 ) -> PreparedDevelopmentCorpusEnsemble:
     """Freeze all roles and conservative future per-file allowances, never reserved capacity."""
 
@@ -152,6 +158,7 @@ def prepare_development_corpus_ensemble(
         run_id=development_ensemble_stage_run_id(run_id, "candidate"),
         maximum_completion_tokens=candidate_maximum_completion_tokens,
         maximum_run_seconds=maximum_run_seconds,
+        source_custody=source_custody,
     )
     reviewers = tuple(
         DevelopmentEnsembleReviewer(
@@ -299,12 +306,16 @@ class DevelopmentCorpusEnsembleObservation(_AuditArtifact):
     candidate: DevelopmentCorpusObservation | None
     judgment_plans: tuple[DevelopmentCorpusJudgmentPlan, ...] = Field(max_length=2)
     judgments: tuple[DevelopmentCorpusJudgmentObservation, ...] = Field(max_length=2)
-    accounting: tuple[DevelopmentCorpusEnsembleAccountingEntry, ...] = Field(max_length=192)
-    claims: tuple[DevelopmentCorpusEnsembleClaim, ...] = Field(max_length=1024)
-    unobserved_candidate_shard_ids: tuple[str, ...] = Field(max_length=64)
+    accounting: tuple[DevelopmentCorpusEnsembleAccountingEntry, ...] = Field(
+        max_length=MAX_DEVELOPMENT_CORPUS_FILES * 3
+    )
+    claims: tuple[DevelopmentCorpusEnsembleClaim, ...] = Field(
+        max_length=MAX_DEVELOPMENT_CORPUS_CLAIMS
+    )
+    unobserved_candidate_shard_ids: tuple[str, ...] = Field(max_length=MAX_DEVELOPMENT_CORPUS_FILES)
     unobserved_stage_ids: tuple[DevelopmentEnsembleStageId, ...] = Field(max_length=3)
     completed_stage_count: int = Field(ge=0, le=3)
-    completed_judgment_count: int = Field(ge=0, le=2048)
+    completed_judgment_count: int = Field(ge=0, le=MAX_DEVELOPMENT_CORPUS_CLAIMS * 2)
     available_claim_reviews_complete: bool
     total_accounted_cost_usd: Decimal = Field(ge=0)
     reported_actual_cost_usd: Decimal = Field(ge=0)

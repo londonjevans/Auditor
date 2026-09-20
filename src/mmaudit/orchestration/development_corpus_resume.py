@@ -28,6 +28,7 @@ from mmaudit.benchmark.development_corpus_resume import (
 )
 from mmaudit.models.development_audit import development_ledger_request_id
 from mmaudit.models.development_corpus import (
+    MAX_DEVELOPMENT_CORPUS_FILES,
     MAX_DEVELOPMENT_CORPUS_RESULT_BYTES,
     DevelopmentCorpusAccountingEntry,
     DevelopmentCorpusMaterial,
@@ -301,7 +302,7 @@ def _rebuild(prepared: PreparedDevelopmentCorpusResume) -> PreparedDevelopmentCo
         or type(prepared.plan) is not DevelopmentCorpusResumePlan
         or type(prepared.candidate) is not PreparedDevelopmentCorpus
         or type(prepared.candidate.shards) is not tuple
-        or not 1 <= len(prepared.candidate.shards) <= 64
+        or not 1 <= len(prepared.candidate.shards) <= MAX_DEVELOPMENT_CORPUS_FILES
         or any(type(s) is not PreparedDevelopmentCorpusShard for s in prepared.candidate.shards)
     ):
         raise DevelopmentCorpusResumeError(
@@ -312,6 +313,7 @@ def _rebuild(prepared: PreparedDevelopmentCorpusResume) -> PreparedDevelopmentCo
         history=prepared.history,
         endpoint_snapshot=first.discovery or first.endpoint_snapshot,
         run_id=prepared.plan.candidate.run_id,
+        source_custody=first.source_custody,
     )
     if rebuilt != prepared:
         raise DevelopmentCorpusResumeError(

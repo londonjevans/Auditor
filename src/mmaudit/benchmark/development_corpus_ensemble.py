@@ -16,6 +16,10 @@ from mmaudit.benchmark.development_corpus import (
     score_development_corpus,
 )
 from mmaudit.models.development_audit import _AuditArtifact
+from mmaudit.models.development_corpus import (
+    MAX_DEVELOPMENT_CORPUS_CLAIMS,
+    MAX_DEVELOPMENT_CORPUS_FILES,
+)
 from mmaudit.models.development_corpus_ensemble import (
     MAX_DEVELOPMENT_CORPUS_ENSEMBLE_BYTES,
     DevelopmentCorpusEnsembleObservation,
@@ -40,20 +44,20 @@ class DevelopmentCorpusEnsembleSummary(_DevelopmentModel):
     overall_observation_scope: Literal[
         "COMPLETE_OBSERVATIONS", "INCOMPLETE_OBSERVATIONS", "NO_CANDIDATES"
     ]
-    available_original_claim_count: int = Field(ge=0, le=1024)
-    expected_available_claim_opinion_count: int = Field(ge=0, le=2048)
-    observed_opinion_count: int = Field(ge=0, le=2048)
-    missing_opinion_count: int = Field(ge=0, le=2048)
-    claims_reviewed_by_both_count: int = Field(ge=0, le=1024)
-    disagreement_count: int = Field(ge=0, le=1024)
-    inconclusive_opinion_count: int = Field(ge=0, le=2048)
-    unanimous_support_count: int = Field(ge=0, le=1024)
-    unanimous_refutation_count: int = Field(ge=0, le=1024)
-    refuted_by_one_count: int = Field(ge=0, le=1024)
-    refuted_by_both_count: int = Field(ge=0, le=1024)
-    matched_root_claims_refuted_by_one_count: int = Field(ge=0, le=1024)
-    matched_root_claims_refuted_by_both_count: int = Field(ge=0, le=1024)
-    unobserved_candidate_shard_count: int = Field(ge=0, le=64)
+    available_original_claim_count: int = Field(ge=0, le=MAX_DEVELOPMENT_CORPUS_CLAIMS)
+    expected_available_claim_opinion_count: int = Field(ge=0, le=MAX_DEVELOPMENT_CORPUS_CLAIMS * 2)
+    observed_opinion_count: int = Field(ge=0, le=MAX_DEVELOPMENT_CORPUS_CLAIMS * 2)
+    missing_opinion_count: int = Field(ge=0, le=MAX_DEVELOPMENT_CORPUS_CLAIMS * 2)
+    claims_reviewed_by_both_count: int = Field(ge=0, le=MAX_DEVELOPMENT_CORPUS_CLAIMS)
+    disagreement_count: int = Field(ge=0, le=MAX_DEVELOPMENT_CORPUS_CLAIMS)
+    inconclusive_opinion_count: int = Field(ge=0, le=MAX_DEVELOPMENT_CORPUS_CLAIMS * 2)
+    unanimous_support_count: int = Field(ge=0, le=MAX_DEVELOPMENT_CORPUS_CLAIMS)
+    unanimous_refutation_count: int = Field(ge=0, le=MAX_DEVELOPMENT_CORPUS_CLAIMS)
+    refuted_by_one_count: int = Field(ge=0, le=MAX_DEVELOPMENT_CORPUS_CLAIMS)
+    refuted_by_both_count: int = Field(ge=0, le=MAX_DEVELOPMENT_CORPUS_CLAIMS)
+    matched_root_claims_refuted_by_one_count: int = Field(ge=0, le=MAX_DEVELOPMENT_CORPUS_CLAIMS)
+    matched_root_claims_refuted_by_both_count: int = Field(ge=0, le=MAX_DEVELOPMENT_CORPUS_CLAIMS)
+    unobserved_candidate_shard_count: int = Field(ge=0, le=MAX_DEVELOPMENT_CORPUS_FILES)
     completed_stage_count: int = Field(ge=0, le=3)
     available_claim_opinion_observation_fraction: DevelopmentCorpusMeasurementRatio
 
@@ -145,7 +149,9 @@ class DevelopmentCorpusEnsembleScore(_AuditArtifact):
     observation: DevelopmentCorpusEnsembleObservation
     observation_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     candidate_score: DevelopmentCorpusBenchmarkScore | None
-    claims: tuple[DevelopmentCorpusEnsembleMeasuredClaim, ...] = Field(max_length=1024)
+    claims: tuple[DevelopmentCorpusEnsembleMeasuredClaim, ...] = Field(
+        max_length=MAX_DEVELOPMENT_CORPUS_CLAIMS
+    )
     summary: DevelopmentCorpusEnsembleSummary
 
     @model_validator(mode="after")

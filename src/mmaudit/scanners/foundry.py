@@ -84,8 +84,9 @@ from mmaudit.scanners.fork_rpc import (
     local_fork_rpc_port,
     observe_pinned_fork_rpc,
 )
-from mmaudit.scanners.foundry_inventory import FoundryCompilerStatementCatalog
+from mmaudit.scanners.foundry_inventory import FoundryCompilerStatementCatalog, FoundrySourceInput
 from mmaudit.scanners.foundry_inventory_runner import (
+    FoundryCompilerInputSnapshot,
     FoundryInventoryInvalidError,
     FoundryInventoryOverflowError,
     FoundryInventoryRunLimits,
@@ -94,9 +95,12 @@ from mmaudit.scanners.foundry_inventory_runner import (
     run_foundry_test_inventory,
 )
 from mmaudit.scanners.foundry_statement_producer import (
+    FoundryStatementCoverageGaps,
     FoundryStatementCoverageProcessObservation,
     FoundryStatementCoverageProduction,
+    FoundryStatementCoverageProductionError,
     produce_foundry_statement_coverage,
+    validate_statement_gap_manifest_context,
 )
 from mmaudit.scanners.read_only_rpc import (
     DETERMINISTIC_FORK_GAS_PRICE_WEI,
@@ -107,6 +111,14 @@ from mmaudit.scanners.repository_suite import (
     select_foundry_repository_suite,
     select_foundry_repository_suite_from_inventory,
 )
+from mmaudit.scanners.solc_capture import (
+    OwnedSolcDebuggerResult,
+    SolcCaptureLimits,
+    prepare_owned_coverage_launch,
+    prepare_owned_debugger_launch,
+    prepare_solc_capture,
+)
+from mmaudit.solidity import solc_capture_worker
 
 if TYPE_CHECKING:
     from mmaudit.orchestration.managed_fork_archives import ManagedForkArchives
@@ -165,6 +177,175 @@ class _CapturedPrivateArtifact:
     relative_path: str
     sha256: str
     content: bytes
+
+
+@dataclass(frozen=True)
+class _FoundryDebuggerProcess:
+    """Separate original debugger bytes, never a coverage or qualification receipt."""
+
+    descriptor: RepositorySuiteTestDescriptor
+    result: OwnedSolcDebuggerResult
+    sources: tuple[FoundrySourceInput, ...]
+    launch_plan: bytes
+    launch_receipt: bytes
+    private_artifact_path: str
+    private_artifact_sha256: str
+    private_artifact_bytes: int
+    artifact_files: tuple[_CapturedPrivateArtifact, ...]
+
+    def retained_payload(self, *, max_bytes: int, deadline: float) -> dict[str, Any]:
+        """Retain original inputs/outputs, including CRLF sources, within the shared ceiling."""
+        _remaining_deadline_seconds(deadline)
+        result = self.result
+        if (
+            type(result) is not OwnedSolcDebuggerResult
+            or self.descriptor.descriptor_sha256 != result.observation.descriptor_sha256
+            or hashlib.sha256(self.launch_plan).hexdigest() != result.launch_plan_sha256
+            or hashlib.sha256(self.launch_receipt).hexdigest() != result.launch_receipt_sha256
+            or hashlib.sha256(result.stdout).hexdigest() != result.observation.machine_stdout_sha256
+            or hashlib.sha256(result.dump).hexdigest() != result.observation.debugger_dump_sha256
+        ):
+            raise FoundryInventoryInvalidError(
+                "retained debugger differs from its original custody"
+            )
+        call_names = {
+            "request.json",
+            "intent.json",
+            "stdin.bin",
+            "stdout.bin",
+            "stderr.bin",
+            "process.json",
+            "runtime.json",
+            "complete.json",
+        }
+        expected_paths = {
+            "stdout.txt",
+            "stderr.txt",
+            "steps.json",
+            "launch-receipt.json",
+            "launcher-stdout.txt",
+            "launcher-stderr.txt",
+            *(
+                f"compiler-transcript/calls/{c.sequence:04d}/{name}"
+                for c in result.compiler_transcripts
+                for name in call_names
+            ),
+        }
+        files_by_path = {a.relative_path: a.content for a in self.artifact_files}
+        if len(files_by_path) != len(self.artifact_files) or set(files_by_path) != expected_paths:
+            raise FoundryInventoryInvalidError("retained debugger artifact population is not exact")
+        for path, raw in (
+            ("stdout.txt", result.stdout),
+            ("stderr.txt", result.stderr),
+            ("steps.json", result.dump),
+            ("launch-receipt.json", self.launch_receipt),
+        ):
+            if files_by_path[path] != raw:
+                raise FoundryInventoryInvalidError(
+                    "retained debugger output differs from original bytes"
+                )
+        for call in result.compiler_transcripts:
+            _remaining_deadline_seconds(deadline)
+            root = f"compiler-transcript/calls/{call.sequence:04d}/"
+            for name, raw in (
+                ("stdin.bin", call.stdin),
+                ("stdout.bin", call.stdout),
+                ("stderr.bin", call.stderr),
+            ):
+                if files_by_path[root + name] != raw:
+                    raise FoundryInventoryInvalidError(
+                        "retained compiler stream differs from original bytes"
+                    )
+            digest = hashlib.sha256(
+                json.dumps(
+                    {
+                        name: hashlib.sha256(files_by_path[root + name]).hexdigest()
+                        for name in sorted(call_names)
+                    },
+                    sort_keys=True,
+                    ensure_ascii=False,
+                    allow_nan=False,
+                ).encode()
+            ).hexdigest()
+            if digest != call.transcript_sha256:
+                raise FoundryInventoryInvalidError("retained original compiler metadata changed")
+        raw_bytes = len(self.launch_plan) + sum(len(s.content) for s in self.sources)
+        raw_bytes += sum(len(a.content) for a in self.artifact_files)
+        if type(max_bytes) is not int or max_bytes <= 0 or raw_bytes > max_bytes // 2:
+            raise FoundryInventoryOverflowError(
+                "retained debugger exceeds its remaining byte ceiling"
+            )
+        source_payloads: list[dict[str, Any]] = []
+        for source in self.sources:
+            _remaining_deadline_seconds(deadline)
+            if hashlib.sha256(source.content).hexdigest() != source.source_sha256:
+                raise FoundryInventoryInvalidError("retained debugger original source changed")
+            source_payloads.append(
+                {
+                    "path": source.path,
+                    "source_sha256": source.source_sha256,
+                    "content_hex": source.content.hex(),
+                }
+            )
+        calls: list[dict[str, Any]] = []
+        for call in result.compiler_transcripts:
+            _remaining_deadline_seconds(deadline)
+            calls.append(
+                {
+                    "sequence": call.sequence,
+                    "received_argv": list(call.received_argv),
+                    "compiler_argv": list(call.compiler_argv),
+                    "compiler_exit_code": call.compiler_exit_code,
+                    "artifact_directory": f"compiler-transcript/calls/{call.sequence:04d}",
+                    "transcript_sha256": call.transcript_sha256,
+                    "evidence_authority": call.evidence_authority,
+                }
+            )
+        files: list[dict[str, Any]] = []
+        for artifact in self.artifact_files:
+            _remaining_deadline_seconds(deadline)
+            if hashlib.sha256(artifact.content).hexdigest() != artifact.sha256:
+                raise FoundryInventoryInvalidError("retained debugger artifact bytes changed")
+            files.append(
+                {
+                    "path": artifact.relative_path,
+                    "sha256": artifact.sha256,
+                    "content_hex": artifact.content.hex(),
+                }
+            )
+        payload = {
+            "artifact_kind": "SEPARATE_ORIGINAL_FOUNDRY_DEBUGGER",
+            "execution_scope": result.observation.execution_scope,
+            "evidence_authority": result.observation.evidence_authority,
+            "descriptor": self.descriptor.model_dump(mode="json"),
+            "source_inputs": source_payloads,
+            "compiler_transcripts": calls,
+            "artifact_files": files,
+            "process_exit_code": result.process_exit_code,
+            "test_status": result.observation.test_status,
+            "launch_plan_hex": self.launch_plan.hex(),
+            "launch_plan_sha256": result.launch_plan_sha256,
+            "launch_receipt_sha256": result.launch_receipt_sha256,
+            "private_artifact_path": self.private_artifact_path,
+            "private_artifact_sha256": self.private_artifact_sha256,
+            "private_artifact_bytes": self.private_artifact_bytes,
+            "coverage_complete": False,
+            "runtime_authority": False,
+        }
+        _remaining_deadline_seconds(deadline)
+        if (
+            len(
+                json.dumps(
+                    payload, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+                ).encode()
+            )
+            > max_bytes
+        ):
+            raise FoundryInventoryOverflowError(
+                "retained debugger metadata exceeds its remaining byte ceiling"
+            )
+        _remaining_deadline_seconds(deadline)
+        return payload
 
 
 @dataclass(frozen=True)
@@ -246,18 +427,48 @@ class _SuiteArtifactBudget:
         label: str,
         per_test: bool,
     ) -> None:
+        # Generated bytes remain a liability even when this charge refuses further work.
+        self.bytes += usage.bytes
+        self.entries += usage.entries
         if per_test and (
             usage.bytes > self.max_bytes_per_test or usage.entries > self.max_entries_per_test
         ):
             raise FoundryInventoryOverflowError(f"{label} exceeded the per-test artifact ceiling")
-        next_bytes = self.bytes + usage.bytes
-        next_entries = self.entries + usage.entries
-        if next_bytes > self.max_total_bytes or next_entries > self.max_total_entries:
+        if self.bytes > self.max_total_bytes or self.entries > self.max_total_entries:
             raise FoundryInventoryOverflowError(
                 f"{label} exceeded the suite total artifact ceiling"
             )
-        self.bytes = next_bytes
-        self.entries = next_entries
+
+
+def _charge_selected_test_artifacts(
+    *,
+    outcome: _ScopedFoundryTestOutcome,
+    budget: _SuiteArtifactBudget,
+    backend: ScannerIsolationBackend,
+    private_dir: Path,
+    output_index: int,
+    deadline: float,
+) -> None:
+    """Charge completed or failed stage trees once, before interpreting the test outcome."""
+    if outcome.result is not None:
+        usage = outcome.result[1]
+    else:
+        generated = _foundry_private_generated_root(backend, private_dir)
+        stages: list[_PrivateArtifactUsage] = []
+        for stage in ("tests", "coverage", "debugger"):
+            _remaining_deadline_seconds(deadline)
+            path = generated / "repository-suite" / stage / f"{output_index:05d}"
+            try:
+                path.lstat()
+            except FileNotFoundError:
+                continue
+            stages.append(_private_artifact_usage(path, deadline=deadline, trusted_root=generated))
+        usage = (
+            _combined_private_artifact_usage(*stages)
+            if stages
+            else _PrivateArtifactUsage(0, 0, hashlib.sha256(b"[]").hexdigest())
+        )
+    budget.charge(usage, label="Foundry selected-test stages", per_test=True)
 
 
 class _FoundrySuiteDeadlineExpired(RuntimeError):
@@ -671,6 +882,7 @@ class FoundryForkScanner(ScannerAdapter):
         selection: RepositorySuiteSelection | None = None
         observations: list[_FoundryTestObservation] = []
         statement_coverage_processes: list[FoundryStatementCoverageProcessObservation] = []
+        debugger_processes: list[_FoundryDebuggerProcess] = []
         test_fork_rpc_scopes: list[RepositoryTestForkRpcScopeEvidence] = []
         fork: PinnedForkObservation | None = None
         executable_sha256: str | None = None
@@ -732,6 +944,7 @@ class FoundryForkScanner(ScannerAdapter):
                 repository_suite_workspace_custody=custody,
                 repository_statement_entity_catalog=self.audited_suite_entity_catalog,
                 repository_statement_coverage_processes=statement_coverage_processes,
+                repository_debugger_processes=debugger_processes,
                 pre_statement_catalogs=pre_statement_catalogs,
                 post_statement_catalogs=post_statement_catalogs,
                 repository_suite_artifact_bytes=artifact_budget.bytes,
@@ -1234,8 +1447,10 @@ class FoundryForkScanner(ScannerAdapter):
                     private_dir=private_dir,
                     output_index=index,
                     executable_path=executable_path,
+                    executable_sha256=executable_sha256,
                     compiler_path=copied_compiler,
                     compiler_sha256=compiler_sha256,
+                    compiler_inputs=pre_inventory_result.compiler_inputs,
                     rpc_url=rpc_url,
                     rpc_port=rpc_port,
                     fork=fork,
@@ -1249,9 +1464,39 @@ class FoundryForkScanner(ScannerAdapter):
                     base_environment=environment,
                 )
                 statement_coverage_processes.append(coverage_process)
+                debugger_process, debugger_artifacts = _execute_foundry_debugger_trace(
+                    descriptor=descriptor,
+                    workspace=workspace,
+                    private_dir=private_dir,
+                    output_index=index,
+                    executable_path=executable_path,
+                    executable_sha256=executable_sha256,
+                    compiler_path=copied_compiler,
+                    compiler_sha256=compiler_sha256,
+                    compiler_inputs=pre_inventory_result.compiler_inputs,
+                    rpc_url=rpc_url,
+                    rpc_port=rpc_port,
+                    fork=fork,
+                    fuzz_seed=self.config.repository_suite.fuzz_seed,
+                    fuzz_runs=self.config.foundry_fuzz_runs,
+                    invariant_runs=self.config.foundry_invariant_runs,
+                    deadline=selected_test_deadline,
+                    max_output_bytes=min(remaining_test_bytes, remaining_suite_bytes)
+                    - coverage_artifacts.bytes,
+                    max_output_entries=min(remaining_test_entries, remaining_suite_entries)
+                    - coverage_artifacts.entries,
+                    backend=backend,
+                    base_environment=environment,
+                )
+                debugger_processes.append(debugger_process)
+                if debugger_process.result.observation.test_status != "Success":
+                    raise FoundryInventoryInvalidError(
+                        "separate debugger selected test did not pass"
+                    )
                 return observation, _combined_private_artifact_usage(
                     test_artifacts,
                     coverage_artifacts,
+                    debugger_artifacts,
                 )
 
             outcome = _execute_foundry_test_with_scope(
@@ -1264,6 +1509,24 @@ class FoundryForkScanner(ScannerAdapter):
             )
             if outcome.scope is not None:
                 test_fork_rpc_scopes.append(outcome.scope)
+            try:
+                _charge_selected_test_artifacts(
+                    outcome=outcome,
+                    budget=artifact_budget,
+                    backend=backend,
+                    private_dir=private_dir,
+                    output_index=index,
+                    deadline=deadline,
+                )
+            except (_FoundrySuiteDeadlineExpired, FoundryInventoryTimeoutError):
+                terminal_status = ScannerStatus.TIMED_OUT
+                terminal_error = "Foundry selected-test artifact accounting exceeded its deadline"
+                break
+            except (OSError, FoundryInventoryInvalidError, FoundryInventoryOverflowError) as exc:
+                execution_integrity_valid = False
+                terminal_status = ScannerStatus.FAILED
+                terminal_error = f"Foundry selected-test artifact accounting failed: {exc}"
+                break
             if isinstance(outcome.error, _FoundryScopeBoundaryError):
                 terminal_status = ScannerStatus.FAILED
                 terminal_error = str(outcome.error)
@@ -1303,19 +1566,8 @@ class FoundryForkScanner(ScannerAdapter):
                 terminal_status = ScannerStatus.FAILED
                 terminal_error = "Foundry repository test returned no execution result"
                 break
-            observation, private_artifacts = outcome.result
+            observation, _private_artifacts = outcome.result
             observations.append(observation)
-            try:
-                artifact_budget.charge(
-                    private_artifacts,
-                    label=f"Foundry repository test {descriptor.test_name}",
-                    per_test=True,
-                )
-            except FoundryInventoryOverflowError as exc:
-                execution_integrity_valid = False
-                terminal_status = ScannerStatus.FAILED
-                terminal_error = str(exc)
-                break
             try:
                 compiler_unchanged = _file_sha256(copied_compiler) == compiler_sha256
             except OSError:
@@ -3129,8 +3381,10 @@ def _execute_foundry_statement_coverage(
     private_dir: Path,
     output_index: int,
     executable_path: Path,
+    executable_sha256: str,
     compiler_path: Path,
     compiler_sha256: str,
+    compiler_inputs: tuple[FoundryCompilerInputSnapshot, ...],
     rpc_url: str,
     rpc_port: int,
     fork: PinnedForkObservation,
@@ -3143,7 +3397,7 @@ def _execute_foundry_statement_coverage(
     backend: ScannerIsolationBackend,
     base_environment: dict[str, str],
 ) -> tuple[FoundryStatementCoverageProcessObservation, _PrivateArtifactUsage]:
-    """Run and seal one compiler-debug coverage process for an exact selected test."""
+    """Capture original compilation and one exact selected test under existing custody."""
 
     try:
         _remaining_deadline_seconds(deadline)
@@ -3189,27 +3443,77 @@ def _execute_foundry_statement_coverage(
         compiler_sha256=compiler_sha256,
     )
     command_sha256 = _canonical_command_sha256(display_command)
+    if type(compiler_inputs) is not tuple or any(
+        type(snapshot) is not FoundryCompilerInputSnapshot for snapshot in compiler_inputs
+    ):
+        raise FoundryInventoryInvalidError(
+            "coverage requires the original compiler input snapshots"
+        )
+    matching = [s for s in compiler_inputs if s.project_root == descriptor.project_root]
+    if len(matching) != 1:
+        raise FoundryInventoryInvalidError("coverage compiler project population is not exact")
+    try:
+        trusted_root = private_dir / "trusted-inputs"
+        trusted_root.mkdir(mode=0o700, exist_ok=True)
+        if trusted_root.resolve(strict=True) != trusted_root or not trusted_root.is_dir():
+            raise ValueError("coverage trusted-input directory is aliased or unavailable")
+        owner_root = trusted_root / f"coverage-{output_index:05d}"
+        owner_root.mkdir(mode=0o700, exist_ok=False)
+        capture = prepare_solc_capture(
+            root=execution_dir / "compiler-transcript",
+            helper_root=owner_root / "compiler",
+            owner_launch_receipt_path=execution_dir / "launch-receipt.json",
+            workspace=project_path,
+            compiler=compiler_path,
+            compiler_sha256=compiler_sha256,
+            sources=matching[0].sources,
+            deadline_monotonic=deadline,
+            limits=SolcCaptureLimits(
+                max_total_stream_bytes=min(64_000_000, max_output_bytes),
+            ),
+        )
+    except TimeoutError as exc:
+        raise FoundryInventoryTimeoutError(
+            "Foundry statement coverage exceeded its shared per-test deadline"
+        ) from exc
+    except (OSError, ValueError) as exc:
+        raise FoundryInventoryInvalidError(
+            f"statement-coverage compiler capture setup failed: {type(exc).__name__}"
+        ) from exc
     command = _actual_foundry_test_command(
         display_command,
         executable_path=executable_path,
         rpc_url=rpc_url,
-        compiler_path=compiler_path,
+        compiler_path=capture.launcher,
         compiler_sha256=compiler_sha256,
         cache_path=cache_path,
         output_path=output_path,
     )
     try:
+        launch = prepare_owned_coverage_launch(
+            session=capture,
+            trusted_root=trusted_root,
+            forge=executable_path,
+            forge_sha256=executable_sha256,
+            command=tuple(command),
+            receipt_path=execution_dir / "launch-receipt.json",
+        )
         wrapped_command = backend.wrap(
-            command,
+            list(launch.command),
             workspace=workspace,
             private_dir=private_dir,
             rpc_port=rpc_port,
         )
+        launch.require_inputs_unchanged()
         environment = isolation_host_environment(
             backend,
             private_dir,
             base_environment,
         )
+    except TimeoutError as exc:
+        raise FoundryInventoryTimeoutError(
+            "Foundry statement coverage exceeded its shared per-test deadline"
+        ) from exc
     except (OSError, RuntimeError, subprocess.TimeoutExpired, ValueError) as exc:
         raise FoundryInventoryInvalidError(
             f"statement-coverage isolation setup failed: {type(exc).__name__}"
@@ -3238,8 +3542,9 @@ def _execute_foundry_statement_coverage(
     try:
         with raw_path.open("xb") as stdout_handle, error_path.open("xb") as stderr_handle:
             try:
+                launch.require_inputs_unchanged()
                 _remaining_deadline_seconds(deadline)
-            except _FoundrySuiteDeadlineExpired:
+            except (_FoundrySuiteDeadlineExpired, TimeoutError):
                 timed_out = True
             if not timed_out:
                 process = subprocess.Popen(
@@ -3297,7 +3602,7 @@ def _execute_foundry_statement_coverage(
         if process is not None:
             _stop_process(process, deadline=deadline)
             return_code = process.returncode
-    except (OSError, subprocess.SubprocessError) as exc:
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
         process_error = f"statement-coverage process failed: {type(exc).__name__}"
 
     cleanup_error = _cleanup_error(backend, private_dir)
@@ -3338,6 +3643,20 @@ def _execute_foundry_statement_coverage(
         )
     assert return_code == 0
     try:
+        compiler_transcripts = launch.collect()
+        final_usage = _private_artifact_usage(
+            execution_dir,
+            deadline=deadline,
+            trusted_root=generated_root,
+        )
+        if (
+            final_usage.artifact_sha256 != artifact_usage.artifact_sha256
+            or final_usage.bytes != artifact_usage.bytes
+            or final_usage.entries != artifact_usage.entries
+        ):
+            raise FoundryInventoryInvalidError(
+                "coverage artifacts changed during compiler collection"
+            )
         stdout = artifact_usage.captured("stdout.txt")
         stderr = artifact_usage.captured("stderr.txt")
         debug_coverage = parse_forge_debug_statement_coverage(stdout)
@@ -3348,11 +3667,11 @@ def _execute_foundry_statement_coverage(
             return_code=return_code,
             deadline=deadline,
         )
-    except _FoundrySuiteDeadlineExpired as exc:
+    except (_FoundrySuiteDeadlineExpired, TimeoutError) as exc:
         raise FoundryInventoryTimeoutError(
             "Foundry statement coverage exceeded its shared per-test deadline"
         ) from exc
-    except (FoundryStatementCoverageError, UnicodeError, ValueError) as exc:
+    except (FoundryStatementCoverageError, OSError, UnicodeError, ValueError) as exc:
         raise FoundryInventoryInvalidError(
             f"Foundry debug statement coverage failed validation: {type(exc).__name__}"
         ) from exc
@@ -3382,9 +3701,246 @@ def _execute_foundry_statement_coverage(
             private_artifact_bytes=artifact_usage.bytes,
             duration_seconds=duration_seconds,
             debug_coverage=debug_coverage,
+            compiler_transcripts=compiler_transcripts,
         ),
         artifact_usage,
     )
+
+
+def _execute_foundry_debugger_trace(
+    *,
+    descriptor: RepositorySuiteTestDescriptor,
+    workspace: Path,
+    private_dir: Path,
+    output_index: int,
+    executable_path: Path,
+    executable_sha256: str,
+    compiler_path: Path,
+    compiler_sha256: str,
+    compiler_inputs: tuple[FoundryCompilerInputSnapshot, ...],
+    rpc_url: str,
+    rpc_port: int,
+    fork: PinnedForkObservation,
+    fuzz_seed: str,
+    fuzz_runs: int,
+    invariant_runs: int,
+    deadline: float,
+    max_output_bytes: int,
+    max_output_entries: int,
+    backend: ScannerIsolationBackend,
+    base_environment: dict[str, str],
+) -> tuple[_FoundryDebuggerProcess, _PrivateArtifactUsage]:
+    """Run a distinct debugger under the original suite's live limits and cleanup."""
+    from mmaudit.scanners.foundry_debugger import FoundryDebuggerLimits
+
+    process: subprocess.Popen[bytes] | None = None
+    cleanup_error: str | None = None
+    try:
+        _remaining_deadline_seconds(deadline)
+        if max_output_bytes <= 0 or max_output_entries <= 0:
+            raise FoundryInventoryOverflowError(
+                "no remaining artifact budget for separate debugger"
+            )
+        if type(compiler_inputs) is not tuple or any(
+            type(s) is not FoundryCompilerInputSnapshot for s in compiler_inputs
+        ):
+            raise FoundryInventoryInvalidError(
+                "debugger requires original compiler input snapshots"
+            )
+        matching = [s for s in compiler_inputs if s.project_root == descriptor.project_root]
+        if len(matching) != 1:
+            raise FoundryInventoryInvalidError("debugger compiler project population is not exact")
+        project = workspace / descriptor.project_root
+        if project.resolve(strict=True) != project or not project.is_dir():
+            raise FoundryInventoryInvalidError("debugger project is aliased or unavailable")
+        generated = _foundry_private_generated_root(backend, private_dir)
+        relative = f"repository-suite/debugger/{output_index:05d}"
+        execution = generated / relative
+        execution.mkdir(parents=True, exist_ok=False, mode=0o700)
+        trusted = private_dir / "trusted-inputs"
+        trusted.mkdir(exist_ok=True, mode=0o700)
+        owner = trusted / f"debugger-{output_index:05d}"
+        owner.mkdir(exist_ok=False, mode=0o700)
+        capture = prepare_solc_capture(
+            root=execution / "compiler-transcript",
+            helper_root=owner / "compiler",
+            owner_launch_receipt_path=execution / "launch-receipt.json",
+            workspace=project,
+            compiler=compiler_path,
+            compiler_sha256=compiler_sha256,
+            sources=matching[0].sources,
+            deadline_monotonic=deadline,
+            limits=SolcCaptureLimits(max_total_stream_bytes=min(64_000_000, max_output_bytes)),
+        )
+        launch = prepare_owned_debugger_launch(
+            session=capture,
+            trusted_root=trusted,
+            forge=executable_path,
+            forge_sha256=executable_sha256,
+            descriptor=descriptor,
+            fuzz_seed=fuzz_seed,
+            fuzz_runs=fuzz_runs,
+            fork_url=rpc_url,
+            fork_block_number=fork.block_number,
+            limits=FoundryDebuggerLimits(
+                max_artifact_bytes=min(16_000_000, max_output_bytes),
+                max_total_bytes=min(64_000_000, max_output_bytes),
+            ),
+        )
+        wrapped = backend.wrap(
+            list(launch.command), workspace=workspace, private_dir=private_dir, rpc_port=rpc_port
+        )
+        environment = {
+            k: v
+            for k, v in isolation_host_environment(backend, private_dir, base_environment).items()
+            if k in _FOUNDRY_HOST_ENVIRONMENT_ALLOWLIST
+        }
+        environment.update(
+            {
+                "ETH_RPC_URL": rpc_url,
+                "FOUNDRY_FFI": "false",
+                "FOUNDRY_FS_PERMISSIONS": "[]",
+                "FOUNDRY_INVARIANT_RUNS": str(invariant_runs),
+                "FOUNDRY_NO_STORAGE_CACHING": "true",
+                "FOUNDRY_PROFILE": "default",
+            }
+        )
+        with (
+            (execution / "launcher-stdout.txt").open("xb") as stdout,
+            (execution / "launcher-stderr.txt").open("xb") as stderr,
+        ):
+            launch.require_inputs_unchanged()
+            _remaining_deadline_seconds(deadline)
+            process = subprocess.Popen(
+                wrapped,
+                cwd=project,
+                stdin=subprocess.DEVNULL,
+                stdout=stdout,
+                stderr=stderr,
+                env=environment,
+                shell=False,
+                start_new_session=os.name != "nt",
+                creationflags=int(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
+                if os.name == "nt"
+                else 0,
+                preexec_fn=_limit_process if os.name != "nt" else None,
+            )
+            while process.poll() is None:
+                _remaining_deadline_seconds(deadline)
+                usage = _private_artifact_usage(
+                    execution,
+                    hash_contents=False,
+                    deadline=deadline,
+                    trusted_root=generated,
+                    purpose=_PrivateArtifactTraversalPurpose.LIVE_LIMIT_MONITOR,
+                )
+                if usage.bytes > max_output_bytes or usage.entries > max_output_entries:
+                    raise FoundryInventoryOverflowError(
+                        "separate debugger exceeded its remaining live artifact ceiling"
+                    )
+                time.sleep(min(0.05, _remaining_deadline_seconds(deadline)))
+            exit_code = process.wait(timeout=_remaining_deadline_seconds(deadline, maximum=0.1))
+    except (_FoundrySuiteDeadlineExpired, TimeoutError, subprocess.TimeoutExpired) as exc:
+        raise FoundryInventoryTimeoutError(
+            "separate debugger exceeded the original shared deadline"
+        ) from exc
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
+        if isinstance(
+            exc,
+            (
+                FoundryInventoryInvalidError,
+                FoundryInventoryOverflowError,
+                FoundryInventoryUnavailableError,
+            ),
+        ):
+            raise
+        raise FoundryInventoryInvalidError(
+            f"separate debugger launch failed: {type(exc).__name__}"
+        ) from exc
+    finally:
+        try:
+            if process is not None and process.poll() is None:
+                _stop_process(process, deadline=deadline)
+        finally:
+            cleanup_error = _cleanup_error(backend, private_dir)
+    try:
+        _remaining_deadline_seconds(deadline)
+        if cleanup_error is not None or process is None or process.poll() is None:
+            raise FoundryInventoryInvalidError(
+                cleanup_error or "debugger termination was not observed"
+            )
+        usage = _private_artifact_usage(execution, deadline=deadline, trusted_root=generated)
+        if usage.bytes > max_output_bytes or usage.entries > max_output_entries:
+            raise FoundryInventoryOverflowError(
+                "separate debugger exceeded its remaining artifact ceiling"
+            )
+        result = launch.collect(process_exit_code=exit_code)
+        plan = solc_capture_worker.file_bytes(owner / "debugger-launch.json", 2_000_000)
+        receipt = solc_capture_worker.file_bytes(launch.receipt_path, 524_288)
+        launch.require_inputs_unchanged()
+        capture_paths = {
+            "stdout.txt",
+            "stderr.txt",
+            "steps.json",
+            "launch-receipt.json",
+            "launcher-stdout.txt",
+            "launcher-stderr.txt",
+            *(
+                f"compiler-transcript/calls/{call.sequence:04d}/{name}"
+                for call in result.compiler_transcripts
+                for name in (
+                    "request.json",
+                    "intent.json",
+                    "stdin.bin",
+                    "stdout.bin",
+                    "stderr.bin",
+                    "process.json",
+                    "runtime.json",
+                    "complete.json",
+                )
+            ),
+        }
+        final = _private_artifact_usage(
+            execution,
+            deadline=deadline,
+            trusted_root=generated,
+            capture_relative_paths=frozenset(capture_paths),
+        )
+        if (final.artifact_sha256, final.bytes, final.entries) != (
+            usage.artifact_sha256,
+            usage.bytes,
+            usage.entries,
+        ):
+            raise FoundryInventoryInvalidError(
+                "debugger artifacts changed during original collection"
+            )
+        if (
+            hashlib.sha256(plan).hexdigest() != result.launch_plan_sha256
+            or hashlib.sha256(receipt).hexdigest() != result.launch_receipt_sha256
+        ):
+            raise FoundryInventoryInvalidError(
+                "debugger launch bytes differ from original collection"
+            )
+        _remaining_deadline_seconds(deadline)
+        return _FoundryDebuggerProcess(
+            descriptor,
+            result,
+            matching[0].sources,
+            plan,
+            receipt,
+            relative,
+            usage.artifact_sha256,
+            usage.bytes,
+            final.captured_files,
+        ), usage
+    except (_FoundrySuiteDeadlineExpired, TimeoutError) as exc:
+        raise FoundryInventoryTimeoutError(
+            "debugger collection exceeded the original shared deadline"
+        ) from exc
+    except (OSError, ValueError) as exc:
+        raise FoundryInventoryInvalidError(
+            f"separate debugger collection failed: {type(exc).__name__}"
+        ) from exc
 
 
 def _invalid_foundry_observation(
@@ -3484,6 +4040,14 @@ def _parse_exact_foundry_test(
     if summary is None:
         raise ValueError("Forge JSON contains no classified test result")
     foundry_status = _foundry_status(result)
+    # A first-case failure may report zero completed cases. Retain its raw output,
+    # but refuse classified campaign credit rather than inventing a count or letting
+    # the nonzero-campaign evidence schema fail later during suite finalization.
+    if foundry_status != "SKIP" and (
+        (summary.fuzz_tests and summary.fuzz_cases < 1)
+        or (summary.invariant_tests and (summary.invariant_runs < 1 or summary.invariant_calls < 1))
+    ):
+        raise ValueError("exact Forge campaign requires nonzero observed cases, runs and calls")
     if foundry_status == "PASS":
         if return_code != 0:
             raise ValueError("passing Forge result has a nonzero process exit")
@@ -3833,6 +4397,9 @@ def _write_repository_suite_manifest(
     statement_coverage_evidence: Sequence[AuditedSuiteStatementCoverageEvidence] = (),
     statement_coverage_receipt: AuditedSuiteStatementCoverageReceipt | None = None,
     statement_entity_catalog: AuditedSuiteEntityCatalog | None = None,
+    statement_observation_gaps: FoundryStatementCoverageGaps | None = None,
+    statement_gap_entity_catalog: AuditedSuiteEntityCatalog | None = None,
+    debugger_processes: Sequence[_FoundryDebuggerProcess] = (),
     previously_charged_artifact_bytes: int = 0,
     deadline: float,
 ) -> Path:
@@ -3873,11 +4440,80 @@ def _write_repository_suite_manifest(
         evidence.schema_version == "1.2" for evidence in statement_coverage_evidence
     ):
         raise ValueError("statement coverage v1.2 manifest requires its receipt and catalog")
+    if (statement_observation_gaps is None) != (statement_gap_entity_catalog is None):
+        raise ValueError("statement observation gaps and their unvalidated catalog are all-or-none")
+    if statement_observation_gaps is not None:
+        if (
+            statement_coverage_payloads
+            or statement_coverage_receipt is not None
+            or statement_entity_catalog is not None
+            or inventory is None
+            or post_inventory is None
+            or execution_policy is None
+            or statement_gap_entity_catalog is None
+        ):
+            raise ValueError(
+                "statement gap manifest requires failure-only complete original context"
+            )
+        statement_observation_gaps = validate_statement_gap_manifest_context(
+            statement_observation_gaps,
+            selection=selection,
+            inventory=inventory,
+            post_inventory=post_inventory,
+            policy=execution_policy,
+            catalog=statement_gap_entity_catalog,
+            executions=executions,
+            scopes=repository_test_fork_rpc_scopes,
+            previously_charged_artifact_bytes=previously_charged_artifact_bytes,
+        )
+        _remaining_deadline_seconds(deadline)
+    debugger_payloads: list[dict[str, Any]] = []
+    if debugger_processes:
+        if (
+            execution_policy is None
+            or type(previously_charged_artifact_bytes) is not int
+            or previously_charged_artifact_bytes < 0
+        ):
+            raise ValueError("debugger manifest lacks exact original resource accounting")
+        remaining_bytes = (
+            min(
+                AUDITED_SUITE_STATEMENT_EVIDENCE_BYTE_LIMIT, execution_policy.max_total_output_bytes
+            )
+            - previously_charged_artifact_bytes
+        )
+        expected = {d.descriptor_sha256: (i, d) for i, d in enumerate(selection.tests)}
+        previous_index = -1
+        for process in debugger_processes:
+            _remaining_deadline_seconds(deadline)
+            if (
+                type(process) is not _FoundryDebuggerProcess
+                or process.descriptor.descriptor_sha256 not in expected
+            ):
+                raise ValueError("debugger manifest has an unselected process")
+            index, descriptor = expected[process.descriptor.descriptor_sha256]
+            if index <= previous_index or descriptor != process.descriptor:
+                raise ValueError("debugger manifest process population is reordered or repeated")
+            previous_index = index
+            retained = process.retained_payload(max_bytes=remaining_bytes, deadline=deadline)
+            debugger_payloads.append(retained)
+            remaining_bytes -= len(
+                json.dumps(
+                    retained, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+                ).encode()
+            )
     payload: dict[str, Any] = {
         "schema_version": (
-            "1.2"
-            if statement_coverage_receipt is not None
-            else ("1.1" if statement_coverage_payloads else "1.0")
+            "1.4"
+            if statement_observation_gaps is not None
+            else (
+                "1.3"
+                if debugger_payloads
+                else (
+                    "1.2"
+                    if statement_coverage_receipt is not None
+                    else ("1.1" if statement_coverage_payloads else "1.0")
+                )
+            )
         ),
         "selection": selection_payload,
         "pre_execution_inventory": inventory_payload,
@@ -3886,6 +4522,26 @@ def _write_repository_suite_manifest(
         "executions": execution_payloads,
         "safety_claim": False,
     }
+    if statement_observation_gaps is not None:
+        assert statement_gap_entity_catalog is not None
+        payload["repository_statement_observation_gaps"] = statement_observation_gaps.model_dump(
+            mode="json"
+        )
+        payload["unvalidated_statement_entity_catalog"] = statement_gap_entity_catalog.model_dump(
+            mode="json"
+        )
+        _remaining_deadline_seconds(deadline)
+    if debugger_payloads:
+        observed = {p.descriptor.descriptor_sha256 for p in debugger_processes}
+        payload["repository_debugger_observations"] = {
+            "execution_scope": "SEPARATE_INVOCATIONS_NOT_ORIGINAL_COVERAGE_OR_FULL_FUZZ_POPULATION",
+            "observed": debugger_payloads,
+            "unproduced_descriptors": [
+                d.descriptor_sha256 for d in selection.tests if d.descriptor_sha256 not in observed
+            ],
+            "runtime_authority": False,
+            "coverage_complete": False,
+        }
     if scope_payloads:
         payload["repository_test_fork_rpc_scopes"] = scope_payloads
     if statement_coverage_payloads:
@@ -3911,7 +4567,7 @@ def _write_repository_suite_manifest(
         + "\n"
     )
     encoded_manifest = serialized_manifest.encode("utf-8")
-    if statement_coverage_payloads:
+    if statement_coverage_payloads or debugger_payloads or statement_observation_gaps is not None:
         if execution_policy is None:
             raise ValueError("statement coverage manifest requires an execution policy")
         if previously_charged_artifact_bytes < 0:
@@ -3920,10 +4576,10 @@ def _write_repository_suite_manifest(
             (evidence.coverage_artifact_sha256, evidence.coverage_artifact_bytes)
             for evidence in statement_coverage_evidence
         }
-        if len(coverage_artifacts) != 1:
+        if statement_coverage_payloads and len(coverage_artifacts) != 1:
             raise ValueError("statement coverage manifest requires one exact coverage artifact")
         complete_custody_bytes = previously_charged_artifact_bytes + len(encoded_manifest)
-        if statement_coverage_receipt is None:
+        if statement_coverage_payloads and statement_coverage_receipt is None:
             complete_custody_bytes += next(iter(coverage_artifacts))[1]
         if complete_custody_bytes > min(
             AUDITED_SUITE_STATEMENT_EVIDENCE_BYTE_LIMIT,
@@ -4171,6 +4827,7 @@ def _finalize_foundry_repository_suite(
     repository_statement_coverage_processes: Sequence[
         FoundryStatementCoverageProcessObservation
     ] = (),
+    repository_debugger_processes: Sequence[_FoundryDebuggerProcess] = (),
     pre_statement_catalogs: Sequence[FoundryCompilerStatementCatalog] = (),
     post_statement_catalogs: Sequence[FoundryCompilerStatementCatalog] = (),
     repository_suite_artifact_bytes: int = 0,
@@ -4283,6 +4940,7 @@ def _finalize_foundry_repository_suite(
     validated_statement_evidence: list[AuditedSuiteStatementCoverageEvidence] = []
     validated_statement_receipt: AuditedSuiteStatementCoverageReceipt | None = None
     validated_statement_catalog: AuditedSuiteEntityCatalog | None = None
+    statement_observation_gaps: FoundryStatementCoverageGaps | None = None
 
     def build_evidence(
         evidence: ExecutionEvidenceKind,
@@ -4358,6 +5016,7 @@ def _finalize_foundry_repository_suite(
         refreshed_evidence = (
             ExecutionEvidenceKind.REAL
             if manifest_cleanup_failure is None
+            and statement_observation_gaps is None
             and _foundry_observations_support_real_execution(
                 backend=backend,
                 attestation=attestation,
@@ -4479,6 +5138,7 @@ def _finalize_foundry_repository_suite(
                     statement_coverage_evidence=validated_statement_evidence,
                     statement_coverage_receipt=validated_statement_receipt,
                     statement_entity_catalog=validated_statement_catalog,
+                    debugger_processes=repository_debugger_processes,
                     previously_charged_artifact_bytes=repository_suite_artifact_bytes,
                     deadline=deadline,
                 )
@@ -4492,6 +5152,8 @@ def _finalize_foundry_repository_suite(
                     timeout_error,
                 )
         except (OSError, ValueError, FoundryInventoryOverflowError) as exc:
+            if isinstance(exc, FoundryStatementCoverageProductionError):
+                statement_observation_gaps = exc.observation_gaps
             if time.monotonic() >= deadline:
                 downgrade_for_expired_deadline()
             else:
@@ -4501,12 +5163,50 @@ def _finalize_foundry_repository_suite(
             validated_statement_evidence = []
             validated_statement_receipt = None
             validated_statement_catalog = None
-            record_manifest_cleanup_failure(discard_manifest())
+            manifest_cleanup_failure = discard_manifest()
+            record_manifest_cleanup_failure(manifest_cleanup_failure)
             executions, findings = build_evidence(
                 execution_evidence,
                 error or "repository fork-suite evidence finalization failed",
             )
             foundry_summary = None
+            if (
+                statement_observation_gaps is not None
+                and not deadline_crossed
+                and manifest_cleanup_failure is None
+            ):
+                # Preserve actionable original failure evidence without a coverage
+                # receipt, successful summary, or execution/qualification credit.
+                try:
+                    check_final_deadline()
+                    manifest_path = _write_repository_suite_manifest(
+                        private_dir,
+                        selection,
+                        inventory,
+                        post_inventory,
+                        execution_policy,
+                        executions,
+                        repository_test_fork_rpc_scopes,
+                        statement_observation_gaps=statement_observation_gaps,
+                        statement_gap_entity_catalog=repository_statement_entity_catalog,
+                        debugger_processes=repository_debugger_processes,
+                        previously_charged_artifact_bytes=repository_suite_artifact_bytes,
+                        deadline=deadline,
+                    )
+                    check_final_deadline()
+                except (
+                    OSError,
+                    ValueError,
+                    FoundryInventoryOverflowError,
+                    _FoundrySuiteDeadlineExpired,
+                ) as retention_error:
+                    record_manifest_cleanup_failure(discard_manifest())
+                    if time.monotonic() >= deadline:
+                        downgrade_for_expired_deadline()
+                    else:
+                        error = (error or "repository fork-suite evidence finalization failed") + (
+                            f"; failure evidence retention failed: {type(retention_error).__name__}"
+                        )
     if time.monotonic() >= deadline and not deadline_crossed:
         downgrade_for_expired_deadline()
     process_exit_code = (

@@ -14,6 +14,7 @@ from scripts.validate_governance_state import (
     GOVERNANCE_SCOPE,
     HISTORICAL_PAYLOAD_SHA256S,
     historical_payload_sha256,
+    project_current_requirements,
     validate_governance_state,
     validate_worklog_header,
 )
@@ -27,7 +28,9 @@ TRACEABILITY_PATH = ROOT / "docs/remediation/v3/review_traceability.json"
 RUNTIME_STATUS_PATH = ROOT / "docs/remediation/v3/runtime_status.json"
 README_PATH = ROOT / "README.md"
 MODEL_SELECTION_PATH = ROOT / "docs/models/model_selection.md"
-SELECTION_PLAN_PATH = ROOT / "config/models.selection-plan.json"
+HISTORICAL_UNAVAILABLE_PLAN_PATH = (
+    ROOT / "tests/fixtures/model_selection/unavailable-plan-v1.7.json"
+)
 HISTORICAL_V1_4_SELECTION_PLAN_PATH = (
     ROOT / "tests/fixtures/model_selection/revoked-active-plan-v1.4.json"
 )
@@ -419,7 +422,12 @@ CURRENT_ENDPOINTLIST_DIAGNOSTIC_SCHEMA_RAW_SHA256 = (
     "326cd2a83b5bc1b825018bfbfe2e7244c62587105d1bc188e4dbe3ff7b8a2b72"
 )
 ROUTE_RUNTIME_EVIDENCE_SCHEMA_RAW_SHA256 = (
+    # Exact historical runtime/operator snapshot, not the later cost-profile schema.
     "94fb9f405d1365371961a6498462ea413e98cbfd982fb8c316710a7faab4ad04"
+)
+CURRENT_ROUTE_RUNTIME_EVIDENCE_SCHEMA_RAW_SHA256 = (
+    # COSTRECON retains legacy binding and adds exact smoke-v1.3 runtime replay.
+    "56f9209bb91c45bddbf0ae9298100d0f3c72e5b15f4328ea179cc0f0f919c634"
 )
 MANAGED_TOOLCHAIN_RAW_SHA256 = "6d427e698d1074be2d20747211bcdd53816509e0e71b4225dff0401c32d6561a"
 MANAGED_TOOLCHAIN_SHA256 = "55c412fdb2dd56a2541c0e737d953b5d0e770ece42b4c1c11ebfb7e1c233498d"
@@ -2027,7 +2035,9 @@ def test_runtime_admission_ticket_is_mirrored_complete_and_nonauthorizing() -> N
 
     schema_bytes = ROUTE_RUNTIME_EVIDENCE_SCHEMA_PATH.read_bytes()
     schema = json.loads(schema_bytes)
-    assert hashlib.sha256(schema_bytes).hexdigest() == ROUTE_RUNTIME_EVIDENCE_SCHEMA_RAW_SHA256
+    assert (
+        hashlib.sha256(schema_bytes).hexdigest() == CURRENT_ROUTE_RUNTIME_EVIDENCE_SCHEMA_RAW_SHA256
+    )
     assert schema["$id"] == (
         "https://mmaudit.local/schemas/route_runtime_evidence_artifact.schema.json"
     )
@@ -2124,7 +2134,15 @@ def test_truncation_promotion_custody_remains_partial_after_planconstraints_repa
         assert "MOCK recursive recovery remains unpromoted and noncrediting" in section
         assert "byte-stable zero transport" in section
         assert "Positive nonempty full-pipeline promotion backed by genuine provider" in section
-        assert "Deeper recursion, retained surfaces on the recursive bridge" in section
+        assert "Deeper trees and specialist-role recursion remain unimplemented" in section
+        assert (
+            "Retained surfaces on the existing generic depth-one bridge are now supported"
+            in section
+        )
+        assert (
+            "exact nested planning, live journal promotion, public accounting, manifest, coverage and assurance"
+            in section
+        )
         assert "specialist-role recursion remain unimplemented" in section
         assert "terminal maximum-assurance result" in section
         assert "Do not infer a provider command or run index" in section
@@ -2648,6 +2666,14 @@ def test_review_traceability_statuses_derive_from_queue_ticket_statuses() -> Non
     queue_statuses = codex_queue_statuses | canonical_queue_statuses
     traceability_text = TRACEABILITY_PATH.read_text(encoding="utf-8")
     traceability = json.loads(traceability_text)
+    # Historical A-V evidence is frozen by GOVSYNC. Current status is an explicit,
+    # hash-bound projection; current work must neither overwrite nor impersonate history.
+    current_projection = project_current_requirements(ROOT)
+    assert traceability["governance_state_scope"] == GOVERNANCE_SCOPE
+    assert (
+        historical_payload_sha256(traceability)
+        == HISTORICAL_PAYLOAD_SHA256S["docs/remediation/v3/review_traceability.json"]
+    )
     requirements = traceability["requirements"]
     requirement_ids = [requirement["id"] for requirement in requirements]
     requirements_by_id = {requirement["id"]: requirement for requirement in requirements}
@@ -4192,9 +4218,13 @@ def test_review_traceability_statuses_derive_from_queue_ticket_statuses() -> Non
         tickets = requirement["tickets"]
         assert isinstance(tickets, list) and all(isinstance(ticket, str) for ticket in tickets)
         expected = _derive_requirement_status(tickets, queue_statuses)
-        assert requirement["status"] == expected, (
+        assert (
+            current_projection.historical_requirement_statuses[requirement["id"]]
+            == requirement["status"]
+        )
+        assert current_projection.current_requirement_statuses[requirement["id"]] == expected, (
             f"traceability requirement {requirement['id']} status must derive from queue tickets "
-            f"{tickets}: expected {expected}, found {requirement['status']}"
+            f"{tickets}: expected {expected}, found {current_projection.current_requirement_statuses[requirement['id']]}"
         )
 
 
@@ -4237,7 +4267,7 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     agents = AGENTS_PATH.read_text(encoding="utf-8")
     model_selection = MODEL_SELECTION_PATH.read_text(encoding="utf-8")
     normalized_model_selection = " ".join(model_selection.split())
-    selection_plan = json.loads(SELECTION_PLAN_PATH.read_text(encoding="utf-8"))
+    selection_plan = json.loads(HISTORICAL_UNAVAILABLE_PLAN_PATH.read_text(encoding="utf-8"))
     operator_prerequisite_guides = (
         OPERATOR_PREREQUISITES_PATH.read_text(encoding="utf-8"),
         V3_OPERATOR_PREREQUISITES_PATH.read_text(encoding="utf-8"),
@@ -4890,8 +4920,8 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert "no replacement candidate is selected" in normalized_model_selection.lower()
     assert selection_plan["schema_version"] == "1.7"
     assert selection_plan["plan_sha256"] == CURRENT_PLANADOPT_PLAN_SHA256
-    assert len(SELECTION_PLAN_PATH.read_bytes()) == 15_163
-    assert hashlib.sha256(SELECTION_PLAN_PATH.read_bytes()).hexdigest() == (
+    assert len(HISTORICAL_UNAVAILABLE_PLAN_PATH.read_bytes()) == 15_163
+    assert hashlib.sha256(HISTORICAL_UNAVAILABLE_PLAN_PATH.read_bytes()).hexdigest() == (
         CURRENT_PLANADOPT_PLAN_RAW_SHA256
     )
     assert selection_plan["predecessor_plan_sha256"] == HISTORICAL_V1_4_SELECTION_PLAN_SHA256
@@ -6515,7 +6545,7 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         == (current_engineering.artifact_sha256s["schemas/autonomy_gate_inventory.schema.json"])
     )
     assert hashlib.sha256(route_runtime_schema_bytes).hexdigest() == (
-        ROUTE_RUNTIME_EVIDENCE_SCHEMA_RAW_SHA256
+        CURRENT_ROUTE_RUNTIME_EVIDENCE_SCHEMA_RAW_SHA256
     )
     assert route_runtime_schema["$id"] == (
         "https://mmaudit.local/schemas/route_runtime_evidence_artifact.schema.json"

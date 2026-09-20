@@ -1,0 +1,529 @@
+{
+  "$defs": {
+    "DependencyGraphFactJoin": {
+      "additionalProperties": false,
+      "properties": {
+        "call_indices": {
+          "items": {
+            "type": "integer"
+          },
+          "maxItems": 4096,
+          "title": "Call Indices",
+          "type": "array"
+        },
+        "graph_fact_index": {
+          "exclusiveMaximum": 4096,
+          "minimum": 0,
+          "title": "Graph Fact Index",
+          "type": "integer"
+        },
+        "inheritance_indices": {
+          "items": {
+            "type": "integer"
+          },
+          "maxItems": 4096,
+          "title": "Inheritance Indices",
+          "type": "array"
+        },
+        "shortfalls": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 32,
+          "title": "Shortfalls",
+          "type": "array"
+        }
+      },
+      "required": [
+        "graph_fact_index",
+        "call_indices",
+        "inheritance_indices",
+        "shortfalls"
+      ],
+      "title": "DependencyGraphFactJoin",
+      "type": "object"
+    },
+    "DependencyGraphSymbolBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "declaration_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 4096,
+          "title": "Declaration Ids",
+          "type": "array"
+        },
+        "graph_symbol_id": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Graph Symbol Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "graph_symbol_id",
+        "declaration_ids"
+      ],
+      "title": "DependencyGraphSymbolBinding",
+      "type": "object"
+    },
+    "DependencyStaticCallLines": {
+      "additionalProperties": false,
+      "properties": {
+        "call_index": {
+          "exclusiveMaximum": 4096,
+          "minimum": 0,
+          "title": "Call Index",
+          "type": "integer"
+        },
+        "line_end": {
+          "maximum": 10000,
+          "minimum": 1,
+          "title": "Line End",
+          "type": "integer"
+        },
+        "line_start": {
+          "maximum": 10000,
+          "minimum": 1,
+          "title": "Line Start",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "call_index",
+        "line_start",
+        "line_end"
+      ],
+      "title": "DependencyStaticCallLines",
+      "type": "object"
+    },
+    "DependencyStaticEdge": {
+      "additionalProperties": false,
+      "description": "One exact source-to-source dependency; its referenced declaration is retained too.",
+      "properties": {
+        "basis": {
+          "$ref": "#/$defs/_EdgeBasis"
+        },
+        "evidence_index": {
+          "exclusiveMaximum": 4096,
+          "minimum": 0,
+          "title": "Evidence Index",
+          "type": "integer"
+        },
+        "kind": {
+          "$ref": "#/$defs/SolidityGraphKind"
+        },
+        "source": {
+          "maxLength": 512,
+          "pattern": "^(?:[A-Za-z0-9][A-Za-z0-9._-]*/)*[A-Za-z0-9][A-Za-z0-9._-]*\\.sol$",
+          "title": "Source",
+          "type": "string"
+        },
+        "target": {
+          "maxLength": 512,
+          "pattern": "^(?:[A-Za-z0-9][A-Za-z0-9._-]*/)*[A-Za-z0-9][A-Za-z0-9._-]*\\.sol$",
+          "title": "Target",
+          "type": "string"
+        },
+        "target_declaration_id": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Declaration Id"
+        }
+      },
+      "required": [
+        "kind",
+        "source",
+        "target",
+        "basis",
+        "evidence_index"
+      ],
+      "title": "DependencyStaticEdge",
+      "type": "object"
+    },
+    "DependencyStaticPrimary": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "else": {
+            "properties": {
+              "shortfall_indices": {
+                "minItems": 1
+              }
+            }
+          },
+          "if": {
+            "properties": {
+              "call_closure": {
+                "const": "CALL_CLOSED"
+              }
+            },
+            "required": [
+              "call_closure"
+            ]
+          },
+          "then": {
+            "properties": {
+              "shortfall_indices": {
+                "maxItems": 0
+              }
+            }
+          }
+        }
+      ],
+      "properties": {
+        "call_closure": {
+          "$ref": "#/$defs/StaticClosureStatus"
+        },
+        "edge_indices": {
+          "items": {
+            "type": "integer"
+          },
+          "maxItems": 4096,
+          "title": "Edge Indices",
+          "type": "array"
+        },
+        "members": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 256,
+          "minItems": 1,
+          "title": "Members",
+          "type": "array"
+        },
+        "primary": {
+          "maxLength": 512,
+          "pattern": "^(?:[A-Za-z0-9][A-Za-z0-9._-]*/)*[A-Za-z0-9][A-Za-z0-9._-]*\\.sol$",
+          "title": "Primary",
+          "type": "string"
+        },
+        "shortfall_indices": {
+          "items": {
+            "type": "integer"
+          },
+          "maxItems": 4096,
+          "title": "Shortfall Indices",
+          "type": "array"
+        }
+      },
+      "required": [
+        "primary",
+        "members",
+        "edge_indices",
+        "shortfall_indices",
+        "call_closure"
+      ],
+      "title": "DependencyStaticPrimary",
+      "type": "object"
+    },
+    "DependencyStaticShortfall": {
+      "additionalProperties": false,
+      "properties": {
+        "evidence_index": {
+          "exclusiveMaximum": 4096,
+          "minimum": 0,
+          "title": "Evidence Index",
+          "type": "integer"
+        },
+        "global_scope": {
+          "title": "Global Scope",
+          "type": "boolean"
+        },
+        "population": {
+          "$ref": "#/$defs/_Population"
+        },
+        "reason": {
+          "maxLength": 128,
+          "pattern": "^[A-Z_]+$",
+          "title": "Reason",
+          "type": "string"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "pattern": "^(?:[A-Za-z0-9][A-Za-z0-9._-]*/)*[A-Za-z0-9][A-Za-z0-9._-]*\\.sol$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source"
+        }
+      },
+      "required": [
+        "global_scope",
+        "population",
+        "evidence_index",
+        "reason"
+      ],
+      "title": "DependencyStaticShortfall",
+      "type": "object"
+    },
+    "SolidityGraphKind": {
+      "enum": [
+        "inheritance",
+        "modifier",
+        "internal_call",
+        "external_call",
+        "low_level_call",
+        "delegatecall",
+        "contract_creation",
+        "state_read",
+        "state_write",
+        "state_dependency",
+        "asset_flow",
+        "privilege",
+        "governance",
+        "dependency",
+        "proxy",
+        "storage_layout",
+        "upgrade_compatibility",
+        "initializer",
+        "oracle_dependency",
+        "event_state",
+        "event_flow",
+        "cross_chain",
+        "offchain_dependency",
+        "signature_replay",
+        "reentrancy",
+        "state_growth",
+        "sensitive_reachability"
+      ],
+      "title": "SolidityGraphKind",
+      "type": "string"
+    },
+    "StaticClosureStatus": {
+      "enum": [
+        "NOT_ESTABLISHED",
+        "CALL_CLOSED"
+      ],
+      "type": "string"
+    },
+    "_EdgeBasis": {
+      "enum": [
+        "IMPORT",
+        "INHERITANCE",
+        "TYPED_CALL",
+        "DECLARED_TYPE"
+      ],
+      "type": "string"
+    },
+    "_Population": {
+      "enum": [
+        "IMPORT",
+        "REMAP",
+        "PARSE",
+        "TARGET",
+        "SCOPE",
+        "CALL",
+        "SYNTAX",
+        "GRAPH",
+        "EDGE_OMISSION",
+        "FACT_OMISSION",
+        "GRAPH_WARNING",
+        "DECLARED_TYPE",
+        "CONTEXT"
+      ],
+      "type": "string"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/development_static_call_closure.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "else": {
+        "properties": {
+          "shortfalls": {
+            "minItems": 1
+          }
+        }
+      },
+      "if": {
+        "properties": {
+          "call_closure": {
+            "const": "CALL_CLOSED"
+          }
+        },
+        "required": [
+          "call_closure"
+        ]
+      },
+      "then": {
+        "properties": {
+          "shortfalls": {
+            "maxItems": 0
+          }
+        }
+      }
+    }
+  ],
+  "properties": {
+    "audit_complete": {
+      "const": false,
+      "default": false,
+      "title": "Audit Complete",
+      "type": "boolean"
+    },
+    "call_closure": {
+      "$ref": "#/$defs/StaticClosureStatus"
+    },
+    "call_lines": {
+      "items": {
+        "$ref": "#/$defs/DependencyStaticCallLines"
+      },
+      "maxItems": 4096,
+      "title": "Call Lines",
+      "type": "array"
+    },
+    "closure_inputs_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Closure Inputs Sha256",
+      "type": "string"
+    },
+    "edges": {
+      "items": {
+        "$ref": "#/$defs/DependencyStaticEdge"
+      },
+      "maxItems": 4096,
+      "title": "Edges",
+      "type": "array"
+    },
+    "edges_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Edges Sha256",
+      "type": "string"
+    },
+    "graph_joins": {
+      "items": {
+        "$ref": "#/$defs/DependencyGraphFactJoin"
+      },
+      "maxItems": 4096,
+      "title": "Graph Joins",
+      "type": "array"
+    },
+    "graph_symbols": {
+      "items": {
+        "$ref": "#/$defs/DependencyGraphSymbolBinding"
+      },
+      "maxItems": 8192,
+      "title": "Graph Symbols",
+      "type": "array"
+    },
+    "minimum_original_graph_confidence": {
+      "default": 0.9,
+      "maximum": 0.9,
+      "minimum": 0.9,
+      "title": "Minimum Original Graph Confidence",
+      "type": "number"
+    },
+    "original_graph_facts_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Original Graph Facts Sha256",
+      "type": "string"
+    },
+    "original_graph_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Original Graph Sha256",
+      "type": "string"
+    },
+    "policy": {
+      "const": "SOURCE_GRAPH_SYNTAX_TYPED_CALL_CLOSURE_V1",
+      "default": "SOURCE_GRAPH_SYNTAX_TYPED_CALL_CLOSURE_V1",
+      "title": "Policy",
+      "type": "string"
+    },
+    "primaries": {
+      "items": {
+        "$ref": "#/$defs/DependencyStaticPrimary"
+      },
+      "maxItems": 256,
+      "minItems": 1,
+      "title": "Primaries",
+      "type": "array"
+    },
+    "proof_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Proof Sha256",
+      "type": "string"
+    },
+    "qualification_eligible": {
+      "const": false,
+      "default": false,
+      "title": "Qualification Eligible",
+      "type": "boolean"
+    },
+    "required_graph_kinds": {
+      "default": [
+        "contract_creation",
+        "delegatecall",
+        "dependency",
+        "external_call",
+        "inheritance",
+        "internal_call",
+        "low_level_call",
+        "modifier"
+      ],
+      "items": {
+        "$ref": "#/$defs/SolidityGraphKind"
+      },
+      "title": "Required Graph Kinds",
+      "type": "array"
+    },
+    "runtime_authority": {
+      "const": false,
+      "default": false,
+      "title": "Runtime Authority",
+      "type": "boolean"
+    },
+    "scope": {
+      "const": "SUPPORTED_STATIC_SUPPLIED_TREE_NOT_DEPLOYMENT_OR_REACHABILITY",
+      "default": "SUPPORTED_STATIC_SUPPLIED_TREE_NOT_DEPLOYMENT_OR_REACHABILITY",
+      "title": "Scope",
+      "type": "string"
+    },
+    "shortfalls": {
+      "items": {
+        "$ref": "#/$defs/DependencyStaticShortfall"
+      },
+      "maxItems": 4096,
+      "title": "Shortfalls",
+      "type": "array"
+    },
+    "source_inventory_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Source Inventory Sha256",
+      "type": "string"
+    }
+  },
+  "required": [
+    "source_inventory_sha256",
+    "original_graph_sha256",
+    "original_graph_facts_sha256",
+    "closure_inputs_sha256",
+    "graph_symbols",
+    "call_lines",
+    "graph_joins",
+    "edges",
+    "edges_sha256",
+    "shortfalls",
+    "primaries",
+    "call_closure",
+    "proof_sha256"
+  ],
+  "title": "DevelopmentStaticCallClosure",
+  "type": "object"
+}

@@ -15,18 +15,27 @@ await ``execute_authenticated_openrouter_runner`` in that same process.  The lau
 must use a shared endpoint-bound ``BudgetManager``/``UsageLedger`` pair backed by
 the exact 250 USD ``AtomicCostLedger``.  No callback, credential, or opaque
 capability is accepted from a serialized campaign artifact.
+
+``authenticated_openrouter_runner_scope`` is the separate native-consumption
+entry point. It yields original live execution only inside an owned async scope;
+exit still revokes the runner and its children, closes transports and clears the
+secret holder. This does not extend a ledger closure across subsequent spending.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from dataclasses import dataclass
+import asyncio
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from decimal import Decimal
+from time import monotonic
 from typing import TYPE_CHECKING, Never, SupportsIndex, cast
 
 import mmaudit.models.authenticated_runner as _runner_authority_module
 import mmaudit.models.authenticated_runner_execution as _runner_execution_module
+import mmaudit.orchestration.authenticated_calibration_accounting as _calibration_accounting
 from mmaudit.benchmark.cross_lineage_adjudication import (
     CrossLineageAdjudicationCaseResult,
     CrossLineageAdjudicationPreparedRun,
@@ -44,6 +53,7 @@ from mmaudit.models.authenticated_runner import (
     CrossLineageRunnerRunCustody,
     VerifiedCrossLineageRunnerCustody,
     require_verified_cross_lineage_runner_custody,
+    retain_verified_cross_lineage_runner_custody,
     revoke_verified_cross_lineage_runner_custody,
 )
 from mmaudit.models.authenticated_runner_cost_plan import (
@@ -108,6 +118,10 @@ from mmaudit.models.route_constraints import (
 from mmaudit.models.runtime import build_reasoning_policy
 from mmaudit.models.usage import UsageLedger
 from mmaudit.operator_secrets import OperatorSecrets
+from mmaudit.orchestration.authenticated_calibration_accounting import (
+    CalibrationLedgerAccounting,
+    require_calibration_accounting_ready,
+)
 from mmaudit.orchestration.budgets import BudgetManager
 from mmaudit.orchestration.cost_ledger import AtomicCostLedger
 from mmaudit.privacy import (
@@ -143,6 +157,8 @@ _TRUSTED_GROUND_TRUTH_REQUIRE_FOR = VerifiedFrozenGroundTruth.require_for
 _TRUSTED_EXECUTION_PREFLIGHT = _runner_execution_module._preflight_execution
 _TRUSTED_REQUIRE_RUNNER_CUSTODY = require_verified_cross_lineage_runner_custody
 _TRUSTED_REVOKE_RUNNER_CUSTODY = revoke_verified_cross_lineage_runner_custody
+_TRUSTED_RETAIN_RUNNER_CUSTODY = retain_verified_cross_lineage_runner_custody
+_TRUSTED_ACCOUNTING_READY = require_calibration_accounting_ready
 _REVOKED_RUNNER_CUSTODY_DETAIL = (
     "verified cross-lineage runner custody is absent, mismatched, or revoked"
 )
@@ -770,12 +786,14 @@ class _OpenRouterExecutionAdapter:
             raise AuthenticatedRunnerOpenRouterError("OpenRouter runner adapter is closed")
 
 
-async def execute_authenticated_openrouter_runner(
+@asynccontextmanager
+async def _owned_authenticated_openrouter_runner_scope(
     *,
     launch: AuthenticatedRunnerOpenRouterLaunch,
     operator_secrets: OperatorSecrets,
-) -> AuthenticatedRunnerOpenRouterResult:
-    """Run and consume AUTHRUNNER in one PID, clearing all credentials on every exit."""
+    _accounting: CalibrationLedgerAccounting | None = None,
+) -> AsyncIterator[AuthenticatedRunnerExecutionResult]:
+    """Own one runner execution through consumption, revocation and credential cleanup."""
 
     if type(operator_secrets) is not OperatorSecrets:
         raise AuthenticatedRunnerOpenRouterError(
@@ -784,6 +802,8 @@ async def execute_authenticated_openrouter_runner(
     adapter: _OpenRouterExecutionAdapter | None = None
     try:
         expected_inventory = preflight_authenticated_openrouter_launch(launch)
+        if _accounting is not None:
+            _require_retained_runner_launch(launch, _accounting)
         adapter = _OpenRouterExecutionAdapter(launch=launch, secrets=operator_secrets)
         if not operator_secrets.openrouter_api_key_present:
             raise AuthenticatedRunnerOpenRouterError(
@@ -816,6 +836,7 @@ async def execute_authenticated_openrouter_runner(
             raise AuthenticatedRunnerOpenRouterError(
                 "authenticated runner returned an invalid custody capability"
             )
+        evidence_for_revocation = execution.runner_evidence
         try:
             if (
                 type(execution.inventory) is not AuthenticatedRunnerExecutionInventory
@@ -830,42 +851,40 @@ async def execute_authenticated_openrouter_runner(
                 raise AuthenticatedRunnerOpenRouterError(
                     "runner execution differs from its provider-free launch preflight"
                 )
-            ground_truth_projection = _require_launch_ground_truth(launch)
-            rejection_kind: str | None
-            try:
-                collision_map, decisions = build_authenticated_evidence_seal_runner_inputs(
-                    runner_custody=runner_capability,
-                    runner_evidence=execution.runner_evidence,
-                    benchmark_suite=launch.benchmark_suite,
-                    ground_truth_projection=ground_truth_projection,
-                    runs=tuple(item.custody for item in execution.runs),
+            if _accounting is not None:
+                _require_live_runner_consumption(execution)
+                _require_retention_bindings()
+                successor, runs = _TRUSTED_RETAIN_RUNNER_CUSTODY(
+                    runner_capability,
+                    evidence=evidence_for_revocation,
+                    accounting=_accounting,
                 )
-            except (TypeError, ValueError) as exc:
-                collision_map = None
-                decisions = ()
-                rejection_kind = type(exc).__name__
-            else:
-                rejection_kind = None
-            if (
-                AuthenticatedRunnerOpenRouterRunSnapshot is not _TRUSTED_RUN_SNAPSHOT_TYPE
-                or AuthenticatedRunnerOpenRouterExecutionSnapshot
-                is not _TRUSTED_EXECUTION_SNAPSHOT_TYPE
-                or _detached_durable_run_snapshot is not _TRUSTED_DETACHED_DURABLE_RUN_SNAPSHOT
-            ):
-                raise AuthenticatedRunnerOpenRouterError(
-                    "authenticated runner durable snapshot binding changed"
+                # Own the successor before any subsequent construction can fail.
+                # No missing-source revocation is treated as successful cleanup.
+                runner_capability = successor
+                if (
+                    type(successor) is not VerifiedCrossLineageRunnerCustody
+                    or type(runs) is not tuple
+                    or len(runs) != len(execution.runs)
+                    or any(type(run) is not CrossLineageRunnerRunCustody for run in runs)
+                ):
+                    raise AuthenticatedRunnerOpenRouterError(
+                        "retained runner returned invalid successor custody"
+                    )
+                execution = replace(
+                    execution,
+                    runner_capability=successor,
+                    runs=tuple(
+                        replace(item, custody=run)
+                        for item, run in zip(execution.runs, runs, strict=True)
+                    ),
                 )
-            sanitized_execution = _TRUSTED_EXECUTION_SNAPSHOT_TYPE(
-                inventory=execution.inventory,
-                runs=tuple(_TRUSTED_DETACHED_DURABLE_RUN_SNAPSHOT(item) for item in execution.runs),
-            )
-            return AuthenticatedRunnerOpenRouterResult(
-                execution=sanitized_execution,
-                runner_evidence=execution.runner_evidence,
-                authseal_collision_map=collision_map,
-                authseal_decision_projections=decisions,
-                authseal_rejection_kind=rejection_kind,
-            )
+                _require_live_runner_consumption(execution)
+                # Provider work is over. The outer batch owns only proof lifetimes.
+                await adapter.close()
+                operator_secrets.clear()
+                _require_live_runner_consumption(execution)
+            yield execution
         finally:
             revoke_bindings = (
                 _TRUSTED_REVOKE_RUNNER_CUSTODY,
@@ -911,7 +930,7 @@ async def execute_authenticated_openrouter_runner(
             try:
                 cast(Callable[..., object], require_runner)(
                     runner_capability,
-                    evidence=execution.runner_evidence,
+                    evidence=evidence_for_revocation,
                 )
             except AuthenticatedCrossLineageRunnerError as exc:
                 if str(exc) != _REVOKED_RUNNER_CUSTODY_DETAIL:
@@ -932,6 +951,177 @@ async def execute_authenticated_openrouter_runner(
                 await adapter.close()
         finally:
             operator_secrets.clear()
+
+
+def _require_retention_bindings() -> None:
+    """Retention must use the original native transition and accounting verifier."""
+
+    if not (
+        _TRUSTED_RETAIN_RUNNER_CUSTODY
+        is retain_verified_cross_lineage_runner_custody
+        is _runner_authority_module.retain_verified_cross_lineage_runner_custody
+        and _TRUSTED_ACCOUNTING_READY
+        is require_calibration_accounting_ready
+        is _calibration_accounting.require_calibration_accounting_ready
+    ):
+        raise AuthenticatedRunnerOpenRouterError("runner retention callable binding changed")
+
+
+def _require_retained_runner_launch(
+    launch: AuthenticatedRunnerOpenRouterLaunch, accounting: CalibrationLedgerAccounting
+) -> None:
+    """Reject a foreign or ineligible accounting owner before provider dispatch."""
+
+    _require_retention_bindings()
+    if type(accounting) is not CalibrationLedgerAccounting:
+        raise AuthenticatedRunnerOpenRouterError("runner retention requires its accounting owner")
+    observation = _TRUSTED_ACCOUNTING_READY(accounting)
+    ledger = launch.budget.atomic_ledger
+    if type(ledger) is not AtomicCostLedger:
+        raise AuthenticatedRunnerOpenRouterError("runner retention requires the exact ledger")
+    identity, current = ledger.snapshot_with_identity_sha256()
+    if identity != observation.ledger_identity_sha256 or current != observation.current_snapshot:
+        raise AuthenticatedRunnerOpenRouterError("runner retention accounting differs from launch")
+    _require_retention_bindings()
+
+
+@asynccontextmanager
+async def authenticated_openrouter_runner_scope(
+    *,
+    launch: AuthenticatedRunnerOpenRouterLaunch,
+    operator_secrets: OperatorSecrets,
+    consumption_timeout_seconds: float = 30.0,
+) -> AsyncIterator[AuthenticatedRunnerExecutionResult]:
+    """Consume original live custody in-process, then revoke it on every exit.
+
+    The consumption deadline is cooperative, not a sandbox for arbitrary Python.
+    A synchronous consumer that returns late is rejected too. This scope cannot
+    preserve earlier ledger closures after later work advances the shared ledger.
+    """
+
+    if type(operator_secrets) is not OperatorSecrets:
+        raise AuthenticatedRunnerOpenRouterError(
+            "OpenRouter runner requires the existing operator secret loader"
+        )
+    if type(consumption_timeout_seconds) not in {int, float} or not (
+        0 < consumption_timeout_seconds <= 300
+    ):
+        operator_secrets.clear()
+        raise AuthenticatedRunnerOpenRouterError(
+            "runner consumption deadline must be finite, positive and at most 300 seconds"
+        )
+    async with _owned_authenticated_openrouter_runner_scope(
+        launch=launch, operator_secrets=operator_secrets
+    ) as execution:
+        _require_live_runner_consumption(execution)
+        retained_fields = tuple(
+            (name, getattr(execution, name))
+            for name in (
+                "inventory",
+                "runs",
+                "closed_ledger_interval",
+                "runner_capability",
+                "runner_evidence",
+                "runner_projection",
+            )
+        )
+        task = asyncio.current_task()
+        if task is None or task.cancelling():
+            raise asyncio.CancelledError
+        deadline = monotonic() + consumption_timeout_seconds
+        timer = asyncio.timeout(consumption_timeout_seconds)
+        try:
+            async with timer:
+                yield execution
+        except TimeoutError:
+            if timer.expired():
+                raise AuthenticatedRunnerOpenRouterError(
+                    "runner consumption deadline expired"
+                ) from None
+            raise
+        if timer.expired() or monotonic() >= deadline:
+            raise AuthenticatedRunnerOpenRouterError("runner consumption deadline expired")
+        if task.cancelling():
+            raise asyncio.CancelledError
+        if any(getattr(execution, name) is not value for name, value in retained_fields):
+            raise AuthenticatedRunnerOpenRouterError(
+                "runner consumption replaced original execution custody"
+            )
+        _require_live_runner_consumption(execution)
+        if monotonic() >= deadline:
+            raise AuthenticatedRunnerOpenRouterError("runner consumption deadline expired")
+
+
+def _require_live_runner_consumption(execution: AuthenticatedRunnerExecutionResult) -> None:
+    """Replay the original runner proof; a retained projection cannot replace it."""
+
+    if not (
+        _TRUSTED_REQUIRE_RUNNER_CUSTODY
+        is require_verified_cross_lineage_runner_custody
+        is _runner_authority_module.require_verified_cross_lineage_runner_custody
+        and _TRUSTED_REVOKE_RUNNER_CUSTODY
+        is revoke_verified_cross_lineage_runner_custody
+        is _runner_authority_module.revoke_verified_cross_lineage_runner_custody
+    ):
+        raise AuthenticatedRunnerOpenRouterError(
+            "authenticated runner lifecycle callable binding changed"
+        )
+    projection = _TRUSTED_REQUIRE_RUNNER_CUSTODY(
+        execution.runner_capability, evidence=execution.runner_evidence
+    )
+    if projection != execution.runner_projection:
+        raise AuthenticatedRunnerOpenRouterError(
+            "runner consumption differs from its original verified projection"
+        )
+
+
+async def execute_authenticated_openrouter_runner(
+    *,
+    launch: AuthenticatedRunnerOpenRouterLaunch,
+    operator_secrets: OperatorSecrets,
+) -> AuthenticatedRunnerOpenRouterResult:
+    """Return detached nonauthorizing data only after original custody is revoked."""
+
+    async with _owned_authenticated_openrouter_runner_scope(
+        launch=launch, operator_secrets=operator_secrets
+    ) as execution:
+        runner_capability = execution.runner_capability
+        ground_truth_projection = _require_launch_ground_truth(launch)
+        rejection_kind: str | None
+        try:
+            collision_map, decisions = build_authenticated_evidence_seal_runner_inputs(
+                runner_custody=runner_capability,
+                runner_evidence=execution.runner_evidence,
+                benchmark_suite=launch.benchmark_suite,
+                ground_truth_projection=ground_truth_projection,
+                runs=tuple(item.custody for item in execution.runs),
+            )
+        except (TypeError, ValueError) as exc:
+            collision_map = None
+            decisions = ()
+            rejection_kind = type(exc).__name__
+        else:
+            rejection_kind = None
+        if (
+            AuthenticatedRunnerOpenRouterRunSnapshot is not _TRUSTED_RUN_SNAPSHOT_TYPE
+            or AuthenticatedRunnerOpenRouterExecutionSnapshot
+            is not _TRUSTED_EXECUTION_SNAPSHOT_TYPE
+            or _detached_durable_run_snapshot is not _TRUSTED_DETACHED_DURABLE_RUN_SNAPSHOT
+        ):
+            raise AuthenticatedRunnerOpenRouterError(
+                "authenticated runner durable snapshot binding changed"
+            )
+        sanitized_execution = _TRUSTED_EXECUTION_SNAPSHOT_TYPE(
+            inventory=execution.inventory,
+            runs=tuple(_TRUSTED_DETACHED_DURABLE_RUN_SNAPSHOT(item) for item in execution.runs),
+        )
+        return AuthenticatedRunnerOpenRouterResult(
+            execution=sanitized_execution,
+            runner_evidence=execution.runner_evidence,
+            authseal_collision_map=collision_map,
+            authseal_decision_projections=decisions,
+            authseal_rejection_kind=rejection_kind,
+        )
 
 
 def preflight_authenticated_openrouter_launch(

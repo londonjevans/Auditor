@@ -1,0 +1,12 @@
+{
+  "schema_version": "1.0",
+  "scope": "SYNTHETIC_ORIGINAL_JOURNAL_NO_PROVIDER",
+  "request_limit": 33,
+  "unprofiled_samples": 3,
+  "cases": [
+    {"case_id": "depth-1", "surface_count": 3, "depth": 1, "families": 1, "children": 2},
+    {"case_id": "depth-2", "surface_count": 5, "depth": 2, "families": 3, "children": 6},
+    {"case_id": "depth-3", "surface_count": 9, "depth": 3, "families": 7, "children": 14},
+    {"case_id": "depth-4", "surface_count": 17, "depth": 4, "families": 15, "children": 30}
+  ]
+}

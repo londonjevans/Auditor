@@ -4,6 +4,24 @@ This document defines how `mmaudit` may move a model from discovery into a
 maximum-assurance ensemble. It is a selection policy, not evidence that any model is
 qualified.
 
+## Current September-11 selection state
+
+The active repository plan remains the authenticated, nonauthorizing v1.11 legacy-cost
+successor. Plan SHA256: `a868db571f4ced1cba9db7aa53d9a6b56b05c99bb465618d445ca940cd73313c`;
+raw SHA256: `7af8d0eeeade437767c965482c563dafa893ce76eee818333fd728daab7cdbb0`.
+Only the exact two historical uncertain rows receive the separately authorized allowance;
+their uncertainty and full charges remain. Every other or future uncertain bill still blocks.
+
+The separately staged v1.12 [Fireworks endpoint trial](../remediation/v3/fireworks_endpoint_trial.md)
+adds only `deepseek/deepseek-v4-pro-0813=fireworks` to candidate constraints and the matching
+endpoint listing. It retains Together history, both judge routes and every profile/cost/request
+requirement. It is not adopted; current active-plan governance refuses this trial version.
+Only the monitoring session has direct permission for one Fireworks smoke with USD0.30
+per-attempt tripwires. No qualification, evidence sealing or durable runner run is authorized.
+
+The September-9/10 v1.10 descriptions and outcomes below are retained historical context,
+not the current active-plan version or authority to run their commands.
+
 > **Historical evidence notice:** the twelve-model roster below is a superseded
 > 2026-07-27 discovery snapshot. It is retained for provenance only, is not a current
 > candidate roster or production selection, and grants no qualification, lineage,
@@ -17,7 +35,206 @@ own frozen metadata snapshots.
 
 ## Provider-free current-selection bootstrap
 
-`config/models.selection-plan.json` is a canonical, self-hashed, explicitly
+The September-9 operator decision explicitly relaxes the stricter internal
+provider-enforced cap rule for uncappable price components, permitting conservative
+reserve-then-reconcile with actual per-call accounting and durable overrun blocking
+inside the USD 250 ledger ceiling. It does not relax qualification, independent
+lineage, seal or release gates and authorizes no paid run. The
+[full source review](../remediation/v3/route_admission_review_2026_09_09.md) records
+this as an operator relaxation, not a finding that the previous rule was wrong.
+All three shared retained working routes already pass V1/V2 price projection;
+the active-plan/endpoint transition and missing constrained/runtime evidence are
+separate blockers. `V3-PLANROUTES-001` adds the authenticated endpoint transition;
+`V3-COSTRECON-001` is locally COMPLETE for cost enforcement and authenticated adoption. Its
+atomic spending stop and distinct
+`ExactRouteCostReservation` / `RouteCostReservationPolicy` contract are tested with
+the real budget and ledger consumer. The contract retains complete decimal
+base/tier prices, a clearly labelled capped subset and separately reserved
+uncappable rates, exact request/plan/route/snapshot bindings and a fixed ledger
+ceiling at or below USD 250. The conservative multiplier is two, not a provider
+guarantee; an overage is recorded and stops further work. Unknown billing also
+blocks further reservation/dispatch, while unsent reservations and later actual
+bills remain intact.
+
+The cost-only staging path is now implemented: route profile v1.3 retains the
+security requirements and names `RESERVATION_PRICING_AVAILABLE` and
+`PROVIDER_CAPPED_SUBSET_BOUND`, replacing only the two legacy total-cap predicates.
+Its separate report v1.1 does not claim a complete provider-cap proof. The existing
+private reactivation command can explicitly add `--reserve-then-reconcile-costs`
+to the three-role refresh and produce a nonauthorizing v1.10 plan. Opaque replay
+binds it to the exact v1.9 predecessor and preserves every route, security envelope,
+root/qualification requirement and revocation. It is not adopted automatically.
+
+Synthetic CLI → discovery → registry → metadata-only preflight tests pass with
+that new profile; complete prices survive and only the labelled capped subset
+becomes `max_price`. Actual request preview v1.4 and synthetic transport now consume
+the exact reservation, commit liability before dispatch and retain typed per-attempt
+bills. Known-bill retries, missing bills, cancellation, overruns, held-slot claims,
+actual-context recovery and proven pre-send adoption are tested locally. A smoke
+cost plan can retain the preview without granting execution authority.
+
+Whole-task portfolio planning also uses the explicit reservation policy. A separate
+`RouteCostReservationPlanningEnvelope` retains complete base/tier rates and bounded
+request-capacity units without inventing an exact request. Its pricing identity joins
+the actual request contract before claiming a held slot. Synthetic planned-hold,
+per-attempt retry/billing and wrong-price/insufficient-hold/unknown-bill refusal tests
+pass; both legacy provider-cap algorithms remain unchanged.
+
+Refreshed-price control and pricing-attempt evidence v1.2 now retain the qualified
+baseline, full current rate vector, exact request reservation and actual billed attempts.
+Local component-composition tests cover uncappable rates, tiers, billed retries, missing
+bills and durable overrun stops. They use separate opaque refresh and sealed MOCK cost
+transport consumers; they are not authenticated REAL end-to-end admission.
+
+Preview v1.4 is now wired into REAL smoke admission and smoke/runtime evidence checks.
+Actual request projections join the complete retained reservation; every closed-ledger
+entry hash, reserve and bill must match its corresponding attempt. Local tests cover
+retargeting, missing evidence, billed retries, later token-budget positions and unequal
+per-call bills hidden behind an equal aggregate. Native-output and token proof checks
+accept the current cost mode without promoting MOCK evidence to REAL execution.
+
+Owned REAL-client admission is now exercised with explicit synthetic authentication/discovery
+antecedents and a mandatory stop before network dispatch. Separate sealed MOCK requests
+produce four local reservations and bills; an explicitly synthetic identity/generation projection
+replays through the complete smoke bundle and all three runtime admission reports. This tests
+composition, not actual provider behavior or production runtime-origin custody. The original
+call records remain MOCK and noncreditable.
+
+Runtime artifact v1.1 binds current smoke v1.3 and its split-retry evidence. Artifact v1.0 still
+requires smoke v1.2. Exact version/source-kind checks prevent relabeling between these formats;
+every existing cost, native-output, reasoning, identity, qualification and release gate remains.
+The exact cost successor is now adopted as active v1.10 with profile v1.3, after authenticated
+replay and 16 passing preadoption unit/local CLI checks. The governance consumer requires
+that same opaque replay; coherent self-hashes cannot substitute for it. All 2,481 selected local
+checks pass, including 21 new regressions and active-plan integration. No actual provider admission,
+qualification or paid authority is claimed. All prior plan-bound discovery, registries and runtime
+evidence must be refreshed
+for the new plan/profile/constraint hashes; none may be relabeled or implicitly reused.
+Existing uncertain or overrun liabilities are not forgiven: this policy requires settled cost
+history before further dispatch. Private ledger contents were not inspected. These accounting
+requirements and genuine runtime evidence remain required for any later authorized run.
+
+The September-10 operator report, through 02:04Z, reports one index-23 candidate request billed
+USD 0.00110484 and refused with `TOKEN_PLAN_ROUTING`; no bundle or judge result was produced.
+The reported cumulative ledger is 58 entries / USD 0.68229168. Codex has not inspected that
+private ledger or the referenced private inputs. The diagnostic does not isolate its failing
+sub-branch, and inferred token counts do not prove absent reasoning. Reported alternative
+endpoints are unverified leads, not adopted routes or evidence of full admission. The report's
+01:17Z correction withdraws its claimed proof of the failing sub-branch. Its 01:21Z entry relays
+a claimed operator authorization for Fireworks, Sail and Phala probes; its 01:27Z correction
+explicitly downgrades that to reported intent. Under the repository's operator-result contract,
+this remains nonauthorizing evidence for Codex. Direct confirmation
+is required before selecting a different endpoint or issuing a paid command. No route change
+or provider action is selected here; the original cost-only decision remains controlling.
+The 01:37Z report anticipates invalidation of its old plan-bound artifacts and offers a refresh;
+the later 02:04Z report records metadata re-freezes against active v1.10 for all three roles.
+It reports 24 SATISFIED / 5 UNAVAILABLE / zero refused per route and a durable preflight still
+refusing empirical schema conformance and token-detail convention. These are reported outcomes,
+not independently validated private artifacts or a valid smoke bundle. Ledger/spend is unchanged.
+The cost transition preserves every endpoint and cannot also incorporate a different provider.
+
+The 02:38Z operator correction withdraws its preceding regression/allowance-bypass claim:
+active v1.10 explicitly requires `unknown_billing_blocks_new_work: true`. Its index-24 attempt
+reportedly passed preflight and then refused before provider contact, with no new entry or spend.
+The two historical unknown bills remain reported, not independently inspected. No estimate may
+be promoted to an actual bill, no legacy allowance added, and no replacement ledger selected
+without a separate explicit operator decision; none is recorded here.
+
+`UNKNOWN_PRIOR_BILLING` now distinguishes this policy stop from exhausted budget capacity.
+Smoke launch preflight checks the candidate and both judges' selected cost policies before
+request derivation, secret selection or execution, without changing ledger bytes. Metadata-only
+inspection remains possible because it dispatches no model request. A successful preflight is
+not a reservation or permission: the ledger rechecks atomically at reserve, portfolio claim,
+pending-reservation adoption and transport commitment. A bill becoming unknown afterward still
+blocks work. Expected budget refusals use the clean CLI failure path; unexpected runtime defects
+are not swallowed. This handling change neither waives historical costs nor proves route admission.
+
+Token-plan usage refusals now use a closed `TOKEN_PLAN_ROUTING:<condition>` vocabulary, with
+at most one first failure per usage record. The same evaluator determines acceptance and the
+diagnostic; no rule, observation requirement, receipt, qualification or release gate is relaxed.
+Conditions distinguish plan/reservation projection, reasoning bindings/observation, token limits,
+accounted-component joins and endpoint membership. `PLAN_OR_RESERVATION_PROJECTION` deliberately
+does not echo the parser exception or raw artifact: it denotes that bounded validation stage,
+not a claim identifying a particular malformed field inside it. `ACTIVE_REASONING_NOT_OBSERVED`
+means required reasoning is not in the active-observed state; it does not prove a provider never
+reasoned. Numeric limits, evidence values and response content are never included in these codes.
+`NONE` means no usage failure was diagnosed, not that completion receipts or runtime authority
+exist. The old index-23 generic label cannot retrospectively identify its sub-condition.
+These diagnostics authorize no retry, paid probe, private-artifact access or endpoint change.
+
+An upfront whole-smoke derived bound is still unavailable. After candidate outputs,
+the source derives both exact judge previews and checks their aggregate before either
+judge dispatches; judge dispatch is not protected solely by an operator tripwire.
+An upfront planning envelope would additionally need conservative serialized-output
+byte bounds, each judge's prompt envelope and complete billing components. A candidate's
+token limit does not transfer unchanged between tokenizers, and a reasoning reservation
+is not a provider-enforced ceiling. The operator's proposed 8192-token subtotal is not
+adopted as a guaranteed bound. No paid run is authorized by preflight success, a commit
+or refreshed discovery.
+
+The active `config/models.selection-plan.json` is now a canonical, explicitly
+`NONAUTHORIZING` schema-v1.10 plan, derived and replay-validated against the exact
+archived v1.4 → v1.7 → v1.9 ancestry. Plan SHA-256:
+`55c79770ac0255e711d89f07fdbe02dd9a5e8bec770a8df6d070678dd96a1d44`;
+raw SHA-256: `95b136f0f2254c84ada3391eead1aeee9a52bd88f60ce78d4cd88bd42ed7be59`
+(18,564 bytes). Its unchanged three staged routes are DeepSeek
+`deepseek/deepseek-v4-pro-0813=together` as candidate,
+`z-ai/glm-5.2=deepinfra/fp4` as primary judge and
+`moonshotai/kimi-k3=together` as replay judge. These are unverified inventory
+assignments, not qualified models or permission to dispatch.
+
+The exact v1.9 predecessor is retained at
+`tests/fixtures/model_selection/provider-ceiling-plan-v1.9.json` (20,651 bytes;
+raw `ae31d07d200625b64682d386b202b9b2e83cc22e0824065b5511f8651030976c`;
+plan `58700428e45543ace843af5463b1cf5756ce5683f91daaed9c805151a225f87f`).
+Its `ancestry_route_transition_binding` binds the earlier ancestors, revocations,
+predecessor entries and role constraints. Active v1.10's `operator_cost_transition_binding`
+binds that exact predecessor and the explicit OP-COST relaxation. Profile v1.3 hash
+`563f49d50bc263e30c03fedd5a3dd67c57d227fee8ce08c07cda039c279848ff` changes only the two
+cost predicates; all 27 noncost predicates and every route identity remain. Documentary root
+independence, native schema, reasoning, privacy, fresh constrained discovery and
+runtime qualification remain required; all authority flags remain false. The exact
+DeepSeek Parasail route and canonical-alias tombstone remain in force. Sharing a
+provider slug does not establish or defeat model-root independence.
+
+The existing local `models emit-selection-plan-reactivation` command gains
+`--refresh-endpoint-inventory`, `--primary-judge-endpoint` and
+`--replay-judge-endpoint`. Refresh requires both judge endpoints and stages all
+three existing model roles together. Without the explicit switch, the legacy v1.8
+listed-endpoint-only behavior is unchanged. Publication remains a fresh private
+mode-0600 file and never adopts a plan. The earlier v1.9 repository adoption followed 256
+passing preadoption checks. The v1.10 cost-only adoption is a separate local edit under the
+same direct September-9 decision, after exact replay and the current preadoption tests.
+No operator command or paid run is issued.
+
+Synthetic CLI → constrained discovery → registry → live-route-only preflight tests
+pass, with mock transport, network/credential/completion traps and unchanged local
+usage/ledger. They do not constitute fresh live discovery, empirical schema/token
+evidence or a real audit. CANDROUTE therefore remains PARTIAL pending real evidence;
+the active plan alone does not establish actual end-to-end admission.
+
+The operator's subsequent report, labelled `2026-09-09T19:20Z` (raw
+`fa838afa60d49087b822e5327f7b7961f39cc5187fad2b78061067bfd5c47c03`), reports
+zero-charge constrained discovery for all three roles: 24 predicates satisfied,
+five unavailable and none refused, with private pending registries. Those new
+private artifacts and truncated hashes have not been independently inspected.
+No actual live-route-only preflight, empirical schema/token evidence, qualification
+or real audit is reported. The report is nonauthorizing; its proposed smoke/index
+does not override the direct no-paid-run instruction and no smoke command is issued.
+Registry hash custody can be bound locally and live equivalence checked using
+metadata-only preflight; the five missing predicates do not all require paid
+completions. CANDROUTE remains PARTIAL. The earlier whole-task, refreshed-pricing and
+authenticated cost-consumer gaps have since been locally tested; genuine provider
+runtime evidence and qualification remain separate, unfinished requirements.
+
+### Retained unavailable-plan history
+
+The dated histories below retain their then-current plan and accounting state;
+references to an active v1.7 plan there are historical, superseded only by the
+current bootstrap above. No historical result is promoted or rewritten.
+
+`tests/fixtures/model_selection/unavailable-plan-v1.7.json` is the exact archived,
+self-hashed, explicitly
 `NONAUTHORIZING` schema-v1.7 unavailable-candidate successor. Its plan SHA-256 is
 `14566de1f7da5e4a769502bdd6a7e1ec6c0f193ed126c8fc85236f0851586fd3`; its raw-file SHA-256 is
 `4e7fff76ffb126a1cdf044cdfc889d79def96a29076aa11e3b42c7ef0ff9a695`. It derives from predecessor
@@ -49,8 +266,8 @@ the active repository configuration.
 ### Repository-pinned unavailable-plan ancestry
 
 `models emit-selection-plan-reactivation` is the only supported local construction path from the
-active unavailable schema-v1.7 plan. It has no caller-supplied predecessor or ancestry path. The
-command first reads the compiled exact 14,918-byte archived v1.4 file and 15,163-byte active v1.7
+retained unavailable schema-v1.7 plan. It has no caller-supplied predecessor or ancestry path. The
+command first reads the compiled exact 14,918-byte archived v1.4 file and 15,163-byte archived v1.7
 file under no-follow, regular-file custody, requires their raw SHA-256 values `0da03b75…` and
 `4e7fff76…`, requires their internal plan SHA-256 values `bb3d60c3…` and `14566de1…`, and replays
 the ordinary deterministic v1.4-to-v1.7 unavailable successor validation. A coherently resealed,
@@ -64,7 +281,8 @@ endpoints, and current revocations. The resulting schema-v1.8 plan names v1.7—
 v1.4 plan—as its immediate predecessor, retains the exact V1 profile and judge constraints, removes
 only the no-active-candidate requirement, and embeds both ancestors, the unavailable state,
 revocation set, retained custody, and replacement constraint in a self-hashed transition binding.
-Endpoint inventory refresh and V2/V3 profile upgrade are unavailable on this path.
+Endpoint inventory refresh and V2/V3 profile upgrade remain unavailable on this legacy v1.8 path;
+the explicit schema-v1.9 three-role path above is separate and also retains V1.
 
 The selected catalogue entry is resealed to exactly the chosen endpoint, preserving its rank and
 lineage; all other entries remain unchanged. Both the source model and exported v1.8 JSON schema
@@ -78,9 +296,9 @@ An unknown surviving alias or failed cleanup is an explicit error, not successfu
 These are bounded in-process drift checks, not a Python/host sandbox or crash-atomic publication.
 The serialized plan and projection remain explicitly `NONAUTHORIZING`: they confer no provider,
 qualification, production-selection, runner, benchmark, seal, release, or source-egress authority.
-No v1.8 artifact is checked in or adopted by this ticket, and the active v1.7 bytes remain unchanged.
-A later repository adoption still requires a separately selected work unit and fresh admissible-route
-evidence; structural loading alone does not prove ancestry. Ordinary
+No v1.8 artifact was checked in or adopted by PLANANCESTRY; its then-active v1.7 bytes are now
+retained exactly in the archive. PLANROUTES separately adopts only the derived staged v1.9 plan,
+without claiming fresh admissible-route evidence; structural loading alone does not prove ancestry. Ordinary
 `models emit-selection-plan-successor` continues to reject v1.7.
 
 `V3-PLANADOPT-001` remains `COMPLETE`, provider-free, and nonauthorizing. The bounded
@@ -1416,7 +1634,7 @@ a model or authorize production use.
 
 | Capability | Governing ticket | Queue status | Evidence boundary |
 | --- | --- | --- | --- |
-| Evidence-derived calibration | `V3-CALIBRATE-001` | `BLOCKED_TECHNICAL` | Provider-free empirical derivation and the two-campaign authority bridge are implemented; no statistically supported real calibrated policy is frozen. |
+| Evidence-derived calibration | `V3-CALIBRATE-001` | `PARTIAL` | The native authenticated evidence and empirical policy-proposal APIs are locally tested; full campaign-owned custody, population execution, external sealing and independent qualification remain incomplete. No statistically supported real calibrated policy is frozen. |
 | Catalogue refresh and drift detection | `V3-MODELREFRESH-001` | `PARTIAL` | Provider-free durable history, runtime veto, and refreshed-pricing custody are validated. Fresh all-role r22 discovery is operator-reported, private, nonauthorizing, and not independently authenticated; no stock live authority quartet exists. |
 | Root-lineage review | `V3-LINEAGE-001` | `BLOCKED_TECHNICAL` | A signed calibration-only handoff is implemented. Fresh r22 metadata does not supply a complete current signed exact-set decision or runtime approval. |
 | Real staged qualification | `V3-QUALIFY-001` | `QUEUED` | No exact production model is currently qualified. The provider-free `V3-RUNTIMEADMIT-001` mechanism is complete, but current private runtime evidence, separate authorization, and later qualification work remain absent. |

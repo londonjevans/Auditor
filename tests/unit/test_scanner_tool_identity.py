@@ -450,3 +450,86 @@ def test_version_probe_rechecks_after_its_own_preparation(
     assert result.version is None
     assert result.execution_evidence is ExecutionEvidenceKind.UNVERIFIED
     assert cleanup_calls == [repository.parent / "private"]
+
+
+@pytest.mark.parametrize("boundary", ["admission", "wrap", "launch", "running", "cleanup"])
+def test_version_probe_shared_deadline_refuses_before_dispatch_or_stops_original_process(
+    inert_inputs: tuple[Path, Path, str],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    boundary: str,
+) -> None:
+    repository, executable, _ = inert_inputs
+    now = [10.0]
+    launches = []
+    stopped = []
+    cleaned = []
+    monkeypatch.setattr(base.time, "monotonic", lambda: now[0])
+
+    class Backend(_NoExecutionBackend):
+        def cleanup(self, private_dir: Path) -> None:
+            cleaned.append(private_dir)
+            if boundary == "cleanup":
+                now[0] = 20.0
+
+    class Process:
+        returncode = 0
+        pid = 999999
+
+        def poll(self) -> int | None:
+            return None if boundary == "running" and not stopped else self.returncode
+
+        def wait(self, timeout: float) -> int:
+            return self.returncode
+
+    def prepare() -> None:
+        if boundary == "wrap":
+            now[0] = 20.0
+
+    def launch(command: list[str], **kwargs: Any) -> Process:
+        launches.append(command)
+        kwargs["stdout"].write(b"forge 1.0.0\n")
+        if boundary in {"launch", "running"}:
+            now[0] = 20.0
+        return Process()
+
+    monkeypatch.setattr(base.subprocess, "Popen", launch)
+    monkeypatch.setattr(base, "_stop_process", lambda process: stopped.append(process))
+    monkeypatch.setattr(base, "_cleanup_lingering_process_group", lambda *a, **k: None)
+    private = tmp_path / "deadline-private"
+    result = base.isolated_executable_version_probe(
+        executable,
+        {},
+        Backend(prepare),
+        repository,
+        private,
+        timeout_seconds=15,
+        absolute_deadline=9.0 if boundary == "admission" else 20.0,
+    )
+    assert result.status is ExecutableVersionProbeStatus.TIMED_OUT
+    assert result.version is None
+    assert len(launches) == (0 if boundary in {"admission", "wrap"} else 1)
+    assert len(cleaned) == (0 if boundary == "admission" else 1)
+    assert len(stopped) == (1 if boundary == "running" else 0)
+    if boundary == "admission":
+        assert not private.exists()
+
+
+@pytest.mark.parametrize("deadline", [True, float("inf"), float("-inf"), float("nan")])
+def test_version_probe_rejects_nonfinite_deadline_before_any_io(
+    inert_inputs: tuple[Path, Path, str],
+    tmp_path: Path,
+    deadline: float,
+) -> None:
+    repository, executable, _ = inert_inputs
+    private = tmp_path / "invalid-deadline-private"
+    with pytest.raises(ValueError, match="finite"):
+        base.isolated_executable_version_probe(
+            executable,
+            {},
+            _NoExecutionBackend(),
+            repository,
+            private,
+            absolute_deadline=deadline,
+        )
+    assert not private.exists()

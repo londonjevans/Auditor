@@ -32,6 +32,7 @@ from mmaudit.models.discovery import (
     OpenRouterModelDiscoveryEvidence,
     OpenRouterModelDiscoveryRunManifest,
 )
+from mmaudit.models.openrouter import require_operator_cost_preview_usage
 from mmaudit.models.output_modes import StructuredOutputMode
 from mmaudit.models.qualification import CandidateModel, QualificationPolicy
 from mmaudit.models.reasoning import (
@@ -197,13 +198,44 @@ class RouteRuntimeObservation(_FrozenStrictModel):
 class RouteRuntimeEvidenceArtifact(_FrozenStrictModel):
     """Canonical runtime projection retaining its complete nonauthorizing source."""
 
+    model_config = ConfigDict(
+        json_schema_extra={
+            "allOf": [
+                {
+                    "if": {
+                        "properties": {"schema_version": {"const": "1.1"}},
+                        "required": ["schema_version"],
+                    },
+                    "then": {
+                        "properties": {
+                            "source_kind": {
+                                "const": "AUTHENTICATED_RUNNER_NONCREDITING_SMOKE_V1_3"
+                            },
+                            "source_bundle": {"properties": {"schema_version": {"const": "1.3"}}},
+                        },
+                        "required": ["source_kind"],
+                    },
+                    "else": {
+                        "properties": {
+                            "source_kind": {
+                                "const": "AUTHENTICATED_RUNNER_NONCREDITING_SMOKE_V1_2"
+                            },
+                            "source_bundle": {"properties": {"schema_version": {"const": "1.2"}}},
+                        },
+                    },
+                }
+            ],
+        }
+    )
+
     artifact_kind: Literal["authenticated_runner_route_runtime_evidence"] = (
         "authenticated_runner_route_runtime_evidence"
     )
-    schema_version: Literal["1.0"] = "1.0"
-    source_kind: Literal["AUTHENTICATED_RUNNER_NONCREDITING_SMOKE_V1_2"] = (
-        "AUTHENTICATED_RUNNER_NONCREDITING_SMOKE_V1_2"
-    )
+    schema_version: Literal["1.0", "1.1"] = "1.0"
+    source_kind: Literal[
+        "AUTHENTICATED_RUNNER_NONCREDITING_SMOKE_V1_2",
+        "AUTHENTICATED_RUNNER_NONCREDITING_SMOKE_V1_3",
+    ] = "AUTHENTICATED_RUNNER_NONCREDITING_SMOKE_V1_2"
     source_bundle: AuthenticatedRunnerSmokeEvidenceBundle
     source_bundle_sha256: str = Field(pattern=_SHA256_PATTERN)
     qualification_policy_sha256: str = Field(pattern=_SHA256_PATTERN)
@@ -240,11 +272,17 @@ class RouteRuntimeEvidenceArtifact(_FrozenStrictModel):
 
     @model_validator(mode="after")
     def source_projection_and_hash_are_exact(self) -> Self:
+        expected_version, expected_kind = (
+            ("1.2", "AUTHENTICATED_RUNNER_NONCREDITING_SMOKE_V1_2")
+            if self.schema_version == "1.0"
+            else ("1.3", "AUTHENTICATED_RUNNER_NONCREDITING_SMOKE_V1_3")
+        )
         if (
-            self.source_bundle.schema_version != "1.2"
+            self.source_bundle.schema_version != expected_version
+            or self.source_kind != expected_kind
             or self.source_bundle_sha256 != self.source_bundle.bundle_sha256
         ):
-            raise ValueError("route runtime evidence source is not an exact smoke v1.2 bundle")
+            raise ValueError("route runtime evidence source differs from its exact version binding")
         expected_observations = _derive_runtime_observations(self.source_bundle)
         if self.observations != expected_observations:
             raise ValueError("route runtime observations differ from their durable source")
@@ -402,7 +440,7 @@ def _token_detail_proof_is_valid(item: _RuntimeSourceItem) -> bool:
     plan = _request_token_plan(item.usage)
     evidence = _token_detail_evidence(item.usage)
     return (
-        item.plan.request_preview.schema_version in {"1.1", "1.2"}
+        item.plan.request_preview.schema_version in {"1.1", "1.2", "1.4"}
         and plan is not None
         and plan.schema_version == "3.0"
         and evidence is not None
@@ -465,7 +503,7 @@ def _validate_source_item(item: _RuntimeSourceItem) -> None:
     ):
         raise ValueError("route runtime source usage is not a route-bound REAL success")
     if (
-        preview.schema_version not in {"1.1", "1.2"}
+        preview.schema_version not in {"1.1", "1.2", "1.4"}
         or preview.exact_model_id != model.exact_model_id
         or preview.provider_endpoint != model.approved_provider_endpoint
         or preview.discovery_evidence_sha256 != model.discovery_evidence_sha256
@@ -473,11 +511,19 @@ def _validate_source_item(item: _RuntimeSourceItem) -> None:
         or preview.output_capability_sha256 != model.output_capability_sha256
         or preview.response_schema_sha256 != usage.schema_sha256
         or (
-            preview.schema_version == "1.2"
+            preview.schema_version in {"1.2", "1.4"}
             and preview.route_predicate_profile_sha256 != model.route_predicate_profile_sha256
         )
     ):
         raise ValueError("route runtime source differs from its exact route preview")
+    attempts = require_operator_cost_preview_usage(usage, preview)
+    if attempts and (
+        attempts[0].reservation.selection_plan_sha256 != model.selection_plan_sha256
+        or attempts[0].reservation.route_predicate_profile_sha256
+        != model.route_predicate_profile_sha256
+        or attempts[0].reservation.route_constraint_sha256 != model.exact_route_constraint_sha256
+    ):
+        raise ValueError("route runtime reservation differs from exact registry custody")
 
 
 def _one_exact(values: tuple[Any, ...], *, label: str) -> Any:
@@ -689,8 +735,12 @@ def build_route_runtime_evidence_artifact(
         observations = _derive_runtime_observations(bundle)
         hash_payload: dict[str, Any] = {
             "artifact_kind": "authenticated_runner_route_runtime_evidence",
-            "schema_version": "1.0",
-            "source_kind": "AUTHENTICATED_RUNNER_NONCREDITING_SMOKE_V1_2",
+            "schema_version": "1.1" if bundle.schema_version == "1.3" else "1.0",
+            "source_kind": (
+                "AUTHENTICATED_RUNNER_NONCREDITING_SMOKE_V1_3"
+                if bundle.schema_version == "1.3"
+                else "AUTHENTICATED_RUNNER_NONCREDITING_SMOKE_V1_2"
+            ),
             "source_bundle": bundle.model_dump(mode="json"),
             "source_bundle_sha256": bundle.bundle_sha256,
             "qualification_policy_sha256": policy.policy_sha256,

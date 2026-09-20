@@ -897,6 +897,34 @@
       "title": "MaximumAssuranceStatus",
       "type": "string"
     },
+    "MutationClassScore": {
+      "additionalProperties": false,
+      "description": "Keep every required class and each of its property gates visible.",
+      "properties": {
+        "gate_passed": {
+          "title": "Gate Passed",
+          "type": "boolean"
+        },
+        "mutation_class": {
+          "$ref": "#/$defs/SecurityMutationClass"
+        },
+        "property_scores": {
+          "items": {
+            "$ref": "#/$defs/PropertyMutationScore"
+          },
+          "maxItems": 10000,
+          "title": "Property Scores",
+          "type": "array"
+        }
+      },
+      "required": [
+        "mutation_class",
+        "property_scores",
+        "gate_passed"
+      ],
+      "title": "MutationClassScore",
+      "type": "object"
+    },
     "MutationKind": {
       "description": "Implemented source-local classes used to challenge defensive properties.",
       "enum": [
@@ -924,7 +952,15 @@
           "type": "string"
         },
         "mutation_kind": {
-          "$ref": "#/$defs/MutationKind"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MutationKind"
+            },
+            {
+              "$ref": "#/$defs/SecurityMutationClass"
+            }
+          ],
+          "title": "Mutation Kind"
         },
         "outcome": {
           "$ref": "#/$defs/MutationTestOutcome"
@@ -946,7 +982,214 @@
       "type": "object"
     },
     "MutationScorecard": {
+      "$comment": "Runtime reconstructs per-property and per-class arithmetic and requires every gate. Missing classes cannot pass. Neither serialization nor local comparison grants admitted campaign, benchmark, qualification or release authority.",
       "additionalProperties": false,
+      "allOf": [
+        {
+          "else": {
+            "properties": {
+              "class_scores": {
+                "type": "null"
+              },
+              "portfolio_scope": {
+                "type": "null"
+              }
+            }
+          },
+          "if": {
+            "properties": {
+              "schema_version": {
+                "const": "2.0"
+              }
+            },
+            "required": [
+              "schema_version"
+            ]
+          },
+          "then": {
+            "properties": {
+              "applicability_plan_sha256": {
+                "type": "string"
+              },
+              "class_scores": {
+                "allOf": [
+                  {
+                    "contains": {
+                      "properties": {
+                        "mutation_class": {
+                          "const": "changed_rounding_direction"
+                        }
+                      },
+                      "required": [
+                        "mutation_class"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "mutation_class": {
+                          "const": "changed_storage_slot"
+                        }
+                      },
+                      "required": [
+                        "mutation_class"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "mutation_class": {
+                          "const": "external_call_before_state_update"
+                        }
+                      },
+                      "required": [
+                        "mutation_class"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "mutation_class": {
+                          "const": "incorrect_decimal_scale"
+                        }
+                      },
+                      "required": [
+                        "mutation_class"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "mutation_class": {
+                          "const": "removed_authorization"
+                        }
+                      },
+                      "required": [
+                        "mutation_class"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "mutation_class": {
+                          "const": "removed_initializer_protection"
+                        }
+                      },
+                      "required": [
+                        "mutation_class"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "mutation_class": {
+                          "const": "removed_nonce_update"
+                        }
+                      },
+                      "required": [
+                        "mutation_class"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "mutation_class": {
+                          "const": "removed_pause_enforcement"
+                        }
+                      },
+                      "required": [
+                        "mutation_class"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "mutation_class": {
+                          "const": "removed_stale_price_validation"
+                        }
+                      },
+                      "required": [
+                        "mutation_class"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "mutation_class": {
+                          "const": "unchecked_return_handling"
+                        }
+                      },
+                      "required": [
+                        "mutation_class"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "mutation_class": {
+                          "const": "weakened_timelock"
+                        }
+                      },
+                      "required": [
+                        "mutation_class"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  }
+                ],
+                "maxItems": 11,
+                "minItems": 11,
+                "type": "array"
+              },
+              "evidence_origin": {
+                "enum": [
+                  "planned_unattested",
+                  "process_local_comparison"
+                ]
+              },
+              "portfolio_scope": {
+                "const": "required_eleven_class"
+              }
+            },
+            "required": [
+              "portfolio_scope",
+              "class_scores",
+              "applicability_plan_sha256"
+            ]
+          }
+        }
+      ],
       "description": "Per-property mutation quality evidence; aggregate scores cannot hide weak properties.",
       "properties": {
         "applicability_plan_sha256": {
@@ -961,6 +1204,23 @@
           ],
           "default": null,
           "title": "Applicability Plan Sha256"
+        },
+        "class_scores": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/MutationClassScore"
+              },
+              "maxItems": 11,
+              "minItems": 11,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Class Scores"
         },
         "evidence_origin": {
           "$ref": "#/$defs/MutationScorecardEvidenceOrigin",
@@ -1013,6 +1273,19 @@
           "default": null,
           "title": "Overall Kill Score"
         },
+        "portfolio_scope": {
+          "anyOf": [
+            {
+              "const": "required_eleven_class",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Portfolio Scope"
+        },
         "projection_authority": {
           "anyOf": [
             {
@@ -1053,7 +1326,8 @@
           "default": "1.0",
           "enum": [
             "1.0",
-            "1.1"
+            "1.1",
+            "2.0"
           ],
           "title": "Schema Version",
           "type": "string"
@@ -1160,6 +1434,24 @@
       ],
       "title": "PropertyMutationScore",
       "type": "object"
+    },
+    "SecurityMutationClass": {
+      "description": "The eleven explicit requirements, distinct from legacy generic operators.",
+      "enum": [
+        "removed_authorization",
+        "removed_nonce_update",
+        "changed_rounding_direction",
+        "removed_stale_price_validation",
+        "external_call_before_state_update",
+        "removed_initializer_protection",
+        "weakened_timelock",
+        "changed_storage_slot",
+        "removed_pause_enforcement",
+        "unchecked_return_handling",
+        "incorrect_decimal_scale"
+      ],
+      "title": "SecurityMutationClass",
+      "type": "string"
     },
     "Severity": {
       "enum": [

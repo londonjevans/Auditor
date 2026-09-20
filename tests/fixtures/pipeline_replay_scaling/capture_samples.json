@@ -1,0 +1,5 @@
+{
+  "scope": "SYNTHETIC_PARSER_CONTROL_NOT_EXECUTED_PIPELINE",
+  "before": {"fresh": 1000, "resumes": [100, 200, 300], "profile": 5000},
+  "after": {"fresh": 900, "resumes": [150, 250, 400], "profile": 6000}
+}

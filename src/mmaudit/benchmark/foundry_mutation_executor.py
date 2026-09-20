@@ -17,18 +17,20 @@ from pathlib import Path
 from typing import Protocol
 
 from mmaudit.benchmark.mutations import (
+    MutationSpecification,
     MutationSuiteObservation,
     MutationSuiteTestObservation,
     MutationSuiteTestStatus,
-    SourceMutationSpec,
     mutation_repository_sha256,
 )
 from mmaudit.models.schemas import (
     ExecutionEvidenceKind,
     RepositoryCodeExecutionState,
     RepositoryForkEgressStatus,
+    RepositorySuiteFramework,
     RepositorySuiteInventoryEvidence,
     RepositorySuiteInventoryKind,
+    RepositorySuiteInventoryRecord,
     RepositorySuiteTestDescriptor,
     RepositoryTestExecution,
     RepositoryTestExecutionStatus,
@@ -120,6 +122,36 @@ def canonical_foundry_mutation_test_id(descriptor: RepositorySuiteTestDescriptor
     return f"foundry:{digest}"
 
 
+def canonical_foundry_inventory_mutation_test_id(
+    record: RepositorySuiteInventoryRecord, *, inventory_sha256: str
+) -> str:
+    """Use the executor's exact logical identity for one compiler-inventoried test."""
+
+    record = RepositorySuiteInventoryRecord.model_validate(record.model_dump(mode="python"))
+    descriptor = RepositorySuiteTestDescriptor.sealed(
+        framework=RepositorySuiteFramework.FOUNDRY,
+        project_root=record.project_root,
+        path=record.execution_path,
+        suite_name=record.execution_suite_name,
+        test_name=record.test_name,
+        source_sha256=record.execution_source_sha256,
+        start_line=record.execution_start_line,
+        end_line=record.execution_end_line,
+        inventory_sha256=inventory_sha256,
+        inventory_record_sha256=record.record_sha256,
+        execution_contract_ast_id=record.execution_contract_ast_id,
+        declaration_path=record.declaration_path,
+        declaration_suite_name=record.declaration_suite_name,
+        declaration_signature=record.declaration_signature,
+        declaration_source_sha256=record.declaration_source_sha256,
+        declaration_start_line=record.declaration_start_line,
+        declaration_end_line=record.declaration_end_line,
+        declaration_contract_ast_id=record.declaration_contract_ast_id,
+        declaration_function_ast_id=record.declaration_function_ast_id,
+    )
+    return canonical_foundry_mutation_test_id(descriptor)
+
+
 class _InvokeFoundry(Protocol):
     def __call__(
         self,
@@ -189,7 +221,7 @@ class _ExecuteMutation(Protocol):
         expected_tool_sha256: str,
         baseline_workspace: Path,
         mutant_workspace: Path,
-        specification: SourceMutationSpec,
+        specification: MutationSpecification,
     ) -> MutationSuiteObservation: ...
 
 
@@ -576,7 +608,7 @@ def _build_mutation_execution_authority(
         expected_tool_sha256: str,
         baseline_workspace: Path,
         mutant_workspace: Path,
-        specification: SourceMutationSpec,
+        specification: MutationSpecification,
     ) -> MutationSuiteObservation:
         if current_process_id() != authority_process_id:
             raise FoundryMutationExecutionError(
@@ -782,7 +814,7 @@ class ExactFoundryMutationExecutor:
         *,
         baseline_workspace: Path,
         mutant_workspace: Path,
-        specification: SourceMutationSpec,
+        specification: MutationSpecification,
     ) -> MutationSuiteObservation:
         """Execute and issue one process-authorized exact observation."""
 

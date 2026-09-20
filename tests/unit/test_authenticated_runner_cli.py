@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
@@ -8,7 +10,6 @@ from typing import Any, cast
 
 import pytest
 import typer
-from typer.testing import CliRunner
 
 import mmaudit.cli as cli_module
 from mmaudit.config import AuditConfig, ConfigError
@@ -41,9 +42,38 @@ from mmaudit.orchestration.authenticated_runner_openrouter import (
     AuthenticatedRunnerOpenRouterRunSnapshot,
 )
 from mmaudit.orchestration.cost_ledger import AtomicCostLedger
+from tests.cli_support import IsolatedLoopCliRunner
 from tests.unit.test_authenticated_runner_durable_bundle import _rejected_bundle
 
-RUNNER = CliRunner()
+RUNNER = IsolatedLoopCliRunner()
+
+
+def test_real_cli_async_entry_preserves_the_callers_registered_event_loop() -> None:
+    """The test harness must not orphan a caller loop when the real CLI owns one."""
+
+    def exercise() -> None:
+        caller_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(caller_loop)
+        app = typer.Typer()
+
+        @app.command()
+        def synthetic() -> None:
+            async def consume() -> None:
+                assert asyncio.get_running_loop() is not caller_loop
+
+            cli_module._run_async_cli(consume)
+
+        try:
+            result = RUNNER.invoke(app, [])
+            assert result.exit_code == 0, result.output
+            assert asyncio.get_event_loop() is caller_loop
+            assert not caller_loop.is_closed()
+        finally:
+            asyncio.set_event_loop(None)
+            caller_loop.close()
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        executor.submit(exercise).result(timeout=30)
 
 
 class _SecretPresenceOnly:
@@ -1617,8 +1647,8 @@ def test_async_cli_preserves_bracketed_rejection_text_verbatim(
     async def reject() -> None:
         raise ConfigError("[bold]endpoint[/bold]")
 
-    with pytest.raises(typer.Exit):
-        cli_module._run_async_cli(reject)
+    with ThreadPoolExecutor(max_workers=1) as executor, pytest.raises(typer.Exit):
+        executor.submit(cli_module._run_async_cli, reject).result(timeout=30)
 
     assert "[bold]endpoint[/bold]" in capsys.readouterr().out
 

@@ -1,0 +1,213 @@
+{
+  "schema_version": 1,
+  "kind": "developer_python_compatibility_observation",
+  "observed_at": "2026-09-12T10:04:22Z",
+  "ticket_id": "V3-TRUNCATION-001",
+  "scope": "Existing approved local Python 3.12 environment; source compilation and dependency availability only.",
+  "runtime": {
+    "version": "3.12.14",
+    "implementation": "CPython",
+    "architecture": "arm64",
+    "platform": "Darwin",
+    "executable": "/opt/homebrew/bin/python3.12",
+    "resolved_executable": "/opt/homebrew/Cellar/python@3.12/3.12.14/Frameworks/Python.framework/Versions/3.12/bin/python3.12",
+    "executable_sha256": "30b2a6bf9706029b609327ca5db722cd458239df96efc87e1f8e37beed49db2e",
+    "soabi": "cpython-312-darwin"
+  },
+  "repository_requirements": {
+    "requires_python": ">=3.12",
+    "pydantic": "pydantic>=2.8,<3",
+    "direct_runtime_dev_build": [
+      {
+        "requirement": "h11==0.16.0",
+        "distribution": "h11",
+        "installed_version": null
+      },
+      {
+        "requirement": "httpcore==1.0.9",
+        "distribution": "httpcore",
+        "installed_version": null
+      },
+      {
+        "requirement": "httpx==0.28.1",
+        "distribution": "httpx",
+        "installed_version": null
+      },
+      {
+        "requirement": "pydantic>=2.8,<3",
+        "distribution": "pydantic",
+        "installed_version": null
+      },
+      {
+        "requirement": "python-dotenv>=1.0,<2",
+        "distribution": "python-dotenv",
+        "installed_version": null
+      },
+      {
+        "requirement": "rich>=13.7,<15",
+        "distribution": "rich",
+        "installed_version": null
+      },
+      {
+        "requirement": "typer>=0.12,<1",
+        "distribution": "typer",
+        "installed_version": null
+      },
+      {
+        "requirement": "hatchling>=1.25,<2",
+        "distribution": "hatchling",
+        "installed_version": null
+      },
+      {
+        "requirement": "jsonschema>=4.23,<5",
+        "distribution": "jsonschema",
+        "installed_version": null
+      },
+      {
+        "requirement": "mypy>=1.11,<2",
+        "distribution": "mypy",
+        "installed_version": null
+      },
+      {
+        "requirement": "pytest>=8.3,<9",
+        "distribution": "pytest",
+        "installed_version": null
+      },
+      {
+        "requirement": "pytest-asyncio>=0.24,<1",
+        "distribution": "pytest-asyncio",
+        "installed_version": null
+      },
+      {
+        "requirement": "ruff>=0.6,<1",
+        "distribution": "ruff",
+        "installed_version": null
+      }
+    ]
+  },
+  "frozen_source": {
+    "path": "/private/tmp/mmaudit-schema-remapping.H1Q5cK/schema-remapping-inputs.json",
+    "sha256": "e068c212037287a8292873e4e73cb7b4b300aededa9bd90330bb7bd4a8770e96",
+    "verified_inputs": 1208,
+    "verified_bytes": 39820957
+  },
+  "syntax": {
+    "status": "PASSED_COMPILE_ONLY",
+    "selected_python_files": 1008,
+    "source_files": 314,
+    "scripts": 9,
+    "test_files_including_fixtures": 685,
+    "included_synthetic_fixture_files": 8,
+    "selected_paths_sha256": "0d911bb50161b2d263b4de115a1827146c62dcb9dc8b61cf2c5bb9a70c8cef91",
+    "failures": [],
+    "warnings": [],
+    "source_executed": false,
+    "bytecode_written": false,
+    "raw_observation_path": "/private/tmp/mmaudit-python312-compat.eAZIbA/python312-compile-result.json",
+    "raw_observation_sha256": "1aaab3cec9e3e0db5dfdb90cfdedd1f8b95b3c097b66d480db6a0271b3493846",
+    "native_session_id": 24846,
+    "exit_code": 0,
+    "terminal_chunk": "b4b7d6"
+  },
+  "runtime_compatibility": {
+    "status": "BLOCKED_TECHNICAL",
+    "tests_executed": 0,
+    "dependency_preflight_exit_code": 2,
+    "missing_declared_distributions": [
+      "h11",
+      "httpcore",
+      "httpx",
+      "pydantic",
+      "python-dotenv",
+      "rich",
+      "typer",
+      "hatchling",
+      "jsonschema",
+      "mypy",
+      "pytest",
+      "pytest-asyncio",
+      "ruff"
+    ],
+    "selected_module_specs": {
+      "pydantic": null,
+      "pydantic_core": null,
+      "pytest": null,
+      "pytest_asyncio": null,
+      "httpx": null,
+      "typer": null,
+      "rich": null,
+      "dotenv": null,
+      "jsonschema": null
+    },
+    "import_probe": {
+      "argv": [
+        "/opt/homebrew/bin/python3.12",
+        "-I",
+        "-c",
+        "import pydantic, pydantic_core, pytest, pytest_asyncio"
+      ],
+      "exit_code": 1,
+      "error_type": "ModuleNotFoundError",
+      "missing_module": "pydantic",
+      "terminal_chunk": "0dec68"
+    },
+    "raw_dependency_observation_path": "/private/tmp/mmaudit-python312-compat.eAZIbA/python312-dependencies-result.json",
+    "raw_dependency_observation_sha256": "69b9691765fe22e72a6d3be2ad68715960931ddb0d04becdbeed7cd8bbeb1447",
+    "dependency_probe_terminal_chunk": "dd4d71"
+  },
+  "existing_python313_environment": {
+    "version": "3.13.15",
+    "pydantic": "2.13.4",
+    "pydantic_core": "2.46.4",
+    "extension_path": ".venv/lib/python3.13/site-packages/pydantic_core/_pydantic_core.cpython-313-darwin.so",
+    "extension_sha256": "4bc2d486ad6cb684f751bb791f719da158cb42160970f3e5988e1c898960bab4",
+    "wheel_tag": "cp313-cp313-macosx_11_0_arm64",
+    "compatible_python312_extension_claim": false,
+    "extension_renamed_or_loaded_in_python312": false,
+    "previous_selected_test_acceptance_path": "/private/tmp/mmaudit-schema-remapping.H1Q5cK/schema-remapping-acceptance-3023.json",
+    "previous_selected_test_acceptance_sha256": "7dac2ee8886ea200766891ab8f528c09c6cce37c4494c9bb39dc32d3e1b3c110",
+    "previous_selected_tests": 3023,
+    "previous_acceptance_is_python312_evidence": false
+  },
+  "method": {
+    "cleared_environment_command": "env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin TMPDIR=/private/tmp PYTHONDONTWRITEBYTECODE=1 MMAUDIT_RUN_REAL_PROVIDER_TESTS=0 MMAUDIT_SECRETS_ENV_FILE= ",
+    "compile_script_path": "/private/tmp/mmaudit-python312-compat.eAZIbA/compile_frozen_sources.py",
+    "compile_script_sha256": "928859a74a89ce2a9f2f4311f59c58949a0f99b08a39f9b80cbee11494f9427d",
+    "compile_interpreter_arguments": [
+      "-I",
+      "-S"
+    ],
+    "dependency_script_path": "/private/tmp/mmaudit-python312-compat.eAZIbA/inspect_declared_dependencies.py",
+    "dependency_script_sha256": "5dc82eae64d7886ced4553e357b816b7bb7da4305ffc67af88b62a527eedafdb",
+    "dependency_interpreter_arguments": [
+      "-I"
+    ],
+    "source_compilation": "Compile the exact preselected frozen .py bytes in exec mode with dont_inherit=True; discard code objects without execution. Compare all 1208 source/test/support digests before accepting the result.",
+    "search_scope": "Installed external Python3.12, its standard environment, the repository .venv and matching explicitly shared discovery paths. This is not a machine-wide inventory of every possible virtual environment."
+  },
+  "unchanged_boundaries": {
+    "source_and_test_inputs": 1208,
+    "prior_schema_files": 172,
+    "logical_autonomy_gates": 35,
+    "provider_calls": 0,
+    "network": false,
+    "credentials_read": false,
+    "private_ledger_read": false,
+    "package_or_runtime_install": false,
+    "dependency_changes": false,
+    "ci_dispatch": false,
+    "model_route_or_judge_changes": false,
+    "qualification_or_seal": false,
+    "commit": false,
+    "push": false
+  },
+  "limitations": [
+    "Source compilation does not execute imports, validators, reference remapping, schemas, journal custody, integrations or the auditing pipeline.",
+    "The dependency probe reports package availability, not ABI validity, version-range compatibility or runtime test success.",
+    "No Python3.12 runtime test or Pydantic supported-version matrix pass is established.",
+    "Prior Python3.13 test and timing results retain their original environment and source-stage scope.",
+    "The compatibility subtask remains blocked pending an existing approved Python3.12 environment with the declared dependencies; other provider-free product work remains available.",
+    "No audit qualification, production performance, autonomous readiness or best-in-class claim follows."
+  ],
+  "next_required_evidence": "An existing approved Python3.12 interpreter/environment with all declared runtime/test dependencies; independently verify versions and native ABI, then run the original reference/fallback/tamper/fresh-generation and original-file tests without weakening assertions. Further consumer/dependency-matrix acceptance remains separate."
+}

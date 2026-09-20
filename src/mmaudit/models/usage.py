@@ -734,6 +734,107 @@ STRUCTURED_OUTPUT_ROUTING_FAILURE_CODES: tuple[StructuredOutputRoutingFailureCod
     "STRUCTURED_OUTPUT_ROUTING:IDENTITY_REQUIRE_PARAMETERS",
 )
 
+TokenPlanRoutingFailureCode = Literal[
+    "TOKEN_PLAN_ROUTING:PLAN_MISSING",
+    "TOKEN_PLAN_ROUTING:RECOVERY_SCOPE",
+    "TOKEN_PLAN_ROUTING:PLAN_OR_RESERVATION_PROJECTION",
+    "TOKEN_PLAN_ROUTING:PLAN_UNAVAILABLE",
+    "TOKEN_PLAN_ROUTING:V3_SCOPE_REQUIRED",
+    "TOKEN_PLAN_ROUTING:PLAN_SCHEMA",
+    "TOKEN_PLAN_ROUTING:REASONING_PRESENCE",
+    "TOKEN_PLAN_ROUTING:REASONING_REQUEST_PLAN",
+    "TOKEN_PLAN_ROUTING:REASONING_PLAN_SHA256",
+    "TOKEN_PLAN_ROUTING:REASONING_REQUEST_BODY_SHA256",
+    "TOKEN_PLAN_ROUTING:REASONING_COMPLETION_TOKENS",
+    "TOKEN_PLAN_ROUTING:REASONING_OBSERVATION_MISMATCH",
+    "TOKEN_PLAN_ROUTING:UNOBSERVED_REASONING_NONZERO",
+    "TOKEN_PLAN_ROUTING:ACTIVE_REASONING_NOT_OBSERVED",
+    "TOKEN_PLAN_ROUTING:ACTIVE_REASONING_NONPOSITIVE",
+    "TOKEN_PLAN_ROUTING:PROMPT_BYTE_BOUND",
+    "TOKEN_PLAN_ROUTING:PROMPT_ROUTE_LIMIT",
+    "TOKEN_PLAN_ROUTING:COMPLETION_REQUEST_LIMIT",
+    "TOKEN_PLAN_ROUTING:COMPLETION_ROUTE_LIMIT",
+    "TOKEN_PLAN_ROUTING:CONTEXT_LIMIT",
+    "TOKEN_PLAN_ROUTING:REASONING_WITHIN_COMPLETION",
+    "TOKEN_PLAN_ROUTING:REASONING_RESERVATION",
+    "TOKEN_PLAN_ROUTING:VISIBLE_OUTPUT_RESERVATION",
+    "TOKEN_PLAN_ROUTING:SELECTED_PROVIDER_ENDPOINT",
+    "TOKEN_PLAN_ROUTING:V3_PLAN_SCHEMA",
+    "TOKEN_PLAN_ROUTING:V3_ACCOUNTING_METHOD",
+    "TOKEN_PLAN_ROUTING:V3_WIRE_MAX_TOKENS",
+    "TOKEN_PLAN_ROUTING:TOKEN_DETAIL_MISSING",
+    "TOKEN_PLAN_ROUTING:TOKEN_DETAIL_ACCOUNTING_METHOD",
+    "TOKEN_PLAN_ROUTING:TOKEN_DETAIL_PLAN_SHA256",
+    "TOKEN_PLAN_ROUTING:TOKEN_DETAIL_REQUEST_BODY_SHA256",
+    "TOKEN_PLAN_ROUTING:REASONING_PLAN_MISSING",
+    "TOKEN_PLAN_ROUTING:REASONING_EVIDENCE_MISSING",
+    "TOKEN_PLAN_ROUTING:V3_REASONING_SCHEMA",
+    "TOKEN_PLAN_ROUTING:REASONING_TOKEN_DETAIL_OBSERVATION",
+    "TOKEN_PLAN_ROUTING:REASONING_TOKEN_DETAIL_SHA256",
+    "TOKEN_PLAN_ROUTING:REASONING_OBSERVATION_MISSING",
+    "TOKEN_PLAN_ROUTING:ACCOUNTED_PROMPT_RESERVATION",
+    "TOKEN_PLAN_ROUTING:ACCOUNTED_VISIBLE_OUTPUT_RESERVATION",
+    "TOKEN_PLAN_ROUTING:ACCOUNTED_REASONING_RESERVATION",
+    "TOKEN_PLAN_ROUTING:ACCOUNTED_COMPLETION_RESERVATION",
+    "TOKEN_PLAN_ROUTING:ACCOUNTED_TOTAL_RESERVATION",
+    "TOKEN_PLAN_ROUTING:RECORD_PROMPT_TOKENS",
+    "TOKEN_PLAN_ROUTING:RECORD_COMPLETION_TOKENS",
+    "TOKEN_PLAN_ROUTING:RECORD_REASONING_TOKENS",
+    "TOKEN_PLAN_ROUTING:RECORD_TOTAL_TOKENS",
+    "TOKEN_PLAN_ROUTING:RECORD_CACHED_TOKENS",
+]
+
+TOKEN_PLAN_ROUTING_FAILURE_CODES: tuple[TokenPlanRoutingFailureCode, ...] = (
+    "TOKEN_PLAN_ROUTING:PLAN_MISSING",
+    "TOKEN_PLAN_ROUTING:RECOVERY_SCOPE",
+    "TOKEN_PLAN_ROUTING:PLAN_OR_RESERVATION_PROJECTION",
+    "TOKEN_PLAN_ROUTING:PLAN_UNAVAILABLE",
+    "TOKEN_PLAN_ROUTING:V3_SCOPE_REQUIRED",
+    "TOKEN_PLAN_ROUTING:PLAN_SCHEMA",
+    "TOKEN_PLAN_ROUTING:REASONING_PRESENCE",
+    "TOKEN_PLAN_ROUTING:REASONING_REQUEST_PLAN",
+    "TOKEN_PLAN_ROUTING:REASONING_PLAN_SHA256",
+    "TOKEN_PLAN_ROUTING:REASONING_REQUEST_BODY_SHA256",
+    "TOKEN_PLAN_ROUTING:REASONING_COMPLETION_TOKENS",
+    "TOKEN_PLAN_ROUTING:REASONING_OBSERVATION_MISMATCH",
+    "TOKEN_PLAN_ROUTING:UNOBSERVED_REASONING_NONZERO",
+    "TOKEN_PLAN_ROUTING:ACTIVE_REASONING_NOT_OBSERVED",
+    "TOKEN_PLAN_ROUTING:ACTIVE_REASONING_NONPOSITIVE",
+    "TOKEN_PLAN_ROUTING:PROMPT_BYTE_BOUND",
+    "TOKEN_PLAN_ROUTING:PROMPT_ROUTE_LIMIT",
+    "TOKEN_PLAN_ROUTING:COMPLETION_REQUEST_LIMIT",
+    "TOKEN_PLAN_ROUTING:COMPLETION_ROUTE_LIMIT",
+    "TOKEN_PLAN_ROUTING:CONTEXT_LIMIT",
+    "TOKEN_PLAN_ROUTING:REASONING_WITHIN_COMPLETION",
+    "TOKEN_PLAN_ROUTING:REASONING_RESERVATION",
+    "TOKEN_PLAN_ROUTING:VISIBLE_OUTPUT_RESERVATION",
+    "TOKEN_PLAN_ROUTING:SELECTED_PROVIDER_ENDPOINT",
+    "TOKEN_PLAN_ROUTING:V3_PLAN_SCHEMA",
+    "TOKEN_PLAN_ROUTING:V3_ACCOUNTING_METHOD",
+    "TOKEN_PLAN_ROUTING:V3_WIRE_MAX_TOKENS",
+    "TOKEN_PLAN_ROUTING:TOKEN_DETAIL_MISSING",
+    "TOKEN_PLAN_ROUTING:TOKEN_DETAIL_ACCOUNTING_METHOD",
+    "TOKEN_PLAN_ROUTING:TOKEN_DETAIL_PLAN_SHA256",
+    "TOKEN_PLAN_ROUTING:TOKEN_DETAIL_REQUEST_BODY_SHA256",
+    "TOKEN_PLAN_ROUTING:REASONING_PLAN_MISSING",
+    "TOKEN_PLAN_ROUTING:REASONING_EVIDENCE_MISSING",
+    "TOKEN_PLAN_ROUTING:V3_REASONING_SCHEMA",
+    "TOKEN_PLAN_ROUTING:REASONING_TOKEN_DETAIL_OBSERVATION",
+    "TOKEN_PLAN_ROUTING:REASONING_TOKEN_DETAIL_SHA256",
+    "TOKEN_PLAN_ROUTING:REASONING_OBSERVATION_MISSING",
+    "TOKEN_PLAN_ROUTING:ACCOUNTED_PROMPT_RESERVATION",
+    "TOKEN_PLAN_ROUTING:ACCOUNTED_VISIBLE_OUTPUT_RESERVATION",
+    "TOKEN_PLAN_ROUTING:ACCOUNTED_REASONING_RESERVATION",
+    "TOKEN_PLAN_ROUTING:ACCOUNTED_COMPLETION_RESERVATION",
+    "TOKEN_PLAN_ROUTING:ACCOUNTED_TOTAL_RESERVATION",
+    "TOKEN_PLAN_ROUTING:RECORD_PROMPT_TOKENS",
+    "TOKEN_PLAN_ROUTING:RECORD_COMPLETION_TOKENS",
+    "TOKEN_PLAN_ROUTING:RECORD_REASONING_TOKENS",
+    "TOKEN_PLAN_ROUTING:RECORD_TOTAL_TOKENS",
+    "TOKEN_PLAN_ROUTING:RECORD_CACHED_TOKENS",
+)
+
+
 StrictUsageFailureCode = (
     Literal[
         "RECOVERY_SCOPE",
@@ -748,7 +849,6 @@ StrictUsageFailureCode = (
         "ENDPOINT",
         "ROUTER_IDENTITY",
         "PRIVACY_ROUTING",
-        "TOKEN_PLAN_ROUTING",
         "REPAIR_TEMPORAL_ROUTING",
         "ALIAS",
         "CERTIFICATION",
@@ -758,6 +858,7 @@ StrictUsageFailureCode = (
         "UNEXPECTED_GENERAL_CREDITABILITY",
     ]
     | StructuredOutputRoutingFailureCode
+    | TokenPlanRoutingFailureCode
 )
 
 STRICT_USAGE_FAILURE_CODES: tuple[StrictUsageFailureCode, ...] = (
@@ -774,7 +875,7 @@ STRICT_USAGE_FAILURE_CODES: tuple[StrictUsageFailureCode, ...] = (
     "ROUTER_IDENTITY",
     "PRIVACY_ROUTING",
     *STRUCTURED_OUTPUT_ROUTING_FAILURE_CODES,
-    "TOKEN_PLAN_ROUTING",
+    *TOKEN_PLAN_ROUTING_FAILURE_CODES,
     "REPAIR_TEMPORAL_ROUTING",
     "ALIAS",
     "CERTIFICATION",
@@ -805,7 +906,7 @@ def _strict_usage_record_failure_code(
         [UsageRecord], AuthrunnerNoncreditingUnknownTokenSmokeScope | None
     ],
     validate_smoke_reasoning_identity_join: Callable[..., str],
-    has_valid_token_plan_routing: Callable[..., bool],
+    token_plan_routing_failure_code: Callable[..., TokenPlanRoutingFailureCode | None],
     is_sha256: Callable[[Any], bool],
     has_valid_bound_identity: Callable[[UsageRecord], bool],
     real_evidence: ExecutionEvidenceKind,
@@ -951,13 +1052,14 @@ def _strict_usage_record_failure_code(
     )
     if structured_output_failure is not None:
         return structured_output_failure
-    if not has_valid_token_plan_routing(
+    token_plan_failure = token_plan_routing_failure_code(
         record,
         recovery_request_limit_scope=recovery_request_limit_scope,
         recovery_request_limit_count_before=recovery_request_limit_count_before,
         allow_noncrediting_unknown_token_accounting=(allow_noncrediting_unknown_token_accounting),
-    ):
-        return "TOKEN_PLAN_ROUTING"
+    )
+    if token_plan_failure is not None:
+        return token_plan_failure
     if not (
         routing.get("repair_used") is False
         and routing.get("repair_request") is False
@@ -1040,6 +1142,8 @@ def _build_strict_usage_record_validators() -> tuple[
     structured_output_routing_predicate = _has_valid_structured_output_routing
     structured_output_routing_failure = _structured_output_routing_failure_code
     token_plan_routing_predicate = _has_valid_token_plan_routing
+    token_plan_routing_failure = _token_plan_routing_failure_code
+    unknown_token_plan_routing_failure = _noncrediting_unknown_token_plan_routing_failure_code
     authrunner_smoke_scope_classifier = authrunner_noncrediting_unknown_token_smoke_scope
     validate_smoke_reasoning_identity_join = _validate_noncrediting_smoke_reasoning_identity_join
     sha256_predicate = _is_sha256
@@ -1057,6 +1161,11 @@ def _build_strict_usage_record_validators() -> tuple[
             structured_output_routing_failure,
         ),
         ("_has_valid_token_plan_routing", token_plan_routing_predicate),
+        ("_token_plan_routing_failure_code", token_plan_routing_failure),
+        (
+            "_noncrediting_unknown_token_plan_routing_failure_code",
+            unknown_token_plan_routing_failure,
+        ),
         (
             "authrunner_noncrediting_unknown_token_smoke_scope",
             authrunner_smoke_scope_classifier,
@@ -1149,7 +1258,7 @@ def _build_strict_usage_record_validators() -> tuple[
             structured_output_routing_failure_code=structured_output_routing_failure,
             authrunner_smoke_scope_classifier=authrunner_smoke_scope_classifier,
             validate_smoke_reasoning_identity_join=validate_smoke_reasoning_identity_join,
-            has_valid_token_plan_routing=token_plan_routing_predicate,
+            token_plan_routing_failure_code=token_plan_routing_failure,
             is_sha256=sha256_predicate,
             has_valid_bound_identity=bound_identity_predicate,
             real_evidence=real_evidence,
@@ -1621,11 +1730,33 @@ def _has_valid_token_plan_routing(
     recovery_request_limit_count_before: int | None = None,
     allow_noncrediting_unknown_token_accounting: bool = False,
 ) -> bool:
+    """Preserve token-plan acceptance through the same evaluator used for diagnostics."""
+
+    return (
+        _token_plan_routing_failure_code(
+            record,
+            recovery_request_limit_scope=recovery_request_limit_scope,
+            recovery_request_limit_count_before=recovery_request_limit_count_before,
+            allow_noncrediting_unknown_token_accounting=allow_noncrediting_unknown_token_accounting,
+        )
+        is None
+    )
+
+
+def _token_plan_routing_failure_code(
+    record: UsageRecord,
+    *,
+    recovery_request_limit_scope: str | None = None,
+    recovery_request_limit_count_before: int | None = None,
+    allow_noncrediting_unknown_token_accounting: bool = False,
+) -> TokenPlanRoutingFailureCode | None:
+    """Return the first existing token-plan refusal without serializing evidence values."""
+
     if "request_token_plan" not in record.routing:
-        return False
+        return "TOKEN_PLAN_ROUTING:PLAN_MISSING"
     recovery_mode = recovery_request_limit_scope is not None
     if recovery_mode != (recovery_request_limit_count_before is not None):
-        return False
+        return "TOKEN_PLAN_ROUTING:RECOVERY_SCOPE"
     try:
         plan = (
             recovery_request_token_plan_from_usage(
@@ -1639,136 +1770,181 @@ def _has_valid_token_plan_routing(
             else request_token_plan_from_usage(record)
         )
     except ValueError:
-        return False
+        return "TOKEN_PLAN_ROUTING:PLAN_OR_RESERVATION_PROJECTION"
     if plan is None:
-        return False
+        return "TOKEN_PLAN_ROUTING:PLAN_UNAVAILABLE"
     if plan.schema_version == "3.0":
-        return allow_noncrediting_unknown_token_accounting and (
-            _has_valid_noncrediting_unknown_token_plan_routing(record, plan)
-        )
+        if not allow_noncrediting_unknown_token_accounting:
+            return "TOKEN_PLAN_ROUTING:V3_SCOPE_REQUIRED"
+        return _noncrediting_unknown_token_plan_routing_failure_code(record, plan)
     if plan.schema_version != "2.0":
-        return False
+        return "TOKEN_PLAN_ROUTING:PLAN_SCHEMA"
     reasoning_plan = plan.reasoning_plan
     reasoning = record.reasoning_evidence
     if (reasoning_plan is None) != (reasoning is None):
-        return False
-    if reasoning is not None and (
-        reasoning.request_plan != reasoning_plan
-        or reasoning.request_token_plan_sha256 != plan.plan_sha256
-        or reasoning.request_body_sha256 != record.request_body_sha256
-        or reasoning.provider_completion_tokens != record.completion_tokens
-        or (
+        return "TOKEN_PLAN_ROUTING:REASONING_PRESENCE"
+    if reasoning is not None:
+        if reasoning.request_plan != reasoning_plan:
+            return "TOKEN_PLAN_ROUTING:REASONING_REQUEST_PLAN"
+        if reasoning.request_token_plan_sha256 != plan.plan_sha256:
+            return "TOKEN_PLAN_ROUTING:REASONING_PLAN_SHA256"
+        if reasoning.request_body_sha256 != record.request_body_sha256:
+            return "TOKEN_PLAN_ROUTING:REASONING_REQUEST_BODY_SHA256"
+        if reasoning.provider_completion_tokens != record.completion_tokens:
+            return "TOKEN_PLAN_ROUTING:REASONING_COMPLETION_TOKENS"
+        if (
             reasoning.observation_available
             and reasoning.observed_reasoning_tokens != record.reasoning_tokens
-        )
-        or (not reasoning.observation_available and record.reasoning_tokens != 0)
-    ):
-        return False
+        ):
+            return "TOKEN_PLAN_ROUTING:REASONING_OBSERVATION_MISMATCH"
+        if not reasoning.observation_available and record.reasoning_tokens != 0:
+            return "TOKEN_PLAN_ROUTING:UNOBSERVED_REASONING_NONZERO"
     if (
         reasoning_plan is not None
         and reasoning_plan.control_profile.mode != "disabled"
         and reasoning_plan.control_profile.reserved_reasoning_tokens > 0
-        and (
-            reasoning is None
-            or reasoning.state != "active_observed"
-            or reasoning.observed_reasoning_tokens is None
-            or reasoning.observed_reasoning_tokens <= 0
+    ):
+        if reasoning is None or reasoning.state != "active_observed":
+            return "TOKEN_PLAN_ROUTING:ACTIVE_REASONING_NOT_OBSERVED"
+        if reasoning.observed_reasoning_tokens is None or reasoning.observed_reasoning_tokens <= 0:
+            return "TOKEN_PLAN_ROUTING:ACTIVE_REASONING_NONPOSITIVE"
+    limits = plan.route_intersection
+    if not (record.prompt_tokens <= plan.prompt_byte_upper_bound_tokens):
+        return "TOKEN_PLAN_ROUTING:PROMPT_BYTE_BOUND"
+    if not (record.prompt_tokens <= limits.max_prompt_tokens):
+        return "TOKEN_PLAN_ROUTING:PROMPT_ROUTE_LIMIT"
+    if not (record.completion_tokens <= plan.requested_completion_tokens):
+        return "TOKEN_PLAN_ROUTING:COMPLETION_REQUEST_LIMIT"
+    if not (record.completion_tokens <= limits.max_completion_tokens):
+        return "TOKEN_PLAN_ROUTING:COMPLETION_ROUTE_LIMIT"
+    if not (record.prompt_tokens + record.completion_tokens <= limits.context_tokens):
+        return "TOKEN_PLAN_ROUTING:CONTEXT_LIMIT"
+    if not (record.reasoning_tokens <= record.completion_tokens):
+        return "TOKEN_PLAN_ROUTING:REASONING_WITHIN_COMPLETION"
+    if not (record.reasoning_tokens <= plan.reserved_reasoning_tokens):
+        return "TOKEN_PLAN_ROUTING:REASONING_RESERVATION"
+    if not (record.completion_tokens - record.reasoning_tokens <= plan.reserved_output_tokens):
+        return "TOKEN_PLAN_ROUTING:VISIBLE_OUTPUT_RESERVATION"
+    if not (
+        not record.configured_provider_endpoints
+        or limits.provider_endpoints == ("mmaudit-local-mock",)
+        or (
+            isinstance(record.actual_provider_endpoint, str)
+            and record.actual_provider_endpoint.casefold()
+            in {endpoint.casefold() for endpoint in limits.provider_endpoints}
         )
     ):
-        return False
-    limits = plan.route_intersection
-    return (
-        record.prompt_tokens <= plan.prompt_byte_upper_bound_tokens
-        and record.prompt_tokens <= limits.max_prompt_tokens
-        and record.completion_tokens <= plan.requested_completion_tokens
-        and record.completion_tokens <= limits.max_completion_tokens
-        and record.prompt_tokens + record.completion_tokens <= limits.context_tokens
-        and record.reasoning_tokens <= record.completion_tokens
-        and record.reasoning_tokens <= plan.reserved_reasoning_tokens
-        and record.completion_tokens - record.reasoning_tokens <= plan.reserved_output_tokens
-        and (
-            not record.configured_provider_endpoints
-            or limits.provider_endpoints == ("mmaudit-local-mock",)
-            or (
-                isinstance(record.actual_provider_endpoint, str)
-                and record.actual_provider_endpoint.casefold()
-                in {endpoint.casefold() for endpoint in limits.provider_endpoints}
-            )
-        )
-    )
+        return "TOKEN_PLAN_ROUTING:SELECTED_PROVIDER_ENDPOINT"
+    return None
 
 
 def _has_valid_noncrediting_unknown_token_plan_routing(
     record: UsageRecord,
     plan: RequestTokenPlan,
 ) -> bool:
-    """Validate v3 full-plan accounting while deliberately withholding general credit."""
+    """Validate v3 accounting without granting general credit."""
+
+    return _noncrediting_unknown_token_plan_routing_failure_code(record, plan) is None
+
+
+def _noncrediting_unknown_token_plan_routing_failure_code(
+    record: UsageRecord,
+    plan: RequestTokenPlan,
+) -> TokenPlanRoutingFailureCode | None:
+    """Name one existing v3 accounting refusal; never include observed evidence values."""
 
     token_detail = record.token_detail_accounting_evidence
     reasoning_plan = plan.reasoning_plan
     reasoning = record.reasoning_evidence
-    if (
-        plan.schema_version != "3.0"
-        or plan.token_detail_accounting_method
-        != "MMAUDIT_INDEPENDENT_REASONING_COMPONENT_ENVELOPE_V1"
-        or plan.wire_max_tokens != plan.reserved_output_tokens
-        or token_detail is None
-        or token_detail.accounting_method != plan.token_detail_accounting_method
-        or token_detail.request_token_plan_sha256 != plan.plan_sha256
-        or token_detail.request_body_sha256 != record.request_body_sha256
-        or reasoning_plan is None
-        or reasoning is None
-        or reasoning.schema_version != "1.1"
-        or reasoning.request_plan != reasoning_plan
-        or reasoning.request_token_plan_sha256 != plan.plan_sha256
-        or reasoning.request_body_sha256 != record.request_body_sha256
-        or reasoning.provider_completion_tokens != token_detail.provider_completion_tokens
-        or reasoning.observed_reasoning_tokens != token_detail.provider_reasoning_tokens
-        or reasoning.token_detail_accounting_evidence_sha256 != token_detail.evidence_sha256
-    ):
-        return False
+    if plan.schema_version != "3.0":
+        return "TOKEN_PLAN_ROUTING:V3_PLAN_SCHEMA"
+    if plan.token_detail_accounting_method != "MMAUDIT_INDEPENDENT_REASONING_COMPONENT_ENVELOPE_V1":
+        return "TOKEN_PLAN_ROUTING:V3_ACCOUNTING_METHOD"
+    if plan.wire_max_tokens != plan.reserved_output_tokens:
+        return "TOKEN_PLAN_ROUTING:V3_WIRE_MAX_TOKENS"
+    if token_detail is None:
+        return "TOKEN_PLAN_ROUTING:TOKEN_DETAIL_MISSING"
+    if token_detail.accounting_method != plan.token_detail_accounting_method:
+        return "TOKEN_PLAN_ROUTING:TOKEN_DETAIL_ACCOUNTING_METHOD"
+    if token_detail.request_token_plan_sha256 != plan.plan_sha256:
+        return "TOKEN_PLAN_ROUTING:TOKEN_DETAIL_PLAN_SHA256"
+    if token_detail.request_body_sha256 != record.request_body_sha256:
+        return "TOKEN_PLAN_ROUTING:TOKEN_DETAIL_REQUEST_BODY_SHA256"
+    if reasoning_plan is None:
+        return "TOKEN_PLAN_ROUTING:REASONING_PLAN_MISSING"
+    if reasoning is None:
+        return "TOKEN_PLAN_ROUTING:REASONING_EVIDENCE_MISSING"
+    if reasoning.schema_version != "1.1":
+        return "TOKEN_PLAN_ROUTING:V3_REASONING_SCHEMA"
+    if reasoning.request_plan != reasoning_plan:
+        return "TOKEN_PLAN_ROUTING:REASONING_REQUEST_PLAN"
+    if reasoning.request_token_plan_sha256 != plan.plan_sha256:
+        return "TOKEN_PLAN_ROUTING:REASONING_PLAN_SHA256"
+    if reasoning.request_body_sha256 != record.request_body_sha256:
+        return "TOKEN_PLAN_ROUTING:REASONING_REQUEST_BODY_SHA256"
+    if reasoning.provider_completion_tokens != token_detail.provider_completion_tokens:
+        return "TOKEN_PLAN_ROUTING:REASONING_COMPLETION_TOKENS"
+    if reasoning.observed_reasoning_tokens != token_detail.provider_reasoning_tokens:
+        return "TOKEN_PLAN_ROUTING:REASONING_TOKEN_DETAIL_OBSERVATION"
+    if reasoning.token_detail_accounting_evidence_sha256 != token_detail.evidence_sha256:
+        return "TOKEN_PLAN_ROUTING:REASONING_TOKEN_DETAIL_SHA256"
     control = reasoning_plan.control_profile
-    if (
-        control.mode != "disabled"
-        and control.reserved_reasoning_tokens > 0
-        and (
-            reasoning.state != "active_observed"
-            or token_detail.provider_reasoning_tokens is None
+    if control.mode != "disabled" and control.reserved_reasoning_tokens > 0:
+        if reasoning.state != "active_observed":
+            return "TOKEN_PLAN_ROUTING:ACTIVE_REASONING_NOT_OBSERVED"
+        if (
+            token_detail.provider_reasoning_tokens is None
             or token_detail.provider_reasoning_tokens <= 0
-        )
-    ):
-        return False
+        ):
+            return "TOKEN_PLAN_ROUTING:ACTIVE_REASONING_NONPOSITIVE"
     limits = plan.route_intersection
     raw_prompt = token_detail.provider_prompt_tokens
     raw_completion = token_detail.provider_completion_tokens
     raw_reasoning = token_detail.provider_reasoning_tokens
     if raw_reasoning is None:
-        return False
-    return (
-        raw_prompt <= plan.prompt_byte_upper_bound_tokens
-        and raw_prompt <= limits.max_prompt_tokens
-        and raw_completion <= plan.reserved_output_tokens
-        and raw_reasoning <= plan.reserved_reasoning_tokens
-        and token_detail.accounted_prompt_tokens == plan.prompt_byte_upper_bound_tokens
-        and token_detail.accounted_visible_output_tokens == plan.reserved_output_tokens
-        and token_detail.accounted_reasoning_tokens == plan.reserved_reasoning_tokens
-        and token_detail.accounted_completion_tokens == plan.requested_completion_tokens
-        and token_detail.accounted_total_tokens
+        return "TOKEN_PLAN_ROUTING:REASONING_OBSERVATION_MISSING"
+    if not (raw_prompt <= plan.prompt_byte_upper_bound_tokens):
+        return "TOKEN_PLAN_ROUTING:PROMPT_BYTE_BOUND"
+    if not (raw_prompt <= limits.max_prompt_tokens):
+        return "TOKEN_PLAN_ROUTING:PROMPT_ROUTE_LIMIT"
+    if not (raw_completion <= plan.reserved_output_tokens):
+        return "TOKEN_PLAN_ROUTING:VISIBLE_OUTPUT_RESERVATION"
+    if not (raw_reasoning <= plan.reserved_reasoning_tokens):
+        return "TOKEN_PLAN_ROUTING:REASONING_RESERVATION"
+    # Negate the original equality itself: detached evidence may override __ne__.
+    if not (token_detail.accounted_prompt_tokens == plan.prompt_byte_upper_bound_tokens):  # noqa: SIM201
+        return "TOKEN_PLAN_ROUTING:ACCOUNTED_PROMPT_RESERVATION"
+    if not (token_detail.accounted_visible_output_tokens == plan.reserved_output_tokens):  # noqa: SIM201
+        return "TOKEN_PLAN_ROUTING:ACCOUNTED_VISIBLE_OUTPUT_RESERVATION"
+    if not (token_detail.accounted_reasoning_tokens == plan.reserved_reasoning_tokens):  # noqa: SIM201
+        return "TOKEN_PLAN_ROUTING:ACCOUNTED_REASONING_RESERVATION"
+    if not (token_detail.accounted_completion_tokens == plan.requested_completion_tokens):  # noqa: SIM201
+        return "TOKEN_PLAN_ROUTING:ACCOUNTED_COMPLETION_RESERVATION"
+    if not (  # noqa: SIM201
+        token_detail.accounted_total_tokens
         == plan.prompt_byte_upper_bound_tokens + plan.requested_completion_tokens
-        and record.prompt_tokens == token_detail.provider_prompt_tokens
-        and record.completion_tokens == token_detail.provider_completion_tokens
-        and record.reasoning_tokens == raw_reasoning
-        and record.total_tokens == token_detail.provider_total_tokens
-        and record.cached_tokens == token_detail.provider_cached_tokens
-        and (
-            not record.configured_provider_endpoints
-            or (
-                isinstance(record.actual_provider_endpoint, str)
-                and record.actual_provider_endpoint.casefold()
-                in {endpoint.casefold() for endpoint in limits.provider_endpoints}
-            )
+    ):
+        return "TOKEN_PLAN_ROUTING:ACCOUNTED_TOTAL_RESERVATION"
+    if not (record.prompt_tokens == token_detail.provider_prompt_tokens):  # noqa: SIM201
+        return "TOKEN_PLAN_ROUTING:RECORD_PROMPT_TOKENS"
+    if not (record.completion_tokens == token_detail.provider_completion_tokens):  # noqa: SIM201
+        return "TOKEN_PLAN_ROUTING:RECORD_COMPLETION_TOKENS"
+    if not (record.reasoning_tokens == raw_reasoning):  # noqa: SIM201
+        return "TOKEN_PLAN_ROUTING:RECORD_REASONING_TOKENS"
+    if not (record.total_tokens == token_detail.provider_total_tokens):  # noqa: SIM201
+        return "TOKEN_PLAN_ROUTING:RECORD_TOTAL_TOKENS"
+    if not (record.cached_tokens == token_detail.provider_cached_tokens):  # noqa: SIM201
+        return "TOKEN_PLAN_ROUTING:RECORD_CACHED_TOKENS"
+    if not (
+        not record.configured_provider_endpoints
+        or (
+            isinstance(record.actual_provider_endpoint, str)
+            and record.actual_provider_endpoint.casefold()
+            in {endpoint.casefold() for endpoint in limits.provider_endpoints}
         )
-    )
+    ):
+        return "TOKEN_PLAN_ROUTING:SELECTED_PROVIDER_ENDPOINT"
+    return None
 
 
 def _build_noncrediting_smoke_reasoning_identity_join_validator() -> Callable[..., str]:

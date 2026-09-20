@@ -1,0 +1,8 @@
+[
+  {"name":"generic-open","role":"whole_protocol_review:0","sources":9,"pattern":"OPEN","request_limit":15,"expected_children":14,"expected_depth":3,"fully_covered":true,"pipeline":true},
+  {"name":"generic-invalid","role":"whole_protocol_review:0","sources":17,"pattern":"INVALID","request_limit":15,"expected_children":14,"expected_depth":3,"fully_covered":true,"pipeline":false},
+  {"name":"specialist-open","role":"specialist:access_control","sources":17,"pattern":"OPEN","request_limit":31,"expected_children":30,"expected_depth":4,"fully_covered":true,"pipeline":true},
+  {"name":"mixed-specialist","role":"specialist:false_negative_hunter","sources":33,"pattern":"MIXED","request_limit":31,"expected_children":30,"expected_depth":4,"fully_covered":true,"pipeline":true},
+  {"name":"generic-limited","role":"whole_protocol_review:0","sources":9,"pattern":"OPEN","request_limit":5,"expected_children":4,"expected_depth":2,"fully_covered":false,"pipeline":true},
+  {"name":"specialist-limited","role":"specialist:access_control","sources":17,"pattern":"INVALID","request_limit":5,"expected_children":4,"expected_depth":2,"fully_covered":false,"pipeline":true}
+]

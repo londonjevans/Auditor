@@ -1,0 +1,65 @@
+{
+  "$defs": {
+    "DevelopmentEnsembleStageId": {
+      "enum": [
+        "candidate",
+        "review-01",
+        "review-02"
+      ],
+      "type": "string"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/development_tree_stage_start.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Written exclusively before dispatch; an unclosed start is never inferred unsent.",
+  "properties": {
+    "allotted_seconds": {
+      "exclusiveMinimum": 0,
+      "maximum": 1800,
+      "title": "Allotted Seconds",
+      "type": "number"
+    },
+    "child_plan_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Child Plan Sha256",
+      "type": "string"
+    },
+    "primary_index": {
+      "maximum": 256,
+      "minimum": 1,
+      "title": "Primary Index",
+      "type": "integer"
+    },
+    "request_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Request Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "stage": {
+      "$ref": "#/$defs/DevelopmentEnsembleStageId"
+    },
+    "tree_plan_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Tree Plan Sha256",
+      "type": "string"
+    }
+  },
+  "required": [
+    "tree_plan_sha256",
+    "primary_index",
+    "stage",
+    "child_plan_sha256",
+    "request_id",
+    "allotted_seconds"
+  ],
+  "title": "DevelopmentTreeStageStart",
+  "type": "object"
+}

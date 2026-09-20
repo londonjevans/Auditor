@@ -7,6 +7,7 @@ import subprocess
 import sys
 import textwrap
 from collections import Counter
+from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
 
@@ -35,6 +36,1418 @@ from mmaudit.orchestration.autonomy_gate_inventory import (
 )
 
 ROOT = Path(__file__).resolve().parents[2]
+_FULL_TREE_ADDITIONS = {
+    "models/truncation_tree.py",
+    "orchestration/truncation_tree_evidence.py",
+    "orchestration/truncation_tree_promotion.py",
+}
+
+
+_CAPTURE_MODULES = {"scanners/solc_capture.py", "solidity/solc_capture_worker.py"}
+
+
+def _before_property_compiler_inputs(rows, *, family):
+    """Retain the complete predecessor after removing only the 21 reviewed new loci."""
+    counts_and_pins = {
+        "environment": (
+            583,
+            "d39430929f514d9023a465e11ede76dba5994034d0d732f35cf9c87a0c7b7d9d",
+            581,
+            "7966553e1c6ed16b03250f4ac4023454588e9004592cb24701ed730c533fac11",
+        ),
+        "filesystem": (
+            2347,
+            "321a8c4603179ad294e5af46e578e56452fc4ba3169f837a7d44d8ffbb338959",
+            2333,
+            "87594869e50937943955010581d3a7982c953086ce24fc79c201eb434d465d23",
+        ),
+        "runtime": (
+            1493,
+            "d0d6bd48f4c7c1da3f7135eea2e6c3810b2b7b8a524c8b61189ef41a41191d9f",
+            1488,
+            "d5d629755cbf0d977b1b35fe700a39d86acd0dda47a37a727c8557fd98cc26ec",
+        ),
+    }
+    count, pin, prior_count, prior_pin = counts_and_pins[family]
+    assert len(rows) == count and inventory_module._canonical_sha256(rows) == pin
+    previous = tuple(
+        row
+        for row in rows
+        if not (
+            row[0] == "solidity/formal.py"
+            and (
+                row[1].startswith("_CompiledPropertyToolAdapter.")
+                or row[1] == "_observe_property_compiler"
+            )
+        )
+    )
+    assert len(previous) == prior_count
+    assert inventory_module._canonical_sha256(previous) == prior_pin
+    return previous
+
+
+def _before_formal_supervision_environment(rows):
+    """Remove exactly the two reviewed platform reads for historical comparisons."""
+    rows = _before_property_compiler_inputs(rows, family="environment")
+    assert len(rows) == 581 and inventory_module._canonical_sha256(rows) == (
+        "7966553e1c6ed16b03250f4ac4023454588e9004592cb24701ed730c533fac11"
+    )
+    selected = ("solidity/formal.py", "_limit_process", "host-platform")
+    added = [row for row in rows if row[:3] == selected]
+    assert len(added) == 2 and all(
+        row[3] == ("Attribute(value=Name(id='sys', ctx=Load()), attr='platform', ctx=Load())")
+        for row in added
+    )
+    previous = tuple(row for row in rows if row[:3] != selected)
+    assert len(previous) == 579 and inventory_module._canonical_sha256(previous) == (
+        "ee9d0257948a0542836df12f15cda1044402227eb9645ac5b07ecf05eb05b893"
+    )
+    return previous
+
+
+def _before_source_binding_batch_inputs(rows, *, filesystem: bool):
+    """Remove exactly the five added descriptor-held source-batch observations."""
+    rows = _before_property_compiler_inputs(rows, family="filesystem" if filesystem else "runtime")
+    count, pin = (
+        (2333, "87594869e50937943955010581d3a7982c953086ce24fc79c201eb434d465d23")
+        if filesystem
+        else (1488, "d5d629755cbf0d977b1b35fe700a39d86acd0dda47a37a727c8557fd98cc26ec")
+    )
+    assert len(rows) == count and inventory_module._canonical_sha256(rows) == pin
+
+    def row(scope, kind, expression):
+        return (
+            "release_io.py",
+            scope,
+            kind,
+            inventory_module._canonical_ast_dump(ast.parse(expression, mode="eval").body),
+        )
+
+    expected = (
+        {
+            row("revalidate_evidence_file_bindings", "metadata-observation", "path.lstat()"),
+            row("_require_evidence_binding_batch_root", "metadata-observation", "path.lstat()"),
+            row(
+                "_require_evidence_binding_batch_root", "metadata-observation", "path.is_junction()"
+            ),
+            row(
+                "_require_evidence_binding_batch_root",
+                "metadata-observation",
+                "os.fstat(root.descriptor)",
+            ),
+        }
+        if filesystem
+        else {
+            row("revalidate_evidence_file_bindings", "descriptor-io", "os.close(root.descriptor)")
+        }
+    )
+    assert sum(value in expected for value in rows) == len(expected)
+    previous = tuple(value for value in rows if value not in expected)
+    previous_count, previous_pin = (
+        (2329, "66c4249f90b4ed9bff68db3c9a58f005c623e5a6ca71fe9af183278a2590a738")
+        if filesystem
+        else (1487, "4c787191bcf8ca1023c1e799865406fcce0840fbf9329047b6a335ae58507bc0")
+    )
+    assert len(previous) == previous_count
+    assert inventory_module._canonical_sha256(previous) == previous_pin
+    return previous
+
+
+def _before_formal_supervision_inputs(rows, *, filesystem: bool):
+    """Rejoin only the reviewed descriptor reads, child binding and supervision observations."""
+    rows = _before_source_binding_batch_inputs(rows, filesystem=filesystem)
+    count, pin = (
+        (2329, "66c4249f90b4ed9bff68db3c9a58f005c623e5a6ca71fe9af183278a2590a738")
+        if filesystem
+        else (1487, "4c787191bcf8ca1023c1e799865406fcce0840fbf9329047b6a335ae58507bc0")
+    )
+    assert len(rows) == count and inventory_module._canonical_sha256(rows) == pin
+
+    def expression(source):
+        return inventory_module._canonical_ast_dump(ast.parse(source, mode="eval").body)
+
+    previous = []
+    polls = 0
+    for path, scope, kind, value in rows:
+        if path == "solidity/formal.py":
+            if scope == "_bounded_process.output_exceeded":
+                if not filesystem:
+                    assert value in {
+                        expression("stdout_handle.fileno()"),
+                        expression("stderr_handle.fileno()"),
+                    }
+                    continue
+                scope = "_bounded_process"
+                for stream in ("stdout", "stderr"):
+                    value = value.replace(
+                        expression(f"os.fstat({stream}_handle.fileno())"),
+                        expression(f"{stream}_path.stat()"),
+                    )
+            if scope == "_bounded_process" and not filesystem:
+                if kind == "process-observation" or value == expression(
+                    "process.wait(timeout=0.05)"
+                ):
+                    continue
+                if value == expression("process.poll()"):
+                    polls += 1
+                    if polls == 2:
+                        continue
+                if kind == "child-dispatch":
+                    selected = expression("partial(_limit_process, nproc_ceiling=nproc_ceiling)")
+                    assert value.count(selected) == 1
+                    value = value.replace(selected, expression("_limit_process"))
+        previous.append((path, scope, kind, value))
+    if not filesystem:
+        assert polls == 2
+    return tuple(previous)
+
+
+def _before_batch_custody_inputs(rows, *, filesystem: bool):
+    """Rejoin only the reviewed read-helper moves and bounded batch observations."""
+    rows = _before_formal_supervision_inputs(rows, filesystem=filesystem)
+    if not filesystem:
+        assert len(rows) == 1482 and inventory_module._canonical_sha256(rows) == (
+            "d07e1e1d0a2eb35c098f33fbb7dbca0b29ed89b7e9a594bd0b5e7218142cbe3a"
+        )
+        replay_rows = [row for row in rows if row[0] == "scanners/foundry_normalization.py"]
+        assert replay_rows == [
+            (
+                "scanners/foundry_normalization.py",
+                "reparse_retained_foundry_findings",
+                "elapsed-clock",
+                "Call(func=Attribute(value=Name(id='time', ctx=Load()), attr='monotonic', ctx=Load()))",
+            )
+        ]
+        rows = tuple(row for row in rows if row not in replay_rows)
+        assert len(rows) == 1481 and inventory_module._canonical_sha256(rows) == (
+            "1b8c9d8411fb26c3126e2a9b61e0da3d7968125819ca686ccfa9b87b13e9b778"
+        )
+        formatter_rows = [row for row in rows if row[1] == "_canonical_ast_dump"]
+        assert formatter_rows == [
+            (
+                "orchestration/autonomy_gate_inventory.py",
+                "_canonical_ast_dump",
+                "dynamic-attribute",
+                "Call(func=Name(id='getattr', ctx=Load()), args=[Call(func=Name(id='type', "
+                "ctx=Load()), args=[Name(id='value', ctx=Load())]), Name(id='name', ctx=Load()), "
+                "Constant(value=Ellipsis)])",
+            )
+        ]
+        rows = tuple(row for row in rows if row not in formatter_rows)
+        assert len(rows) == 1480 and inventory_module._canonical_sha256(rows) == (
+            "8f07e7c57665f056e3e0a57d825ca2b8f60cf4277775e9935e526fecc4daf938"
+        )
+        added = [row for row in rows if row[0] == "models/development_corpus_replay.py"]
+        assert added == [
+            (
+                "models/development_corpus_replay.py",
+                "development_corpus_replay_scope",
+                "runtime-method",
+                "Call(func=Attribute(value=Name(id='state', ctx=Load()), attr='close', ctx=Load()))",
+            )
+        ]
+        rows = tuple(row for row in rows if row[0] != "models/development_corpus_replay.py")
+    count, pin = (
+        (2329, "dcdd5f89556528ae1220db1ce5620f49e59f5c8ae94afbc38e80392fc632e43f")
+        if filesystem
+        else (1479, "b218795e05c4cbd5d01155660f5dd05d6e72356d4852dbf8e4623b6a1c639009")
+    )
+    assert len(rows) == count and inventory_module._canonical_sha256(rows) == pin
+    if filesystem:
+        return tuple(
+            (row[0], "_read_file_once", *row[2:])
+            if row[0] == "release_io.py" and row[1] == "_read_file_at_parent"
+            else row
+            for row in rows
+            if not (row[0] == "repository/file_custody.py" and row[1] == "_require_batch_ancestry")
+        )
+    moved = [
+        row
+        for row in rows
+        if row[0] == "release_io.py"
+        and row[1] in {"_read_file_once", "_read_file_at_root", "_read_file_at_parent"}
+    ]
+    assert len(moved) == 3 and [row[1] for row in moved] == [
+        "_read_file_once",
+        "_read_file_at_root",
+        "_read_file_at_parent",
+    ]
+    original = []
+    for row in rows:
+        if row == moved[0]:
+            original.extend((item[0], "_read_file_once", *item[2:]) for item in reversed(moved))
+        elif row not in moved and not (
+            row[0] == "repository/file_custody.py"
+            and row[1] == "require_regular_file_custody_batch_unchanged"
+        ):
+            original.append(row)
+    return tuple(original)
+
+
+def _before_lazy_tree_inputs(rows, *, filesystem: bool):
+    """Remove only four deferred-bundle observations or the progress field census."""
+    rows = _before_batch_custody_inputs(rows, filesystem=filesystem)
+    if filesystem:
+        assert len(rows) == 2325 and inventory_module._canonical_sha256(rows) == (
+            "19c4be6753c9aa9dd3c29ec48a5832e16572a8d271130d2088248800bc18b8f9"
+        )
+        rows = tuple(
+            row
+            for row in rows
+            if not (row[0] == "orchestration/development_tree.py" and row[1] == "_checkpoint_names")
+        )
+    count, pin = (
+        (2324, "432b3d221e2eac98d3cbf6990e599c6763c2fcf3319be8dea6f5cdaa26945b1a")
+        if filesystem
+        else (1476, "6add23d0d7037e8a87782ef1aa61044d8ac980e05e461e5dc5d29d8c60138668")
+    )
+    assert len(rows) == count and inventory_module._canonical_sha256(rows) == pin
+    return tuple(
+        row
+        for row in rows
+        if not (
+            row[0] == "orchestration/development_tree.py"
+            and row[1] in {"_prepare_cases", "run_development_tree_plan.require_inputs"}
+            if filesystem
+            else row[0] == "models/development_tree_execution.py"
+        )
+    )
+
+
+def _before_development_tree_inputs(rows, *, filesystem: bool = False):
+    rows = _before_lazy_tree_inputs(rows, filesystem=filesystem)
+    current_count, current_pin = (
+        (2320, "bd8e81aa11f557d10d9a9c65788454526cf0a9df730f8aeea111e236336a425c")
+        if filesystem
+        else (1475, "c9ee47c19cd91059d2f91b8b4a13fba4655c0363f03360975fedb5282efceef4")
+    )
+    assert len(rows) == current_count and inventory_module._canonical_sha256(rows) == current_pin
+    rows = tuple(
+        row
+        for row in rows
+        if row[0] not in {"models/development_tree_plan.py", "orchestration/development_tree.py"}
+    )
+    expected_count, expected_pin = (
+        (2311, "f72408ff1a14ec5de0d3f6eb9ae51c5ba4d5fd756cd7697c4c719070ab2831ec")
+        if filesystem
+        else (1472, "e664df65a011ac509c1ffa0c5e401978d7fe52fa60571b3ce3857dc34bbb331f")
+    )
+    assert len(rows) == expected_count and inventory_module._canonical_sha256(rows) == expected_pin
+    previous = tuple(row for row in rows if row[0] != "repository/development_corpus_tree.py")
+    count, pin = (
+        (2307, "5c34f20a6e00752ac2d65d04cffbebbf660a60370c8faf7814578e3ce6156032")
+        if filesystem
+        else (1470, "4094e1bb4d714c21258aa7bdea23f4f6f62e5d462df5e64b63cad2b8193c6c6b")
+    )
+    assert len(previous) == count and inventory_module._canonical_sha256(previous) == pin
+    return previous
+
+
+def _before_failure_gap_retention(
+    rows: tuple[tuple[str, str, str, str], ...],
+) -> tuple[tuple[str, str, str, str], ...]:
+    """Reconstruct the exact prior population, removing only the reviewed new clock."""
+    rows = _before_development_tree_inputs(rows)
+    assert len(rows) == 1470 and inventory_module._canonical_sha256(rows) == (
+        "4094e1bb4d714c21258aa7bdea23f4f6f62e5d462df5e64b63cad2b8193c6c6b"
+    )
+    for index, row in enumerate(rows):
+        if row[:3] != (
+            "scanners/foundry.py",
+            "_finalize_foundry_repository_suite",
+            "elapsed-clock",
+        ):
+            continue
+        previous = rows[:index] + rows[index + 1 :]
+        if inventory_module._canonical_sha256(previous) == (
+            "c8bcfe62c84c6d94f4fe4d0bd590b986d5161c94cee4c3fe7f76822c0f62fc8f"
+        ):
+            return previous
+    pytest.fail("the complete predecessor population was not exactly reconstructed")
+
+
+_DEBUGGER_LIFECYCLE_SCOPES = {
+    ("scanners/foundry.py", "_FoundryDebuggerProcess.retained_payload"),
+    ("scanners/foundry.py", "_execute_foundry_debugger_trace"),
+    ("scanners/foundry.py", "_charge_selected_test_artifacts"),
+}
+
+
+def test_debugger_lifecycle_retains_every_prior_input_locus(
+    inventory: AutonomyGateInventory,
+) -> None:
+    root = ROOT / "src/mmaudit"
+    filesystem, interactive = inventory_module._external_input_occurrences(root)
+    populations = {
+        "runtime": _before_failure_gap_retention(
+            inventory_module._runtime_execution_occurrences(root)
+        ),
+        "filesystem": _before_development_tree_inputs(filesystem, filesystem=True),
+        "ambient": _before_formal_supervision_environment(
+            inventory_module._direct_environment_occurrences(root)
+        ),
+    }
+    pins = {
+        "runtime": (
+            1458,
+            "04e063bc36eccaef3b4dda1a8c9e80cb9eb110aaa453fa93eacc931db4c2af51",
+            11,
+            "73c4519ef2bc8d2a9c33cc997ef7e1de54d6c2a9f3be2b75d9c3edd414d8bd1e",
+        ),
+        "filesystem": (
+            2302,
+            "6c3e71b049ed7cfa5d224d96d2c5360914ddf82b39bda492f9242bd3dad9c9f4",
+            5,
+            "6c564acf5c046d41d23d5f123d3d511c83f58706fc71ab010b1ddca73cb9a0be",
+        ),
+        "ambient": (
+            576,
+            "64117360b24d4f7bc395aa0e5758b857481fd9148e1576c85a669a750b346168",
+            3,
+            "47dd0d815aa695b8c121c5cba6e128d7b32d41229b332fdfc769188457118184",
+        ),
+    }
+    for kind, rows in populations.items():
+        previous = tuple(row for row in rows if row[:2] not in _DEBUGGER_LIFECYCLE_SCOPES)
+        added = tuple(row for row in rows if row[:2] in _DEBUGGER_LIFECYCLE_SCOPES)
+        count, pin, added_count, added_pin = pins[kind]
+        assert len(previous) == count and inventory_module._canonical_sha256(previous) == pin
+        assert len(added) == added_count and inventory_module._canonical_sha256(added) == added_pin
+    assert not interactive
+    assert inventory.logical_gate_count == 35
+    assert inventory.unsatisfied_gate_count == 29 and inventory.current_manual_gate_count == 15
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+_SEPARATE_DEBUGGER_SCOPES = {
+    ("scanners/solc_capture.py", "OwnedSolcDebuggerLaunch.collect"),
+    ("scanners/solc_capture.py", "prepare_owned_debugger_launch"),
+    ("solidity/solc_capture_worker.py", "debugger_launch_main"),
+}
+
+
+def _before_separate_debugger(
+    rows: tuple[tuple[str, str, str, str], ...],
+) -> tuple[tuple[str, str, str, str], ...]:
+    return tuple(
+        row for row in rows if row[:2] not in _SEPARATE_DEBUGGER_SCOPES | _DEBUGGER_LIFECYCLE_SCOPES
+    )
+
+
+def test_separate_debugger_keeps_every_predecessor_locus_and_gate(
+    inventory: AutonomyGateInventory,
+) -> None:
+    root = ROOT / "src/mmaudit"
+    filesystem, interactive = inventory_module._external_input_occurrences(root)
+    populations = {
+        "runtime": _before_failure_gap_retention(
+            inventory_module._runtime_execution_occurrences(root)
+        ),
+        "filesystem": _before_development_tree_inputs(filesystem, filesystem=True),
+        "ambient": _before_formal_supervision_environment(
+            inventory_module._direct_environment_occurrences(root)
+        ),
+    }
+    pins = {
+        "runtime": (
+            1450,
+            "eb5bca9d53b51bfc7504c874ef378daff2b38a549187409bdf8722b2e497692b",
+            8,
+            "7b321a2c592efab4a20c3dc8a30addeb7b3467f55d75a87735325cf05905fb47",
+        ),
+        "filesystem": (
+            2293,
+            "998198c7b18162b9c1b15d0e041e07fe6913197fa11096199bb476ab9de29565",
+            9,
+            "871dcd12cf8aab13218e7b5413e4a6419652bf1e61812a6c175e170cf4e9e731",
+        ),
+        "ambient": (
+            574,
+            "2ff3319c262a805cd2b066d932ce4e57292f8a68891ca776a3239c8e98d4522e",
+            2,
+            "62f9462368575293dcecf6e1e42f789d0f4513d8392ea0d7f2248192fce8e4fd",
+        ),
+    }
+    for kind, rows in populations.items():
+        previous = _before_separate_debugger(rows)
+        added = tuple(row for row in rows if row[:2] in _SEPARATE_DEBUGGER_SCOPES)
+        count, pin, added_count, added_pin = pins[kind]
+        assert len(previous) == count and inventory_module._canonical_sha256(previous) == pin
+        assert len(added) == added_count and inventory_module._canonical_sha256(added) == added_pin
+    assert not interactive
+    assert (
+        inventory_module._canonical_sha256(inventory_module._entropy_input_occurrences(root))
+        == "0733596cdf7a505c59105dc60a1c8c22a9c65873112b7f45ffc4c47be0aad5b0"
+    )
+    assert inventory.logical_gate_count == 35
+    assert inventory.unsatisfied_gate_count == 29 and inventory.current_manual_gate_count == 15
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+def test_pure_invocation_replay_adds_only_reviewed_gated_runtime_members(inventory):
+    root = ROOT / "src/mmaudit"
+    sources = {
+        s.source_id: s
+        for s in inventory.source_coverage
+        if "models.development_corpus_replay" in s.source_id
+    }
+    assert set(sources) == {
+        "audited-module:models.development_corpus_replay",
+        "runtime-input:models.development_corpus_replay:development_corpus_replay_scope:runtime-method:1",
+    }
+    assert all(s.classification is SourceCoverageClassification.GATE for s in sources.values())
+    assert sources["audited-module:models.development_corpus_replay"].logical_gate_id == (
+        "gate-runtime-package-integrity"
+    )
+    assert (
+        sources[
+            "runtime-input:models.development_corpus_replay:development_corpus_replay_scope:runtime-method:1"
+        ].logical_gate_id
+        == "gate-client-audit-scope"
+    )
+    filesystem, interactive = inventory_module._external_input_occurrences(root)
+    _before_batch_custody_inputs(filesystem, filesystem=True)
+    _before_batch_custody_inputs(
+        inventory_module._runtime_execution_occurrences(root), filesystem=False
+    )
+    assert not interactive
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+def _paths_before_automatic_tree(source_root: Path) -> list[str]:
+    paths = [
+        path.relative_to(source_root).as_posix()
+        for path in inventory_module._runtime_package_paths(source_root)
+    ]
+    assert len(paths) == 367 and inventory_module._canonical_sha256(paths) == (
+        "6c7961edf762436bba1a941d16b13c24732976561fbd738cd7a217c5093af788"
+    )
+    paths = [p for p in paths if p != "scanners/foundry_normalization.py"]
+    assert len(paths) == 366 and inventory_module._canonical_sha256(paths) == (
+        "e2bf0e2179382d4dac3d2ddcf5844d1695e6a60ef3ac6bec6db4cb63e0669479"
+    )
+    paths = [p for p in paths if p != "models/development_corpus_replay.py"]
+    assert len(paths) == 365 and inventory_module._canonical_sha256(paths) == (
+        "332b4e97da003815d4932ba50b83b859e0ef87fe374f5b68202be4c481e6ac7e"
+    )
+    previous = [
+        p
+        for p in paths
+        if p
+        not in {
+            "models/development_tree_plan.py",
+            "models/development_tree_request_bounds.py",
+            "models/development_tree_execution.py",
+            "repository/development_tree_plan.py",
+            "orchestration/development_tree.py",
+        }
+    ]
+    assert len(previous) == 360 and inventory_module._canonical_sha256(previous) == (
+        "bc532e6a4e1b3aba94eeb680a27c3eb14fcf565ae3c31183c5187813263cec41"
+    )
+    return previous
+
+
+def _paths_before_source_partitions(source_root: Path) -> list[str]:
+    paths = _paths_before_automatic_tree(source_root)
+    assert len(paths) == 360 and inventory_module._canonical_sha256(paths) == (
+        "bc532e6a4e1b3aba94eeb680a27c3eb14fcf565ae3c31183c5187813263cec41"
+    )
+    previous = [
+        p
+        for p in paths
+        if p
+        not in {
+            "models/development_corpus_partition.py",
+            "repository/development_corpus_partition.py",
+        }
+    ]
+    assert len(previous) == 358 and inventory_module._canonical_sha256(previous) == (
+        "cc2f165b7e2a30aba303306e7a3d55f1ab5a61e6e1611ea88a6a15ec07b10c79"
+    )
+    return previous
+
+
+def _paths_before_context_sources(source_root: Path) -> list[str]:
+    paths = _paths_before_source_partitions(source_root)
+    assert len(paths) == 358 and inventory_module._canonical_sha256(paths) == (
+        "cc2f165b7e2a30aba303306e7a3d55f1ab5a61e6e1611ea88a6a15ec07b10c79"
+    )
+    previous = [
+        p
+        for p in paths
+        if p
+        not in {
+            "models/development_corpus_coverage.py",
+            "orchestration/development_corpus_coverage.py",
+        }
+    ]
+    assert len(previous) == 356 and inventory_module._canonical_sha256(previous) == (
+        "c4e1b90be1e1ebdbe264ff51bb38ddb817dc73e1891f8c5faa931d1d7e76896b"
+    )
+    return previous
+
+
+def _paths_before_static_call_closure(source_root: Path) -> list[str]:
+    paths = _paths_before_context_sources(source_root)
+    assert len(paths) == 356 and inventory_module._canonical_sha256(paths) == (
+        "c4e1b90be1e1ebdbe264ff51bb38ddb817dc73e1891f8c5faa931d1d7e76896b"
+    )
+    previous = [p for p in paths if p != "solidity/dependency_static_closure.py"]
+    assert len(previous) == 355 and inventory_module._canonical_sha256(previous) == (
+        "b4d23c6c495fdd488109b0c963fc8a93b7a597f309f8e7f0a5de866197ca5cfe"
+    )
+    return previous
+
+
+def _paths_before_constructor_resolution(source_root: Path) -> list[str]:
+    paths = _paths_before_static_call_closure(source_root)
+    assert len(paths) == 355 and inventory_module._canonical_sha256(paths) == (
+        "b4d23c6c495fdd488109b0c963fc8a93b7a597f309f8e7f0a5de866197ca5cfe"
+    )
+    previous = [p for p in paths if p != "solidity/dependency_constructors.py"]
+    assert len(previous) == 354 and inventory_module._canonical_sha256(previous) == (
+        "8f0c339c7d74046a7085d24e2243271d8dc185f7e31a595da0db991e3a7f6cfa"
+    )
+    return previous
+
+
+def _paths_before_syntax_accounting(source_root: Path) -> list[str]:
+    paths = _paths_before_constructor_resolution(source_root)
+    assert len(paths) == 354 and inventory_module._canonical_sha256(paths) == (
+        "8f0c339c7d74046a7085d24e2243271d8dc185f7e31a595da0db991e3a7f6cfa"
+    )
+    previous = [p for p in paths if p != "solidity/dependency_syntax.py"]
+    assert len(previous) == 353 and inventory_module._canonical_sha256(previous) == (
+        "5118043e2419a365c3c0db77cff45fdbb479c927dbdd5926907760668ab3d997"
+    )
+    return previous
+
+
+def _paths_before_argument_resolution(source_root: Path) -> list[str]:
+    paths = _paths_before_syntax_accounting(source_root)
+    assert len(paths) == 353 and inventory_module._canonical_sha256(paths) == (
+        "5118043e2419a365c3c0db77cff45fdbb479c927dbdd5926907760668ab3d997"
+    )
+    previous = [p for p in paths if p != "solidity/dependency_calls.py"]
+    assert len(previous) == 352 and inventory_module._canonical_sha256(previous) == (
+        "5b63716235a8074727b100ca8e69bc7522bbc7b4dcbc9ef1a31fae98e9ffa0b7"
+    )
+    return previous
+
+
+def _paths_before_scoped_resolution(source_root: Path) -> list[str]:
+    paths = _paths_before_argument_resolution(source_root)
+    assert len(paths) == 352 and inventory_module._canonical_sha256(paths) == (
+        "5b63716235a8074727b100ca8e69bc7522bbc7b4dcbc9ef1a31fae98e9ffa0b7"
+    )
+    previous = [p for p in paths if p != "solidity/dependency_scopes.py"]
+    assert len(previous) == 351 and inventory_module._canonical_sha256(previous) == (
+        "049f837aa4dfa0f0df1911bb5a8ceca7b679cb6b61d7abe83679ff345dd0c917"
+    )
+    return previous
+
+
+def _paths_before_development_tree(source_root: Path) -> list[str]:
+    paths = _paths_before_scoped_resolution(source_root)
+    previous = [p for p in paths if p != "repository/development_corpus_tree.py"]
+    assert len(previous) == 350 and inventory_module._canonical_sha256(previous) == (
+        "886b06c01921e5b1ffcd8efab4cd984b565ac29dcb7dc8cd2c3ae22e1dc18c81"
+    )
+    return previous
+
+
+def test_scoped_resolution_is_pure_and_retains_all_predecessor_input_loci(inventory):
+    root = ROOT / "src/mmaudit"
+    assert len(_paths_before_scoped_resolution(root)) == 351
+    filesystem, interactive = inventory_module._external_input_occurrences(root)
+    _before_development_tree_inputs(filesystem, filesystem=True)
+    _before_development_tree_inputs(inventory_module._runtime_execution_occurrences(root))
+    assert not interactive
+    assert not any(
+        row[0] == "solidity/dependency_scopes.py"
+        for row in (
+            *inventory_module._direct_environment_occurrences(root),
+            *inventory_module._entropy_input_occurrences(root),
+        )
+    )
+    sources = {s.source_id: s for s in inventory.source_coverage}
+    assert (
+        sources["audited-module:solidity.dependency_scopes"].logical_gate_id
+        == "gate-runtime-package-integrity"
+    )
+    for name in ("development-scoped-context-evidence", "development-scoped-source-resolution"):
+        assert sources["explicit:" + name].logical_gate_id == "gate-client-audit-scope"
+    assert inventory.logical_gate_count == 35
+    assert inventory.unsatisfied_gate_count == 29 and inventory.current_manual_gate_count == 15
+    assert not inventory.runtime_authority and not inventory.managed_run_ready
+
+
+def test_argument_return_resolution_is_pure_and_keeps_all_predecessor_inputs(inventory):
+    root = ROOT / "src/mmaudit"
+    assert len(_paths_before_argument_resolution(root)) == 352
+    filesystem, interactive = inventory_module._external_input_occurrences(root)
+    assert not interactive
+    for rows, pin in (
+        (filesystem, inventory_module._FROZEN_FILESYSTEM_INPUT_LOCI_SHA256),
+        (
+            inventory_module._runtime_execution_occurrences(root),
+            inventory_module._FROZEN_RUNTIME_EXECUTION_LOCI_SHA256,
+        ),
+        (
+            inventory_module._direct_environment_occurrences(root),
+            inventory_module._FROZEN_DIRECT_ENVIRONMENT_LOCI_SHA256,
+        ),
+        (
+            inventory_module._entropy_input_occurrences(root),
+            inventory_module._FROZEN_ENTROPY_INPUT_LOCI_SHA256,
+        ),
+    ):
+        assert inventory_module._canonical_sha256([list(row) for row in rows]) == pin
+        assert not any(row[0] == "solidity/dependency_calls.py" for row in rows)
+    sources = {s.source_id: s for s in inventory.source_coverage}
+    assert (
+        sources["audited-module:solidity.dependency_calls"].logical_gate_id
+        == "gate-runtime-package-integrity"
+    )
+    for name in ("development-typed-call-evidence", "development-argument-return-resolution"):
+        assert sources["explicit:" + name].logical_gate_id == "gate-client-audit-scope"
+    assert inventory.logical_gate_count == 35
+    assert inventory.unsatisfied_gate_count == 29 and inventory.current_manual_gate_count == 15
+    assert not inventory.runtime_authority and not inventory.managed_run_ready
+
+
+def test_syntax_accounting_is_pure_and_preserves_every_prior_input_boundary(inventory):
+    root = ROOT / "src/mmaudit"
+    assert len(_paths_before_syntax_accounting(root)) == 353
+    filesystem, interactive = inventory_module._external_input_occurrences(root)
+    assert not interactive
+    for rows, pin in (
+        (filesystem, inventory_module._FROZEN_FILESYSTEM_INPUT_LOCI_SHA256),
+        (
+            inventory_module._runtime_execution_occurrences(root),
+            inventory_module._FROZEN_RUNTIME_EXECUTION_LOCI_SHA256,
+        ),
+        (
+            inventory_module._direct_environment_occurrences(root),
+            inventory_module._FROZEN_DIRECT_ENVIRONMENT_LOCI_SHA256,
+        ),
+        (
+            inventory_module._entropy_input_occurrences(root),
+            inventory_module._FROZEN_ENTROPY_INPUT_LOCI_SHA256,
+        ),
+    ):
+        assert inventory_module._canonical_sha256([list(row) for row in rows]) == pin
+        assert not any(row[0] == "solidity/dependency_syntax.py" for row in rows)
+    sources = {s.source_id: s for s in inventory.source_coverage}
+    assert (
+        sources["audited-module:solidity.dependency_syntax"].logical_gate_id
+        == "gate-runtime-package-integrity"
+    )
+    for name in ("development-syntax-census-evidence", "development-source-syntax-accounting"):
+        assert sources["explicit:" + name].logical_gate_id == "gate-client-audit-scope"
+    assert inventory.logical_gate_count == 35 and inventory.unsatisfied_gate_count == 29
+    assert inventory.current_manual_gate_count == 15
+    assert not inventory.runtime_authority and not inventory.managed_run_ready
+
+
+def test_constructor_resolution_is_pure_and_preserves_every_prior_input_boundary(inventory):
+    root = ROOT / "src/mmaudit"
+    assert len(_paths_before_constructor_resolution(root)) == 354
+    filesystem, interactive = inventory_module._external_input_occurrences(root)
+    assert not interactive
+    for rows, pin in (
+        (filesystem, inventory_module._FROZEN_FILESYSTEM_INPUT_LOCI_SHA256),
+        (
+            inventory_module._runtime_execution_occurrences(root),
+            inventory_module._FROZEN_RUNTIME_EXECUTION_LOCI_SHA256,
+        ),
+        (
+            inventory_module._direct_environment_occurrences(root),
+            inventory_module._FROZEN_DIRECT_ENVIRONMENT_LOCI_SHA256,
+        ),
+        (
+            inventory_module._entropy_input_occurrences(root),
+            inventory_module._FROZEN_ENTROPY_INPUT_LOCI_SHA256,
+        ),
+    ):
+        assert inventory_module._canonical_sha256([list(row) for row in rows]) == pin
+        assert not any(row[0] == "solidity/dependency_constructors.py" for row in rows)
+    sources = {s.source_id: s for s in inventory.source_coverage}
+    assert (
+        sources["audited-module:solidity.dependency_constructors"].logical_gate_id
+        == "gate-runtime-package-integrity"
+    )
+    for name in ("development-constructor-evidence", "development-constructor-source-resolution"):
+        assert sources["explicit:" + name].logical_gate_id == "gate-client-audit-scope"
+    assert inventory.logical_gate_count == 35 and inventory.unsatisfied_gate_count == 29
+    assert inventory.current_manual_gate_count == 15
+    assert not inventory.runtime_authority and not inventory.managed_run_ready
+
+
+def test_static_call_closure_preserves_input_boundaries_and_adds_no_authority(inventory):
+    root = ROOT / "src/mmaudit"
+    assert len(_paths_before_static_call_closure(root)) == 355
+    filesystem, interactive = inventory_module._external_input_occurrences(root)
+    assert not interactive
+    for rows, pin in (
+        (filesystem, inventory_module._FROZEN_FILESYSTEM_INPUT_LOCI_SHA256),
+        (
+            inventory_module._runtime_execution_occurrences(root),
+            inventory_module._FROZEN_RUNTIME_EXECUTION_LOCI_SHA256,
+        ),
+        (
+            inventory_module._direct_environment_occurrences(root),
+            inventory_module._FROZEN_DIRECT_ENVIRONMENT_LOCI_SHA256,
+        ),
+        (
+            inventory_module._entropy_input_occurrences(root),
+            inventory_module._FROZEN_ENTROPY_INPUT_LOCI_SHA256,
+        ),
+    ):
+        assert inventory_module._canonical_sha256([list(row) for row in rows]) == pin
+        assert not any(row[0] == "solidity/dependency_static_closure.py" for row in rows)
+    sources = {s.source_id: s for s in inventory.source_coverage}
+    assert (
+        sources["audited-module:solidity.dependency_static_closure"].logical_gate_id
+        == "gate-runtime-package-integrity"
+    )
+    for name in ("development-static-closure-evidence", "development-static-closure-computation"):
+        assert sources["explicit:" + name].logical_gate_id == "gate-client-audit-scope"
+    assert (
+        inventory.logical_gate_count,
+        inventory.unsatisfied_gate_count,
+        inventory.current_manual_gate_count,
+    ) == (35, 29, 15)
+    assert not inventory.runtime_authority and not inventory.managed_run_ready
+
+
+def test_source_partitions_preserve_inputs_and_gate_every_origin_boundary(inventory):
+    root = ROOT / "src/mmaudit"
+    assert len(_paths_before_source_partitions(root)) == 358
+    sources = {s.source_id: s for s in inventory.source_coverage}
+    for name in ("models.development_corpus_partition", "repository.development_corpus_partition"):
+        assert sources["audited-module:" + name].logical_gate_id == "gate-runtime-package-integrity"
+    expected = {
+        "origin",
+        "evidence",
+        "derivation",
+        "replay",
+        "custody",
+        "origin-handoff",
+        "bound-loader",
+        "output",
+    }
+    selected = {k: s for k, s in sources.items() if k.startswith("explicit:development-partition-")}
+    assert set(selected) == {"explicit:development-partition-" + name for name in expected}
+    for name in expected:
+        source = selected["explicit:development-partition-" + name]
+        assert source.classification is SourceCoverageClassification.GATE
+        assert source.logical_gate_id == (
+            "gate-managed-output-provisioning" if name == "output" else "gate-client-audit-scope"
+        )
+    assert inventory.logical_gate_count == 35
+    assert inventory.unsatisfied_gate_count == 29 and inventory.current_manual_gate_count == 15
+    assert not inventory.runtime_authority and not inventory.managed_run_ready
+
+
+def test_context_source_coverage_preserves_prior_inputs_and_gate_dispositions(inventory):
+    root = ROOT / "src/mmaudit"
+    assert len(_paths_before_context_sources(root)) == 356
+    filesystem, interactive = inventory_module._external_input_occurrences(root)
+    assert not interactive
+    for rows, pin in (
+        (filesystem, inventory_module._FROZEN_FILESYSTEM_INPUT_LOCI_SHA256),
+        (
+            inventory_module._runtime_execution_occurrences(root),
+            inventory_module._FROZEN_RUNTIME_EXECUTION_LOCI_SHA256,
+        ),
+        (
+            inventory_module._direct_environment_occurrences(root),
+            inventory_module._FROZEN_DIRECT_ENVIRONMENT_LOCI_SHA256,
+        ),
+        (
+            inventory_module._entropy_input_occurrences(root),
+            inventory_module._FROZEN_ENTROPY_INPUT_LOCI_SHA256,
+        ),
+    ):
+        assert inventory_module._canonical_sha256([list(row) for row in rows]) == pin
+    sources = {s.source_id: s for s in inventory.source_coverage}
+    for name in ("models.development_corpus_coverage", "orchestration.development_corpus_coverage"):
+        assert sources["audited-module:" + name].logical_gate_id == "gate-runtime-package-integrity"
+    for name in (
+        "development-primary-context-partition",
+        "development-tree-primary-coverage-evidence",
+        "development-tree-primary-coverage-computation",
+        "development-tree-primary-coverage-cli",
+    ):
+        assert sources["explicit:" + name].logical_gate_id == "gate-client-audit-scope"
+    assert (
+        sources["explicit:development-tree-primary-coverage-output"].logical_gate_id
+        == "gate-managed-output-provisioning"
+    )
+    assert (
+        inventory.logical_gate_count,
+        inventory.unsatisfied_gate_count,
+        inventory.current_manual_gate_count,
+    ) == (35, 29, 15)
+    assert not inventory.runtime_authority and not inventory.managed_run_ready
+
+
+def test_development_tree_retains_prior_inputs_and_gates_every_new_namespace_boundary(inventory):
+    root = ROOT / "src/mmaudit"
+    assert len(_paths_before_development_tree(root)) == 350
+    filesystem, interactive = inventory_module._external_input_occurrences(root)
+    _before_development_tree_inputs(filesystem, filesystem=True)
+    _before_development_tree_inputs(inventory_module._runtime_execution_occurrences(root))
+    assert not interactive
+    module = "repository/development_corpus_tree.py"
+    assert not any(r[0] == module for r in inventory_module._direct_environment_occurrences(root))
+    assert not any(r[0] == module for r in inventory_module._entropy_input_occurrences(root))
+    sources = [
+        s
+        for s in inventory.source_coverage
+        if "repository.development_corpus_tree" in s.source_id
+        or s.source_id.startswith("explicit:development-tree-")
+    ]
+    coverage_sources = {
+        s.source_id: s.logical_gate_id
+        for s in sources
+        if s.source_id.startswith("explicit:development-tree-primary-coverage-")
+    }
+    assert coverage_sources == {
+        "explicit:development-tree-primary-coverage-cli": "gate-client-audit-scope",
+        "explicit:development-tree-primary-coverage-computation": "gate-client-audit-scope",
+        "explicit:development-tree-primary-coverage-evidence": "gate-client-audit-scope",
+        "explicit:development-tree-primary-coverage-output": "gate-managed-output-provisioning",
+    }
+    previous = [s for s in sources if s.source_id not in coverage_sources]
+    assert len(sources) == 18 and len(previous) == 14
+    assert Counter(s.logical_gate_id for s in previous) == {
+        "gate-client-audit-scope": 12,
+        "gate-runtime-package-integrity": 1,
+        "gate-managed-output-provisioning": 1,
+    }
+    assert all(s.classification is SourceCoverageClassification.GATE for s in sources)
+    assert inventory.unsatisfied_gate_count == 29 and inventory.current_manual_gate_count == 15
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+def _paths_before_dependency_targets(source_root: Path) -> list[str]:
+    paths = _paths_before_development_tree(source_root)
+    assert len(paths) == 350 and inventory_module._canonical_sha256(paths) == (
+        "886b06c01921e5b1ffcd8efab4cd984b565ac29dcb7dc8cd2c3ae22e1dc18c81"
+    )
+    previous = [p for p in paths if p != "solidity/dependency_targets.py"]
+    assert len(previous) == 349 and inventory_module._canonical_sha256(previous) == (
+        "e0625f0f3606f2507201029e31f4ea432ba636afcb952f6e3c6c2045c01ed143"
+    )
+    return previous
+
+
+def test_dependency_targets_add_only_one_pure_gated_module(
+    inventory: AutonomyGateInventory,
+) -> None:
+    root = ROOT / "src/mmaudit"
+    assert len(_paths_before_dependency_targets(root)) == 349
+    filesystem, interactive = inventory_module._external_input_occurrences(root)
+    assert not interactive
+    for population in (
+        filesystem,
+        inventory_module._runtime_execution_occurrences(root),
+        inventory_module._direct_environment_occurrences(root),
+        inventory_module._entropy_input_occurrences(root),
+    ):
+        assert not any(r[0] == "solidity/dependency_targets.py" for r in population)
+    selected = [
+        s
+        for s in inventory.source_coverage
+        if s.source_id == "audited-module:solidity.dependency_targets"
+    ]
+    assert len(selected) == 1 and selected[0].logical_gate_id == "gate-runtime-package-integrity"
+    assert selected[0].classification is SourceCoverageClassification.GATE
+    assert inventory.unsatisfied_gate_count == 29 and inventory.current_manual_gate_count == 15
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+def _paths_before_dependency_closure(source_root: Path) -> list[str]:
+    paths = _paths_before_dependency_targets(source_root)
+    assert len(paths) == 349 and inventory_module._canonical_sha256(paths) == (
+        "e0625f0f3606f2507201029e31f4ea432ba636afcb952f6e3c6c2045c01ed143"
+    )
+    previous = [p for p in paths if p != "solidity/dependency_closure.py"]
+    assert len(previous) == 348 and inventory_module._canonical_sha256(previous) == (
+        "12b1954bae7c9a797d3a4510ebb92f572db7a3b014fcbfab6877d80cc46f27fc"
+    )
+    return previous
+
+
+def test_dependency_closure_adds_only_a_pure_gated_module(inventory: AutonomyGateInventory) -> None:
+    root = ROOT / "src/mmaudit"
+    assert len(_paths_before_dependency_closure(root)) == 348
+    filesystem, interactive = inventory_module._external_input_occurrences(root)
+    assert not interactive
+    for population in (
+        filesystem,
+        inventory_module._runtime_execution_occurrences(root),
+        inventory_module._direct_environment_occurrences(root),
+        inventory_module._entropy_input_occurrences(root),
+    ):
+        assert not any(r[0] == "solidity/dependency_closure.py" for r in population)
+    selected = [
+        s
+        for s in inventory.source_coverage
+        if s.source_id == "audited-module:solidity.dependency_closure"
+    ]
+    assert len(selected) == 1 and selected[0].logical_gate_id == "gate-runtime-package-integrity"
+    assert selected[0].classification is SourceCoverageClassification.GATE
+    assert inventory.unsatisfied_gate_count == 29 and inventory.current_manual_gate_count == 15
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+def _paths_before_debugger_parser(source_root: Path) -> list[str]:
+    paths = _paths_before_dependency_closure(source_root)
+    assert paths.count("scanners/foundry_debugger.py") == 1
+    previous = [p for p in paths if p != "scanners/foundry_debugger.py"]
+    assert len(previous) == 347
+    assert inventory_module._canonical_sha256(previous) == (
+        "31553b27e16fcecf4766e596406b54b32a74ef632730a2350562cd8e3dccb000"
+    )
+    return previous
+
+
+def test_debugger_parser_retains_all_predecessor_inputs_and_gates(
+    inventory: AutonomyGateInventory,
+) -> None:
+    root = ROOT / "src/mmaudit"
+    assert len(_paths_before_debugger_parser(root)) == 347
+    module = "scanners/foundry_debugger.py"
+    filesystem, interactive = inventory_module._external_input_occurrences(root)
+    assert not interactive
+    assert not any(
+        r[0] == module
+        for rows in (
+            filesystem,
+            inventory_module._direct_environment_occurrences(root),
+            inventory_module._entropy_input_occurrences(root),
+        )
+        for r in rows
+    )
+    runtime = _before_separate_debugger(
+        _before_failure_gap_retention(inventory_module._runtime_execution_occurrences(root))
+    )
+    previous = tuple(r for r in runtime if r[0] != module)
+    assert len(previous) == 1442
+    assert inventory_module._canonical_sha256(previous) == (
+        "580b4550a6c71777b9745d8730affa3e21586d1d3fdb1a7e8f8f32599e39f9e7"
+    )
+    added = [r for r in runtime if r[0] == module]
+    assert len(added) == 8
+    assert all(r[1:3] == ("_compiler_units", "process-observation") for r in added)
+    assert Counter(r[3] for r in added) == Counter(
+        {
+            ast.dump(ast.parse("call.stdin", mode="eval").body): 4,
+            ast.dump(ast.parse("call.stdout", mode="eval").body): 3,
+            ast.dump(ast.parse("call.stderr", mode="eval").body): 1,
+        }
+    )
+    selected = [s for s in inventory.source_coverage if "scanners.foundry_debugger" in s.source_id]
+    assert len(selected) == 9 and all(
+        s.classification is SourceCoverageClassification.GATE for s in selected
+    )
+    assert Counter(s.logical_gate_id for s in selected) == {
+        "gate-runtime-package-integrity": 1,
+        "gate-full-quality-analysis": 8,
+    }
+    assert inventory.logical_gate_count == 35
+    assert inventory.unsatisfied_gate_count == 29 and inventory.current_manual_gate_count == 15
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+def _paths_before_compiler_capture(source_root: Path) -> list[str]:
+    paths = _paths_before_debugger_parser(source_root)
+    assert all(paths.count(path) == 1 for path in _CAPTURE_MODULES)
+    previous = [path for path in paths if path not in _CAPTURE_MODULES]
+    assert len(previous) == 345
+    assert inventory_module._canonical_sha256(previous) == (
+        "c1b1c68d0441e446d76dd93e9ea584f59e98cce567e1e8f1e15b6bcfa5cce25d"
+    )
+    return previous
+
+
+def _environment_before_compiler_capture(
+    source_root: Path,
+) -> tuple[tuple[str, str, str, str], ...]:
+    rows = _before_separate_debugger(
+        _before_formal_supervision_environment(
+            inventory_module._direct_environment_occurrences(source_root)
+        )
+    )
+    previous = tuple(row for row in rows if row[0] not in _CAPTURE_MODULES)
+    assert len(rows) - len(previous) == 5 and len(previous) == 569
+    assert inventory_module._canonical_sha256(previous) == (
+        "fe58c74364e79742296d3541671af62d390523ca30a8763aedd2c4608e22b559"
+    )
+    return previous
+
+
+def _external_before_compiler_capture(
+    source_root: Path,
+) -> tuple[tuple[tuple[str, str, str, str], ...], tuple[tuple[str, str, str], ...]]:
+    filesystem, interactive = inventory_module._external_input_occurrences(source_root)
+    filesystem = _before_separate_debugger(
+        _before_development_tree_inputs(filesystem, filesystem=True)
+    )
+    owner_additions = {
+        # Frozen predecessor spelling, independent of the host's ast.dump defaults.
+        "Call(func=Attribute(value=Name(id='trusted_root', ctx=Load()), attr='resolve', "
+        "ctx=Load()), keywords=[keyword(arg='strict', value=Constant(value=True))])",
+        "Call(func=Attribute(value=Name(id='trusted_root', ctx=Load()), attr='is_dir', "
+        "ctx=Load()))",
+    }
+    new_reader = (
+        "Call(func=Attribute(value=Name(id='path', ctx=Load()), attr='read_text', "
+        "ctx=Load()), keywords=[keyword(arg='encoding', value=Constant(value='utf-8'))])"
+    )
+    previous = []
+    removed: Counter[str] = Counter()
+    for row in filesystem:
+        path, scope, _, expression = row
+        if path in _CAPTURE_MODULES:
+            removed["capture"] += 1
+        elif (
+            path == "scanners/foundry.py"
+            and scope == "_execute_foundry_statement_coverage"
+            and expression in owner_additions
+        ):
+            removed[expression] += 1
+        elif (
+            path == "orchestration/autonomy_gate_inventory.py"
+            and scope == "_runtime_execution_occurrences"
+            and expression == new_reader
+        ):
+            removed["reader"] += 1
+        else:
+            previous.append(row)
+    assert removed == Counter({"capture": 44, "reader": 1, **dict.fromkeys(owner_additions, 1)})
+    assert len(previous) == 2246
+    assert inventory_module._canonical_sha256(previous) == (
+        "6553d887282b7fd2a4810a226562597a7d93b0ce88ed1ea854813d8deb6d05fb"
+    )
+    return tuple(previous), interactive
+
+
+def _paths_before_compiler_source(source_root: Path) -> list[str]:
+    """Retain every predecessor module while adding a pure exact byte-map helper."""
+    paths = _paths_before_compiler_capture(source_root)
+    assert paths.count("solidity/compiler_source.py") == 1
+    previous = [p for p in paths if p != "solidity/compiler_source.py"]
+    assert inventory_module._canonical_sha256(previous) == (
+        "02daf640f0a110a7501ae278a9ee7e6ee27fdcfc1af9ca0ed157773c60047e57"
+    )
+    return previous
+
+
+def test_compiler_source_map_adds_no_external_input_or_authority(
+    inventory: AutonomyGateInventory,
+) -> None:
+    root = ROOT / "src/mmaudit"
+    assert len(_paths_before_compiler_source(root)) == 344
+    module = "solidity/compiler_source.py"
+    filesystem, interactive = inventory_module._external_input_occurrences(root)
+    assert not interactive
+    assert not any(
+        r[0] == module
+        for rows in (
+            filesystem,
+            inventory_module._direct_environment_occurrences(root),
+            inventory_module._entropy_input_occurrences(root),
+        )
+        for r in rows
+    )
+    selected = [s for s in inventory.source_coverage if "solidity.compiler_source" in s.source_id]
+    assert len(selected) == 1 and selected[0].logical_gate_id == "gate-runtime-package-integrity"
+    assert selected[0].classification is SourceCoverageClassification.GATE
+    assert inventory.unsatisfied_gate_count == 29 and inventory.current_manual_gate_count == 15
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+def _paths_before_property_reachability(source_root: Path) -> list[str]:
+    """Account for the pure compiler-reference module without dropping predecessor inputs."""
+    paths = _paths_before_compiler_source(source_root)
+    assert paths.count("solidity/property_reachability.py") == 1
+    previous = [p for p in paths if p != "solidity/property_reachability.py"]
+    assert inventory_module._canonical_sha256(previous) == (
+        "ed86bd63d3136be0e9974575084e3ec960db8a9379b967fa9e091841ce4a95e9"
+    )
+    return previous
+
+
+def test_compiler_property_reachability_adds_no_external_input_or_authority(
+    inventory: AutonomyGateInventory,
+) -> None:
+    root = ROOT / "src/mmaudit"
+    assert len(_paths_before_property_reachability(root)) == 343
+    module = "solidity/property_reachability.py"
+    filesystem, interactive = inventory_module._external_input_occurrences(root)
+    assert not interactive
+    assert not any(
+        r[0] == module
+        for rows in (
+            filesystem,
+            inventory_module._direct_environment_occurrences(root),
+            inventory_module._entropy_input_occurrences(root),
+        )
+        for r in rows
+    )
+    selected = [
+        s for s in inventory.source_coverage if "solidity.property_reachability" in s.source_id
+    ]
+    assert len(selected) == 1 and selected[0].logical_gate_id == "gate-runtime-package-integrity"
+    assert selected[0].classification is SourceCoverageClassification.GATE
+    assert inventory.unsatisfied_gate_count == 29 and inventory.current_manual_gate_count == 15
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+def _paths_before_mutation_reconstruction(source_root: Path) -> list[str]:
+    """Retain every predecessor module while reviewing one explicit new input consumer."""
+    paths = _paths_before_property_reachability(source_root)
+    assert paths.count("orchestration/mutation_reconstruction.py") == 1
+    previous = [p for p in paths if p != "orchestration/mutation_reconstruction.py"]
+    assert inventory_module._canonical_sha256(previous) == (
+        "4f23157e2315cab0d9b99b1bfa5fd7609bea851a7c662d37a926f699f61e350c"
+    )
+    return previous
+
+
+def test_mutation_reconstruction_preserves_all_original_input_loci_and_authority(
+    inventory: AutonomyGateInventory,
+) -> None:
+    root = ROOT / "src/mmaudit"
+    module = "orchestration/mutation_reconstruction.py"
+    assert len(_paths_before_mutation_reconstruction(root)) == 342
+    filesystem, interactive = _external_before_compiler_capture(root)
+    environment = inventory_module._direct_environment_occurrences(root)
+    entropy = inventory_module._entropy_input_occurrences(root)
+    assert inventory_module._canonical_sha256([list(r) for r in filesystem if r[0] != module]) == (
+        "695ae0b807f00cb0c507e32da33d6887f4641cb273a4ef6b7811b08a17a292bc"
+    )
+    assert len([r for r in filesystem if r[0] == module]) == 7
+    assert not interactive and not any(r[0] == module for r in (*environment, *entropy))
+    selected = [
+        s
+        for s in inventory.source_coverage
+        if "orchestration.mutation_reconstruction" in s.source_id
+    ]
+    assert len(selected) == 12
+    assert all(s.classification is SourceCoverageClassification.GATE for s in selected)
+    assert {s.logical_gate_id for s in selected} == {
+        "gate-runtime-package-integrity",
+        "gate-benchmark-evidence-authority",
+    }
+    assert inventory.unsatisfied_gate_count == 29 and inventory.current_manual_gate_count == 15
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+def _paths_before_mutation_pipeline(source_root: Path) -> list[str]:
+    """Keep the original pipeline predecessor independent of later reconstruction inputs."""
+    paths = _paths_before_mutation_reconstruction(source_root)
+    assert paths.count("orchestration/mutation_pipeline.py") == 1
+    previous = [p for p in paths if p != "orchestration/mutation_pipeline.py"]
+    assert inventory_module._canonical_sha256(previous) == (
+        "d586d605e0862b828922e3d3e7d4785e742d48e94184c3ee5bfa996da866098e"
+    )
+    return previous
+
+
+def test_mutation_pipeline_additions_preserve_every_original_input_and_gate(
+    inventory: AutonomyGateInventory,
+) -> None:
+    root = ROOT / "src/mmaudit"
+    module = "orchestration/mutation_pipeline.py"
+    assert len(_paths_before_mutation_pipeline(root)) == 341
+    filesystem, interactive = _external_before_compiler_capture(root)
+    entropy = inventory_module._entropy_input_occurrences(root)
+    assert inventory_module._canonical_sha256(
+        [
+            list(r)
+            for r in filesystem
+            if r[0] not in {module, "orchestration/mutation_reconstruction.py"}
+        ]
+    ) == ("997d5e65632eaabb8a55cd4933d456f689a60e4d372cce9813d7c7d9fa30178a")
+    assert inventory_module._canonical_sha256(
+        [
+            list(r)
+            for r in entropy
+            if r[0] not in {module, "orchestration/mutation_reconstruction.py"}
+        ]
+    ) == ("556dcc2d348b2b7bc3c6c3f11f8828edfb6e1aac0e1c5827b70528cbe32e3836")
+    assert len([r for r in filesystem if r[0] == module]) == 6
+    assert [(r[1], r[2]) for r in entropy if r[0] == module] == [("_run_project", "uuid.uuid4")]
+    sources = [
+        s for s in inventory.source_coverage if "orchestration.mutation_pipeline" in s.source_id
+    ]
+    assert len(sources) == 17 and all(
+        s.classification is SourceCoverageClassification.GATE for s in sources
+    )
+    assert {s.logical_gate_id for s in sources} == {
+        "gate-runtime-package-integrity",
+        "gate-benchmark-evidence-authority",
+    }
+    assert not interactive and inventory.unsatisfied_gate_count == 29
+    assert not inventory.runtime_authority and not inventory.managed_run_ready
+
+
+def _paths_before_mutation_discovery(source_root: Path) -> list[str]:
+    """Preserve the exact 340-module universe before compiler-bound discovery."""
+    paths = _paths_before_mutation_pipeline(source_root)
+    addition = "benchmark/mutation_discovery.py"
+    assert paths.count(addition) == 1
+    previous = [path for path in paths if path != addition]
+    assert inventory_module._canonical_sha256(previous) == (
+        "e08d45663c36a386d7062b4f1e049f901853c18ded8507bdc9efafd7f1d5f644"
+    )
+    return previous
+
+
+def test_mutation_discovery_adds_only_one_gated_pure_module(
+    inventory: AutonomyGateInventory,
+) -> None:
+    root = ROOT / "src/mmaudit"
+    assert len(_paths_before_mutation_discovery(root)) == 340
+    filesystem, interactive = inventory_module._external_input_occurrences(root)
+    assert not any(
+        row[0] == "benchmark/mutation_discovery.py"
+        for rows in (
+            inventory_module._direct_environment_occurrences(root),
+            filesystem,
+            interactive,
+            inventory_module._entropy_input_occurrences(root),
+        )
+        for row in rows
+    )
+    source = next(
+        item
+        for item in inventory.source_coverage
+        if item.source_id == "audited-module:benchmark.mutation_discovery"
+    )
+    assert source.classification is SourceCoverageClassification.GATE
+    assert source.logical_gate_id == "gate-runtime-package-integrity"
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+def _paths_before_mutation_portfolio(source_root: Path) -> list[str]:
+    """Remove exactly the reviewed addition, preserving the frozen earlier universe."""
+    paths = _paths_before_mutation_discovery(source_root)
+    addition = "benchmark/mutation_portfolio.py"
+    assert paths.count(addition) == 1
+    previous = [path for path in paths if path != addition]
+    assert inventory_module._canonical_sha256(previous) == (
+        "3484a6cc2969a7a71c5f57225e98d106fb5345b7bfbca538f0a74055dc6b1fba"
+    )
+    return previous
+
+
+def test_mutation_portfolio_adds_one_gated_module_without_external_input(
+    inventory: AutonomyGateInventory,
+) -> None:
+    root = ROOT / "src/mmaudit"
+    assert len(_paths_before_mutation_portfolio(root)) == 339
+    filesystem, interactive = inventory_module._external_input_occurrences(root)
+    assert not any(
+        row[0] == "benchmark/mutation_portfolio.py"
+        for rows in (
+            inventory_module._direct_environment_occurrences(root),
+            filesystem,
+            interactive,
+            inventory_module._entropy_input_occurrences(root),
+        )
+        for row in rows
+    )
+    source = next(
+        item
+        for item in inventory.source_coverage
+        if item.source_id == "audited-module:benchmark.mutation_portfolio"
+    )
+    assert source.classification is SourceCoverageClassification.GATE
+    assert source.logical_gate_id == "gate-runtime-package-integrity"
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+def _paths_before_provisional_findings(source_root: Path) -> list[str]:
+    """Reconstruct the exact previous path universe after only this bounded addition."""
+
+    paths = _paths_before_mutation_portfolio(source_root)
+    additions = {"models/provisional_findings.py", "orchestration/provisional_findings.py"}
+    assert all(paths.count(path) == 1 for path in additions)
+    previous = [path for path in paths if path not in additions]
+    assert inventory_module._canonical_sha256(previous) == (
+        "82b060558b143698e00958cd8e7fddcb6cb61e78c50d84fc1240fa8087adb65f"
+    )
+    return previous
+
+
+def _paths_before_legacy_cost_allowance(source_root: Path) -> list[str]:
+    """Keep older temporal comparisons on their exact baseline, not newly added modules."""
+
+    paths = _paths_before_provisional_findings(source_root)
+    addition = "models/legacy_cost_allowance.py"
+    assert paths.count(addition) == 1
+    previous = [path for path in paths if path != addition]
+    assert inventory_module._canonical_sha256(previous) == (
+        "4b2e21b7ca0329c7cfcfa81deec32305c08f25f369a656e16a9fee49b0b9b719"
+    )
+    return previous
+
+
+def test_provisional_findings_add_only_two_gated_modules_without_external_input(
+    inventory: AutonomyGateInventory,
+) -> None:
+    root = ROOT / "src/mmaudit"
+    assert len(_paths_before_provisional_findings(root)) == 337
+    additions = {"models/provisional_findings.py", "orchestration/provisional_findings.py"}
+    environment = inventory_module._direct_environment_occurrences(root)
+    filesystem, interactive = inventory_module._external_input_occurrences(root)
+    entropy = inventory_module._entropy_input_occurrences(root)
+    assert not any(
+        row[0] in additions
+        for rows in (environment, filesystem, interactive, entropy)
+        for row in rows
+    )
+    sources = {item.source_id: item for item in inventory.source_coverage}
+    for path in additions:
+        source_id = "audited-module:" + path.removesuffix(".py").replace("/", ".")
+        source = sources[source_id]
+        assert source.source_path == "src/mmaudit/" + path
+        assert source.classification is SourceCoverageClassification.GATE
+        assert source.source_kind is CompletionInputSourceKind.AUDITED_MODULE_UNIVERSE
+        assert source.source_occurrence_count == 1
+        assert source.logical_gate_id == "gate-runtime-package-integrity"
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+def test_legacy_cost_allowance_adds_one_gated_module_and_no_external_input(
+    inventory: AutonomyGateInventory,
+) -> None:
+    root = ROOT / "src/mmaudit"
+    assert len(_paths_before_legacy_cost_allowance(root)) == 336
+    addition = "models/legacy_cost_allowance.py"
+    environment = inventory_module._direct_environment_occurrences(root)
+    filesystem, interactive = inventory_module._external_input_occurrences(root)
+    entropy = inventory_module._entropy_input_occurrences(root)
+    assert not any(
+        row[0] == addition
+        for rows in (environment, filesystem, interactive, entropy)
+        for row in rows
+    )
+    source = next(
+        item
+        for item in inventory.source_coverage
+        if item.source_id == "audited-module:models.legacy_cost_allowance"
+    )
+    assert source.classification is SourceCoverageClassification.GATE
+    assert source.logical_gate_id == "gate-runtime-package-integrity"
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
 
 
 @pytest.fixture(scope="module")
@@ -42,11 +1455,214 @@ def inventory() -> AutonomyGateInventory:
     return build_autonomy_gate_inventory(repository_root=ROOT)
 
 
+@pytest.mark.parametrize(
+    "parameter", ("refresh_endpoint_inventory", "primary_judge_endpoint", "replay_judge_endpoint")
+)
+def test_three_role_refresh_inputs_remain_unsatisfied_model_authority_gates(
+    inventory: AutonomyGateInventory, parameter: str
+) -> None:
+    source = next(
+        item
+        for item in inventory.source_coverage
+        if item.source_id
+        == f"completion-entrypoint:models_emit_selection_plan_reactivation:{parameter}"
+    )
+    assert source.classification is SourceCoverageClassification.GATE
+    assert source.logical_gate_id == "gate-autonomous-model-authority"
+    assert inventory.runtime_authority is False
+    assert inventory.managed_run_ready is False
+
+
+@pytest.mark.parametrize(
+    "anchor",
+    (
+        "policy",
+        "contract",
+        "request-binding",
+        "budget-consumer",
+        "cost-transition",
+        "attempt-evidence",
+        "usage-binding",
+        "planning-envelope",
+        "rate-projection",
+    ),
+)
+def test_operator_reservation_consumers_remain_cost_gates_without_runtime_authority(
+    inventory: AutonomyGateInventory, anchor: str
+) -> None:
+    source = next(
+        item
+        for item in inventory.source_coverage
+        if item.source_id == f"explicit:operator-reservation-{anchor}"
+    )
+    assert source.classification is SourceCoverageClassification.GATE
+    assert source.logical_gate_id == "gate-cost-ledger-provisioning"
+    assert inventory.runtime_authority is False and inventory.managed_run_ready is False
+
+
+def test_cost_relaxation_cli_is_a_cost_gate_without_selection_authority(
+    inventory: AutonomyGateInventory,
+) -> None:
+    source = next(
+        item
+        for item in inventory.source_coverage
+        if item.source_id
+        == "completion-entrypoint:models_emit_selection_plan_reactivation:reserve_then_reconcile_costs"
+    )
+    assert source.classification is SourceCoverageClassification.GATE
+    assert source.logical_gate_id == "gate-cost-ledger-provisioning"
+    assert inventory.runtime_authority is False and inventory.managed_run_ready is False
+
+
+def test_endpoint_trial_cli_is_a_selection_gate_without_paid_or_adoption_authority(
+    inventory: AutonomyGateInventory,
+) -> None:
+    source = next(
+        item
+        for item in inventory.source_coverage
+        if item.source_id
+        == (
+            "completion-entrypoint:models_emit_selection_plan_reactivation:candidate_endpoint_trial"
+        )
+    )
+    assert source.classification is SourceCoverageClassification.GATE
+    assert source.logical_gate_id == "gate-autonomous-model-authority"
+    assert inventory.runtime_authority is False and inventory.managed_run_ready is False
+
+
+def test_property_compiler_inputs_preserve_predecessor_observations_and_toolchain_gate(
+    inventory: AutonomyGateInventory,
+) -> None:
+    root = ROOT / "src/mmaudit"
+    filesystem, interactive = inventory_module._external_input_occurrences(root)
+    assert not interactive
+    for family, rows in (
+        ("environment", inventory_module._direct_environment_occurrences(root)),
+        ("filesystem", filesystem),
+        ("runtime", inventory_module._runtime_execution_occurrences(root)),
+    ):
+        _before_property_compiler_inputs(rows, family=family)
+    scope = "solidity.formal:_compiledpropertytooladapter."
+    expected = {
+        f"direct-env-ast:{scope}dependencies:{kind}:1"
+        for kind in ("environment-call", "path-resolution")
+    }
+    for method, count in (
+        ("dependencies", 1),
+        ("prepare_workspace_with_dependencies", 5),
+        ("build_command_with_dependencies", 1),
+        ("validate_pre_execution_inputs", 4),
+    ):
+        expected.update(f"filesystem-input:{scope}{method}:{i}" for i in range(1, count + 1))
+    expected.update(
+        f"filesystem-input:solidity.formal:_observe_property_compiler:{i}" for i in range(1, 4)
+    )
+    runtime = f"runtime-input:{scope}prepare_workspace_with_dependencies:"
+    expected.add(f"{runtime}descriptor-io:1")
+    expected.update(f"{runtime}runtime-method:{i}" for i in range(1, 5))
+    selected = [
+        row
+        for row in inventory.source_coverage
+        if scope in row.source_id or "solidity.formal:_observe_property_compiler:" in row.source_id
+    ]
+    assert len(selected) == 21
+    assert {row.source_id for row in selected} == expected
+    assert all(row.classification is SourceCoverageClassification.GATE for row in selected)
+    assert all(row.logical_gate_id == "gate-managed-toolchain-bundle" for row in selected)
+    gate = next(
+        gate for gate in inventory.logical_gates if gate.gate_id == "gate-managed-toolchain-bundle"
+    )
+    assert expected <= set(gate.source_ids)
+    assert (
+        inventory.logical_gate_count,
+        inventory.unsatisfied_gate_count,
+        inventory.current_manual_gate_count,
+    ) == (35, 29, 15)
+    assert not inventory.runtime_authority and not inventory.managed_run_ready
+
+
+def test_source_binding_batch_keeps_every_predecessor_input_and_gate(inventory):
+    root = ROOT / "src/mmaudit"
+    filesystem, interactive = inventory_module._external_input_occurrences(root)
+    assert not interactive
+    _before_source_binding_batch_inputs(filesystem, filesystem=True)
+    _before_source_binding_batch_inputs(
+        inventory_module._runtime_execution_occurrences(root), filesystem=False
+    )
+    expected = {
+        "filesystem-input:release_io:revalidate_evidence_file_bindings:1",
+        "filesystem-input:release_io:_require_evidence_binding_batch_root:1",
+        "filesystem-input:release_io:_require_evidence_binding_batch_root:2",
+        "filesystem-input:release_io:_require_evidence_binding_batch_root:3",
+        "runtime-input:release_io:revalidate_evidence_file_bindings:descriptor-io:1",
+    }
+    rows = [item for item in inventory.source_coverage if item.source_id in expected]
+    assert {item.source_id for item in rows} == expected
+    assert all(item.classification is SourceCoverageClassification.GATE for item in rows)
+    assert not inventory.runtime_authority and not inventory.managed_run_ready
+
+
+def test_formal_supervision_retains_predecessor_observations_and_existing_gates(inventory):
+    root = ROOT / "src/mmaudit"
+    filesystem, interactive = inventory_module._external_input_occurrences(root)
+    assert not interactive
+    for rows, is_filesystem, count, pin in (
+        (
+            filesystem,
+            True,
+            2329,
+            "dcdd5f89556528ae1220db1ce5620f49e59f5c8ae94afbc38e80392fc632e43f",
+        ),
+        (
+            inventory_module._runtime_execution_occurrences(root),
+            False,
+            1482,
+            "d07e1e1d0a2eb35c098f33fbb7dbca0b29ed89b7e9a594bd0b5e7218142cbe3a",
+        ),
+    ):
+        previous = _before_formal_supervision_inputs(rows, filesystem=is_filesystem)
+        assert len(previous) == count and inventory_module._canonical_sha256(previous) == pin
+    environment = _before_property_compiler_inputs(
+        inventory_module._direct_environment_occurrences(root), family="environment"
+    )
+    added = [
+        row
+        for row in environment
+        if row[:3] == ("solidity/formal.py", "_limit_process", "host-platform")
+    ]
+    assert len(added) == 2
+    assert all(
+        row[3] == "Attribute(value=Name(id='sys', ctx=Load()), attr='platform', ctx=Load())"
+        for row in added
+    )
+    previous = tuple(row for row in environment if row not in added)
+    assert len(previous) == 579 and inventory_module._canonical_sha256(previous) == (
+        "ee9d0257948a0542836df12f15cda1044402227eb9645ac5b07ecf05eb05b893"
+    )
+    selected = [s for s in inventory.source_coverage if "solidity.formal:" in s.source_id]
+    assert selected and all(s.classification is SourceCoverageClassification.GATE for s in selected)
+    assert all(
+        s.logical_gate_id
+        in {
+            "gate-formal-analysis",
+            "gate-managed-toolchain-bundle",
+            "gate-provider-secret-transport",
+        }
+        for s in selected
+    )
+    assert (
+        inventory.logical_gate_count,
+        inventory.unsatisfied_gate_count,
+        inventory.current_manual_gate_count,
+    ) == (35, 29, 15)
+    assert not inventory.runtime_authority and not inventory.managed_run_ready
+
+
 def test_inventory_freezes_the_exact_recursive_source_universe(
     inventory: AutonomyGateInventory,
 ) -> None:
-    assert inventory.source_count == 4313
-    assert inventory.source_occurrence_count == 4316
+    assert inventory.source_count == 6160
+    assert inventory.source_occurrence_count == 6163
     assert inventory.audit_config_leaf_locator_count == 513
     assert inventory.audit_config_leaf_occurrence_count == 516
     assert inventory.audit_config_shared_locator_count == 3
@@ -56,7 +1672,7 @@ def test_inventory_freezes_the_exact_recursive_source_universe(
     assert inventory.cli_run_parameter_count == 53
     assert inventory.pipeline_init_parameter_count == 29
     assert inventory.pipeline_run_parameter_count == 16
-    assert inventory.completion_entrypoint_parameter_count == 355
+    assert inventory.completion_entrypoint_parameter_count == 360
     assert {kind.value: count for kind, count in inventory.source_kind_counts.items()} == {
         "AUDIT_CONFIG_LEAF": 513,
         "AUDIT_RUN_OPTION_LEAF": 16,
@@ -65,47 +1681,56 @@ def test_inventory_freezes_the_exact_recursive_source_universe(
         "CLI_RUN_PARAMETER": 53,
         "PIPELINE_INIT_PARAMETER": 29,
         "PIPELINE_RUN_PARAMETER": 16,
-        "COMPLETION_ENTRYPOINT_PARAMETER": 355,
-        "DIRECT_ENVIRONMENT_INPUT": 555,
-        "ENTROPY_INPUT": 19,
-        "AUDITED_MODULE_UNIVERSE": 316,
-        "EXPLICIT_NON_FIELD_GATE": 2348,
+        "COMPLETION_ENTRYPOINT_PARAMETER": 360,
+        "DIRECT_ENVIRONMENT_INPUT": 602,
+        "ENTROPY_INPUT": 21,
+        "RUNTIME_EXECUTION_INPUT": 1493,
+        "AUDITED_MODULE_UNIVERSE": 367,
+        "EXPLICIT_NON_FIELD_GATE": 2597,
         "REQUIRED_MISSING_GATE": 14,
     }
     assert Counter(source.classification for source in inventory.source_coverage) == {
-        SourceCoverageClassification.GATE: 4261,
+        SourceCoverageClassification.GATE: 6108,
         SourceCoverageClassification.NON_GATING_CONTROL: 52,
     }
     assert {item.value for item in SourceCoverageClassification} == {
         "GATE",
         "NON_GATING_CONTROL",
     }
-    assert sum(":wall-clock:" in source.source_path for source in inventory.source_coverage) == 106
+    portfolio = next(
+        item
+        for item in inventory.source_coverage
+        if item.source_id == "audited-module:benchmark.mutation_portfolio"
+    )
+    assert portfolio.source_path == "src/mmaudit/benchmark/mutation_portfolio.py"
+    assert portfolio.logical_gate_id == "gate-runtime-package-integrity"
+    assert portfolio.classification is SourceCoverageClassification.GATE
+    assert sum(":wall-clock:" in source.source_path for source in inventory.source_coverage) == 108
     assert (
         sum(":working-directory:" in source.source_path for source in inventory.source_coverage)
-        == 115
+        == 117
     )
     assert (
         sum(":process-identity" in source.source_path for source in inventory.source_coverage)
-        == 113
+        == 140
     )
     assert (
         sum(
             source.source_kind is CompletionInputSourceKind.ENTROPY_INPUT
             for source in inventory.source_coverage
         )
-        == 19
+        == 21
     )
     assert (
-        sum(":content-read:" in source.source_path for source in inventory.source_coverage) == 312
+        sum(":content-read:" in source.source_path for source in inventory.source_coverage) == 322
     )
     assert (
         sum(":directory-enumeration:" in source.source_path for source in inventory.source_coverage)
-        == 85
+        == 104  # One bounded checkpoint namespace census.
     )
     assert (
         sum(":metadata-observation:" in source.source_path for source in inventory.source_coverage)
-        == 1825
+        == 1921  # Thirteen additional pinned property-compiler path and descriptor observations.
     )
     assert all(
         source.classification is SourceCoverageClassification.GATE
@@ -119,6 +1744,7 @@ def test_inventory_freezes_the_exact_recursive_source_universe(
             CompletionInputSourceKind.PIPELINE_INIT_PARAMETER,
             CompletionInputSourceKind.PIPELINE_RUN_PARAMETER,
             CompletionInputSourceKind.DIRECT_ENVIRONMENT_INPUT,
+            CompletionInputSourceKind.RUNTIME_EXECUTION_INPUT,
             CompletionInputSourceKind.AUDITED_MODULE_UNIVERSE,
             CompletionInputSourceKind.EXPLICIT_NON_FIELD_GATE,
             CompletionInputSourceKind.REQUIRED_MISSING_GATE,
@@ -144,10 +1770,211 @@ def test_authenticated_calibration_retains_unverified_benchmark_and_custody_gate
         source
         for source in inventory.source_coverage
         if "models/authenticated_calibration.py:" in source.source_path
+        and source.source_kind is CompletionInputSourceKind.DIRECT_ENVIRONMENT_INPUT
     ]
     assert len(process_inputs) == 5
     assert all(
         source.logical_gate_id == "gate-benchmark-evidence-authority" for source in process_inputs
+    )
+    runtime_inputs = [
+        source
+        for source in inventory.source_coverage
+        if "models/authenticated_calibration.py:" in source.source_path
+        and source.source_kind is CompletionInputSourceKind.RUNTIME_EXECUTION_INPUT
+    ]
+    assert len(runtime_inputs) == 13
+    assert all(
+        source.logical_gate_id == "gate-runtime-package-integrity"
+        and source.classification is SourceCoverageClassification.GATE
+        for source in runtime_inputs
+    )
+    assert inventory.unsatisfied_gate_count == 29 and inventory.current_manual_gate_count == 15
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+def test_calibration_accounting_keeps_cost_and_runtime_gates_without_benchmark_authority(
+    inventory: AutonomyGateInventory,
+) -> None:
+    sources = [
+        source
+        for source in inventory.source_coverage
+        if "orchestration/authenticated_calibration_accounting.py" in source.source_path
+    ]
+    modules = [
+        source
+        for source in sources
+        if source.source_kind is CompletionInputSourceKind.AUDITED_MODULE_UNIVERSE
+    ]
+    process_inputs = [
+        source
+        for source in sources
+        if source.source_kind is CompletionInputSourceKind.DIRECT_ENVIRONMENT_INPUT
+    ]
+    assert len(sources) == 5 and len(modules) == 1 and len(process_inputs) == 4
+    assert modules[0].logical_gate_id == "gate-runtime-package-integrity"
+    assert all(
+        source.logical_gate_id == "gate-cost-ledger-provisioning" for source in process_inputs
+    )
+    assert all(source.classification is SourceCoverageClassification.GATE for source in sources)
+    assert inventory.unsatisfied_gate_count == 29 and inventory.current_manual_gate_count == 15
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+def test_retained_runner_and_relocated_ledger_preserve_real_campaign_gates(
+    inventory: AutonomyGateInventory,
+) -> None:
+    sources = {source.source_id: source for source in inventory.source_coverage}
+    retained = sources["explicit:retained-runner-ledger-custody"]
+    assert retained.logical_gate_id == "gate-authenticated-real-campaign"
+    module = sources["audited-module:models.authenticated_runner_ledger"]
+    assert module.logical_gate_id == "gate-runtime-package-integrity"
+    migrated = [
+        source
+        for source in inventory.source_coverage
+        if source.source_id.startswith("direct-env-ast:models.authenticated_runner_ledger:")
+    ]
+    assert len(migrated) == 5
+    assert all(source.logical_gate_id == "gate-authenticated-real-campaign" for source in migrated)
+    assert all(source.classification is SourceCoverageClassification.GATE for source in migrated)
+    assert inventory.unsatisfied_gate_count == 29 and inventory.current_manual_gate_count == 15
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+def test_owned_openrouter_calibration_batch_does_not_promote_campaign_authority(
+    inventory: AutonomyGateInventory,
+) -> None:
+    sources = {source.source_id: source for source in inventory.source_coverage}
+    for name in (
+        "explicit:authenticated-calibration-batch-ownership",
+        "explicit:authenticated-retained-runner-handoff",
+    ):
+        assert sources[name].logical_gate_id == "gate-authenticated-real-campaign"
+        assert sources[name].classification is SourceCoverageClassification.GATE
+    module = sources["audited-module:orchestration.authenticated_calibration_openrouter"]
+    assert module.logical_gate_id == "gate-runtime-package-integrity"
+    assert inventory.unsatisfied_gate_count == 29 and inventory.current_manual_gate_count == 15
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+def test_registered_population_does_not_replace_external_campaign_authority(
+    inventory: AutonomyGateInventory,
+) -> None:
+    sources = {source.source_id: source for source in inventory.source_coverage}
+    for name in (
+        "registered-calibration-population",
+        "owned-calibration-batch-lifecycle",
+        "calibration-population-attempt-prefix",
+    ):
+        source = sources[f"explicit:{name}"]
+        assert source.logical_gate_id == "gate-authenticated-real-campaign"
+        assert source.classification is SourceCoverageClassification.GATE
+    assert (
+        sources["audited-module:orchestration.calibration_population"].logical_gate_id
+        == "gate-runtime-package-integrity"
+    )
+    assert (
+        sources[
+            "filesystem-input:orchestration.calibration_population:_event_names:1"
+        ].logical_gate_id
+        == "gate-authenticated-real-campaign"
+    )
+    clocks = [
+        source
+        for name, source in sources.items()
+        if name.startswith("direct-env-ast:orchestration.calibration_population:")
+    ]
+    assert len(clocks) == 2
+    assert all(
+        source.logical_gate_id == "gate-trusted-time-independent-replay" for source in clocks
+    )
+    assert inventory.unsatisfied_gate_count == 29 and inventory.current_manual_gate_count == 15
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+def test_registered_measurement_keeps_native_and_external_campaign_gates(
+    inventory: AutonomyGateInventory,
+) -> None:
+    sources = {source.source_id: source for source in inventory.source_coverage}
+    for name in (
+        "registered-native-measurement-lifecycle",
+        "registered-measurement-execution",
+        "registered-measurement-data-readback",
+        "owned-registered-calibration-batch",
+    ):
+        assert sources[f"explicit:{name}"].logical_gate_id == "gate-authenticated-real-campaign"
+    assert (
+        sources[
+            "audited-module:orchestration.authenticated_calibration_measurement"
+        ].logical_gate_id
+        == "gate-runtime-package-integrity"
+    )
+    assert (
+        sources[
+            "filesystem-input:orchestration.authenticated_calibration_measurement:_output_names:1"
+        ].logical_gate_id
+        == "gate-authenticated-real-campaign"
+    )
+    assert inventory.unsatisfied_gate_count == 29 and inventory.current_manual_gate_count == 15
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+def test_runner_transfer_retains_the_original_unsatisfied_real_campaign_gate(
+    inventory: AutonomyGateInventory,
+) -> None:
+    sources = {source.source_id: source for source in inventory.source_coverage}
+    expected = [
+        "explicit:runner-custody-transfer",
+        "direct-env-ast:models.authenticated_runner:_build_authenticated_cross_lineage_runner_authority:process-identity:1",
+        "direct-env-ast:models.authenticated_runner:_build_authenticated_cross_lineage_runner_authority.require_transfer_pristine:process-identity:1",
+    ]
+    assert all(
+        sources[name].logical_gate_id == "gate-authenticated-real-campaign"
+        and sources[name].classification is SourceCoverageClassification.GATE
+        for name in expected
+    )
+    assert inventory.unsatisfied_gate_count == 29 and inventory.current_manual_gate_count == 15
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+def test_campaign_custody_transfer_preserves_original_unsatisfied_authority_gate(
+    inventory: AutonomyGateInventory,
+) -> None:
+    sources = {source.source_id: source for source in inventory.source_coverage}
+    expected = [
+        "explicit:campaign-custody-transfer",
+        "direct-env-ast:benchmark.model_portfolio:_build_campaign_runtime_authority:process-identity:1",
+        "direct-env-ast:benchmark.model_portfolio:_build_campaign_runtime_authority.move_capability:process-identity:1",
+        "direct-env-ast:benchmark.model_portfolio:_build_campaign_custody_transfer:process-identity-binding:1",
+        "direct-env-ast:benchmark.model_portfolio:_build_campaign_custody_transfer:process-identity:1",
+        "direct-env-ast:benchmark.model_portfolio:_build_campaign_custody_transfer.pristine:process-identity:1",
+    ]
+    assert all(
+        sources[name].logical_gate_id == "gate-benchmark-evidence-authority"
+        and sources[name].classification is SourceCoverageClassification.GATE
+        for name in expected
+    )
+    assert inventory.unsatisfied_gate_count == 29 and inventory.current_manual_gate_count == 15
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+def test_generation_custody_transfer_keeps_unsatisfied_authority_gates(
+    inventory: AutonomyGateInventory,
+) -> None:
+    sources = {source.source_id: source for source in inventory.source_coverage}
+    move = sources["explicit:generation-custody-transfer"]
+    assert move.logical_gate_id == "gate-autonomous-model-authority"
+    assert move.classification is SourceCoverageClassification.GATE
+    process_inputs = [
+        source
+        for source in inventory.source_coverage
+        if source.source_kind is CompletionInputSourceKind.DIRECT_ENVIRONMENT_INPUT
+        and "models/generation_evidence.py:_build_generation_custody_transfer" in source.source_path
+    ]
+    assert len(process_inputs) == 3
+    assert all(
+        source.logical_gate_id == "gate-autonomous-model-authority"
+        and source.classification is SourceCoverageClassification.GATE
+        for source in process_inputs
     )
     assert inventory.unsatisfied_gate_count == 29 and inventory.current_manual_gate_count == 15
     assert inventory.runtime_authority is inventory.managed_run_ready is False
@@ -632,7 +2459,9 @@ def test_phase_finalizer_and_retained_cleanup_handoff_do_not_supply_admission(
 
 
 @pytest.mark.parametrize("field", ["source_count", "source_occurrence_count", "gate_source_count"])
-def test_expanded_inventory_ceiling_remains_bounded(inventory: AutonomyGateInventory, field: str):
+def test_expanded_inventory_ceiling_remains_bounded(
+    inventory: AutonomyGateInventory, field: str
+) -> None:
     schema = AutonomyGateInventory.model_json_schema()
     assert schema["properties"][field]["maximum"] == 8192
     assert schema["properties"]["source_coverage"]["maxItems"] == 8192
@@ -700,7 +2529,7 @@ def test_isolation_admission_reuses_existing_bounded_filesystem_observations(
 def test_isolation_sealing_lookup_and_each_probe_preserve_launcher_admission() -> None:
     from mmaudit.isolation import provenance
 
-    expected = {
+    expected: dict[Callable[..., object], tuple[int, int]] = {
         provenance._seal_builtin_isolation_backend: (1, 4),
         provenance._attestation_still_valid: (1, 1),
         provenance._execute_probe: (0, 3),
@@ -1054,6 +2883,16 @@ def test_new_direct_or_aliased_cpu_platform_input_fails_closed(tmp_path: Path, s
 def test_inventory_has_exact_autonomous_dispositions_and_honest_phase_zero_state(
     inventory: AutonomyGateInventory,
 ) -> None:
+    # Input registration may add source joins, never alter any gate's integrity or state.
+    assert (
+        inventory_module._canonical_sha256(
+            [
+                gate.model_dump(mode="json", exclude={"source_ids"})
+                for gate in inventory.logical_gates
+            ]
+        )
+        == "83f08f7362e794f68dc23ba88443a98f31fde21f0573252bc3cb8f97953c525d"
+    )
     assert {gate.desired_disposition for gate in inventory.logical_gates} == set(
         AutonomousGateDisposition
     )
@@ -1074,6 +2913,7 @@ def test_inventory_has_exact_autonomous_dispositions_and_honest_phase_zero_state
     assert inventory.discovery_scope == (
         "TYPED_BOUNDARIES_REGISTERED_ENTRYPOINTS_RUNTIME_PACKAGE_RESOURCES_"
         "UNSEALED_ENV_HOST_WALL_CLOCK_AUTHORITY_ENTROPY_FILESYSTEM_INTERACTIVE_"
+        "RUNTIME_STATE_ELAPSED_CLOCK_PROCESS_IO_GENERATED_CODE_"
         "OPAQUE_AUTHORITIES_"
         "EXPLICIT_MISSING_OBJECTIVE_BOUNDARIES"
     )
@@ -1248,6 +3088,703 @@ def test_every_gate_source_has_exactly_one_logical_assignment(
     )
 
 
+def test_full_tree_verifier_remains_gated_without_promotion(
+    inventory: AutonomyGateInventory,
+) -> None:
+    sources = {source.source_id: source for source in inventory.source_coverage}
+    for module in ("models.truncation_tree", "orchestration.truncation_tree_evidence"):
+        source = sources["audited-module:" + module]
+        assert source.logical_gate_id == "gate-runtime-package-integrity"
+        assert source.classification is SourceCoverageClassification.GATE
+    identities = tuple(
+        source
+        for source in sources.values()
+        if source.source_id.startswith("direct-env-ast:orchestration.truncation_tree_evidence:")
+    )
+    assert len(identities) == 4
+    assert all(source.logical_gate_id == "gate-release-evidence-pipeline" for source in identities)
+    assert inventory.unsatisfied_gate_count == 29 and inventory.current_manual_gate_count == 15
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+def test_full_tree_additions_preserve_every_prior_external_input_locus() -> None:
+    root = ROOT / "src/mmaudit"
+    paths = _paths_before_legacy_cost_allowance(root)
+    environment = _environment_before_compiler_capture(root)
+    filesystem, interactive = _external_before_compiler_capture(root)
+    entropy = inventory_module._entropy_input_occurrences(root)
+    # Compare this historical snapshot before the later pipeline module.
+    filesystem = tuple(
+        r
+        for r in filesystem
+        if r[0]
+        not in {"orchestration/mutation_pipeline.py", "orchestration/mutation_reconstruction.py"}
+    )
+    entropy = tuple(
+        r
+        for r in entropy
+        if r[0]
+        not in {"orchestration/mutation_pipeline.py", "orchestration/mutation_reconstruction.py"}
+    )
+    assert inventory_module._canonical_sha256(
+        [p for p in paths if p not in _FULL_TREE_ADDITIONS]
+    ) == ("c2471ef24fd724fd8fe76bc15ceeb82fe97eef470c05749d877d4bb6c8b01a4e")
+    assert (
+        inventory_module._canonical_sha256(
+            [list(row) for row in environment if row[0] not in _FULL_TREE_ADDITIONS]
+        )
+        == "f7e98c98eade04a86b2fa2897b284b696f5fcdc7d6002b3bbe36d913614396cc"
+    )
+    assert inventory_module._canonical_sha256([list(row) for row in filesystem]) == (
+        "997d5e65632eaabb8a55cd4933d456f689a60e4d372cce9813d7c7d9fa30178a"
+    )
+    assert inventory_module._canonical_sha256([list(row) for row in entropy]) == (
+        "556dcc2d348b2b7bc3c6c3f11f8828edfb6e1aac0e1c5827b70528cbe32e3836"
+    )
+    assert sum(p in _FULL_TREE_ADDITIONS for p in paths) == 3
+    assert sum(row[0] in _FULL_TREE_ADDITIONS for row in environment) == 9
+    assert not any(row[0] in _FULL_TREE_ADDITIONS for row in filesystem)
+    assert (len(paths), len(environment), len(filesystem), len(entropy)) == (336, 569, 2233, 20)
+    assert not interactive
+
+
+def test_full_tree_private_promotion_remains_gated(inventory: AutonomyGateInventory) -> None:
+    sources = {source.source_id: source for source in inventory.source_coverage}
+    module = sources["audited-module:orchestration.truncation_tree_promotion"]
+    assert module.logical_gate_id == "gate-runtime-package-integrity"
+    identities = tuple(
+        source
+        for source in sources.values()
+        if source.source_id.startswith("direct-env-ast:orchestration.truncation_tree_promotion:")
+    )
+    assert len(identities) == 5
+    assert all(source.logical_gate_id == "gate-release-evidence-pipeline" for source in identities)
+    assert all(source.classification is SourceCoverageClassification.GATE for source in identities)
+    assert inventory.unsatisfied_gate_count == 29 and inventory.current_manual_gate_count == 15
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+def test_private_promotion_preserves_complete_verifier_input_universe() -> None:
+    root = ROOT / "src/mmaudit"
+    addition = "orchestration/truncation_tree_promotion.py"
+    paths = _paths_before_legacy_cost_allowance(root)
+    environment = _environment_before_compiler_capture(root)
+    assert inventory_module._canonical_sha256([p for p in paths if p != addition]) == (
+        "d6cb767ac9157b6b3e03ac89138aab4b7d3c923dd867aedc8e8a28e1c924e64f"
+    )
+    assert (
+        inventory_module._canonical_sha256([list(row) for row in environment if row[0] != addition])
+        == "32f0d4f4983b93f51f9d18d5e927018eaf65430dcd3c5d7a0cee903b70e120e7"
+    )
+    assert (len(paths), len(environment)) == (336, 569)
+
+
+def test_public_full_tree_custody_preserves_every_predecessor_input() -> None:
+    rows = _environment_before_compiler_capture(ROOT / "src/mmaudit")
+    normalized = []
+    added = []
+    for path, scope, kind, expression in rows:
+        if path == "orchestration/truncation_tree_promotion.py":
+            if scope == "_build_tree_promotion_authority.issue_public.discard":
+                added.append((path, scope, kind, expression))
+                continue
+            scope = scope.replace(".register.discard", ".promote.discard")
+        normalized.append([path, scope, kind, expression])
+    assert len(added) == 1 and added[0][2] == "process-identity"
+    assert len(normalized) == 568
+    assert inventory_module._canonical_sha256(normalized) == (
+        "2cef0ec4caf2830b84bd0f3788c9f41940ba5f32786e75b9b14b250fc848852d"
+    )
+
+
+def test_offline_opentimestamps_replay_does_not_satisfy_external_seal(
+    inventory: AutonomyGateInventory,
+) -> None:
+    sources = {source.source_id: source for source in inventory.source_coverage}
+    for source_id in (
+        "explicit:offline-opentimestamps-proof-replay",
+        "required:external-transparency-publication",
+    ):
+        assert sources[source_id].logical_gate_id == "gate-external-transparency-seal"
+        assert sources[source_id].classification is SourceCoverageClassification.GATE
+    assert sources["audited-module:models.opentimestamps_replay"].logical_gate_id == (
+        "gate-runtime-package-integrity"
+    )
+    gate = next(
+        item
+        for item in inventory.logical_gates
+        if item.gate_id == "gate-external-transparency-seal"
+    )
+    assert gate.implementation_state is GateImplementationState.MISSING
+    assert inventory.unsatisfied_gate_count == 29 and inventory.current_manual_gate_count == 15
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+def test_offline_calendar_wire_coverage_does_not_grant_transport_or_seal_authority(
+    inventory: AutonomyGateInventory,
+) -> None:
+    sources = {source.source_id: source for source in inventory.source_coverage}
+    for source_id in (
+        "explicit:offline-opentimestamps-calendar-proof-replay",
+        "explicit:offline-opentimestamps-calendar-request",
+        "explicit:offline-opentimestamps-calendar-response",
+        "explicit:offline-opentimestamps-submission-context",
+        "explicit:offline-opentimestamps-submission-assembly",
+        "required:external-transparency-publication",
+    ):
+        assert sources[source_id].logical_gate_id == "gate-external-transparency-seal"
+        assert sources[source_id].classification is SourceCoverageClassification.GATE
+    assert sources["audited-module:models.opentimestamps_calendar"].logical_gate_id == (
+        "gate-runtime-package-integrity"
+    )
+    gate = next(
+        item
+        for item in inventory.logical_gates
+        if item.gate_id == "gate-external-transparency-seal"
+    )
+    assert gate.implementation_state is GateImplementationState.MISSING
+    assert inventory.unsatisfied_gate_count == 29 and inventory.current_manual_gate_count == 15
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+def test_owned_calendar_transport_and_nonce_remain_below_external_seal_authority(
+    inventory: AutonomyGateInventory,
+) -> None:
+    sources = {item.source_id: item for item in inventory.source_coverage}
+    for source_id in (
+        "explicit:owned-opentimestamps-calendar-exchange",
+        "explicit:owned-opentimestamps-calendar-submission",
+        "explicit:owned-opentimestamps-calendar-lookup",
+        "explicit:owned-calibration-calendar-submission",
+        "entropy-ast:orchestration.opentimestamps_calendar_transport:_prepare_submission_context:secrets-token_bytes:1",
+        "required:external-transparency-publication",
+    ):
+        assert sources[source_id].logical_gate_id == "gate-external-transparency-seal"
+        assert sources[source_id].classification is SourceCoverageClassification.GATE
+    assert sources[
+        "audited-module:orchestration.opentimestamps_calendar_transport"
+    ].logical_gate_id == ("gate-runtime-package-integrity")
+    gate = next(
+        item
+        for item in inventory.logical_gates
+        if item.gate_id == "gate-external-transparency-seal"
+    )
+    assert gate.implementation_state is GateImplementationState.MISSING
+    assert inventory.unsatisfied_gate_count == 29 and inventory.current_manual_gate_count == 15
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+def test_durable_calendar_journal_inputs_remain_missing_external_seal_authority(
+    inventory: AutonomyGateInventory,
+) -> None:
+    sources = {item.source_id: item for item in inventory.source_coverage}
+    anchors = (
+        "durable-calendar-journal-preparation",
+        "durable-calendar-journal-submission",
+        "durable-calendar-journal-dispatch",
+        "durable-calendar-journal-process-exclusion",
+        "durable-calendar-journal-readback",
+        "durable-calendar-journal-recovery",
+        "owned-opentimestamps-calendar-context",
+        "owned-opentimestamps-prepared-calendar-submission",
+    )
+    selected = [sources[f"explicit:{anchor}"] for anchor in anchors]
+    selected.extend(
+        source
+        for key, source in sources.items()
+        if "opentimestamps_calendar_journal:" in key
+        and key.startswith(("direct-env-ast:", "filesystem-input:"))
+    )
+    assert len(selected) == 17
+    assert all(source.logical_gate_id == "gate-external-transparency-seal" for source in selected)
+    assert all(source.classification is SourceCoverageClassification.GATE for source in selected)
+    assert sources[
+        "audited-module:orchestration.opentimestamps_calendar_journal"
+    ].logical_gate_id == ("gate-runtime-package-integrity")
+    gate = next(
+        g for g in inventory.logical_gates if g.gate_id == "gate-external-transparency-seal"
+    )
+    assert gate.implementation_state is GateImplementationState.MISSING
+    assert inventory.unsatisfied_gate_count == 29 and inventory.current_manual_gate_count == 15
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+def test_journal_loci_additions_and_nonce_relocation_preserve_every_prior_frozen_input() -> None:
+    module = "orchestration/opentimestamps_calendar_journal.py"
+    later_modules = {
+        "orchestration/mutation_reconstruction.py",
+        "orchestration/mutation_pipeline.py",
+        *_FULL_TREE_ADDITIONS,
+        "orchestration/calibration_calendar_publication.py",
+        "orchestration/calibration_calendar_controller.py",
+        "models/calibration_checkpoint.py",
+        "orchestration/calibration_checkpoint_publication.py",
+    }
+    source_root = ROOT / "src/mmaudit"
+    paths = _paths_before_legacy_cost_allowance(source_root)
+    environment = _environment_before_compiler_capture(source_root)
+    filesystem, _ = _external_before_compiler_capture(source_root)
+    # Each later module has its own exact immediate-predecessor test below.
+    paths = [path for path in paths if path not in later_modules]
+    environment = tuple(row for row in environment if row[0] not in later_modules)
+    filesystem = tuple(row for row in filesystem if row[0] not in later_modules)
+    entropy = tuple(
+        row
+        for row in inventory_module._entropy_input_occurrences(source_root)
+        if row[0]
+        not in {"orchestration/mutation_pipeline.py", "orchestration/mutation_reconstruction.py"}
+    )
+    previous_entropy = [
+        (
+            path,
+            "submit_opentimestamps_calendar"
+            if path == "orchestration/opentimestamps_calendar_transport.py"
+            and scope == "_prepare_submission_context"
+            else scope,
+            kind,
+            expression,
+        )
+        for path, scope, kind, expression in entropy
+    ]
+    assert inventory_module._canonical_sha256([p for p in paths if p != module]) == (
+        "3967552b9c29c89bc0c8443762d5823430f6ee666be29caafc161ed8ac6ff204"
+    )
+    assert inventory_module._canonical_sha256([list(x) for x in environment if x[0] != module]) == (
+        "5ba83c4366f9f471711d7b31cc88f68c6110312e6305e699e00ceb8f94bab3c9"
+    )
+    assert inventory_module._canonical_sha256([list(x) for x in filesystem if x[0] != module]) == (
+        "c0e922263648c7774799438cb2c55756a2d810bc78a8a8502df25a81e0950942"
+    )
+    assert inventory_module._canonical_sha256([list(x) for x in previous_entropy]) == (
+        "365d21bd552f48df27b794ab34a2dd496a086b38ab19da46262def979915bea3"
+    )
+    assert sum(x[0] == module for x in environment) == 4
+    assert sum(x[0] == module for x in filesystem) == 5
+    assert len(entropy) == 20
+
+
+def test_population_calendar_publisher_cannot_grant_external_or_native_authority(
+    inventory: AutonomyGateInventory,
+) -> None:
+    sources = {source.source_id: source for source in inventory.source_coverage}
+    anchors = (
+        "registration",
+        "native-measurement",
+        "source-owned-submit",
+        "retained-preparation",
+        "descriptor",
+        "readback",
+        "recovery",
+    )
+    selected = [sources[f"explicit:population-calendar-{anchor}"] for anchor in anchors]
+    selected.extend(
+        source
+        for key, source in sources.items()
+        if "calibration_calendar_publication:" in key
+        and key.startswith(("direct-env-ast:", "filesystem-input:"))
+    )
+    assert len(selected) == 12
+    assert all(source.logical_gate_id == "gate-external-transparency-seal" for source in selected)
+    assert all(source.classification is SourceCoverageClassification.GATE for source in selected)
+    assert (
+        sources["audited-module:orchestration.calibration_calendar_publication"].logical_gate_id
+        == "gate-runtime-package-integrity"
+    )
+    gate = next(
+        g for g in inventory.logical_gates if g.gate_id == "gate-external-transparency-seal"
+    )
+    assert gate.implementation_state is GateImplementationState.MISSING
+    assert inventory.unsatisfied_gate_count == 29 and inventory.current_manual_gate_count == 15
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+def test_population_publisher_loci_preserve_the_complete_original_journal_baseline() -> None:
+    module = "orchestration/calibration_calendar_publication.py"
+    source_root = ROOT / "src/mmaudit"
+    paths = _paths_before_legacy_cost_allowance(source_root)
+    environment = _environment_before_compiler_capture(source_root)
+    filesystem, _ = _external_before_compiler_capture(source_root)
+    entropy = inventory_module._entropy_input_occurrences(source_root)
+    # Compare this historical snapshot before the later pipeline module.
+    filesystem = tuple(
+        r
+        for r in filesystem
+        if r[0]
+        not in {"orchestration/mutation_pipeline.py", "orchestration/mutation_reconstruction.py"}
+    )
+    entropy = tuple(
+        r
+        for r in entropy
+        if r[0]
+        not in {"orchestration/mutation_pipeline.py", "orchestration/mutation_reconstruction.py"}
+    )
+    later = {
+        *_FULL_TREE_ADDITIONS,
+        "orchestration/calibration_calendar_controller.py",
+        "models/calibration_checkpoint.py",
+        "orchestration/calibration_checkpoint_publication.py",
+    }
+    paths = [path for path in paths if path not in later]
+    environment = tuple(row for row in environment if row[0] not in later)
+    filesystem = tuple(row for row in filesystem if row[0] not in later)
+    assert inventory_module._canonical_sha256([p for p in paths if p != module]) == (
+        "835036ca1e31bfcbef494b1b8fd86478f4ea549887ee7bca61b0f68820b57e3d"
+    )
+    assert inventory_module._canonical_sha256([list(x) for x in environment if x[0] != module]) == (
+        "30b1ae260ad67ed29c4828e655023dee411a37ab3bbb5d31fb32867cb4659294"
+    )
+    assert inventory_module._canonical_sha256([list(x) for x in filesystem if x[0] != module]) == (
+        "2d66a364f5e5a5c99dc9f489e4c07b4db0fb79db4d55900527a10282f18775d0"
+    )
+    assert inventory_module._canonical_sha256([list(x) for x in entropy]) == (
+        "556dcc2d348b2b7bc3c6c3f11f8828edfb6e1aac0e1c5827b70528cbe32e3836"
+    )
+    assert sum(x[0] == module for x in environment) == 2
+    assert sum(x[0] == module for x in filesystem) == 3
+    assert len(entropy) == 20
+
+
+def test_calendar_controller_keeps_phase_recording_below_external_seal_authority(
+    inventory: AutonomyGateInventory,
+) -> None:
+    sources = {source.source_id: source for source in inventory.source_coverage}
+    anchors = (
+        "execution",
+        "registration",
+        "measurement",
+        "custody",
+        "phase-files",
+        "phase-retention",
+        "native-output-bindings",
+    )
+    selected = [sources[f"explicit:calendar-controller-{anchor}"] for anchor in anchors]
+    selected.extend(
+        source
+        for key, source in sources.items()
+        if key.startswith("direct-env-ast:orchestration.calibration_calendar_controller:")
+    )
+    assert len(selected) == 9
+    assert all(source.logical_gate_id == "gate-external-transparency-seal" for source in selected)
+    assert all(source.classification is SourceCoverageClassification.GATE for source in selected)
+    assert sources[
+        "audited-module:orchestration.calibration_calendar_controller"
+    ].logical_gate_id == ("gate-runtime-package-integrity")
+    gate = next(
+        g for g in inventory.logical_gates if g.gate_id == "gate-external-transparency-seal"
+    )
+    assert gate.implementation_state is GateImplementationState.MISSING
+    assert inventory.unsatisfied_gate_count == 29 and inventory.current_manual_gate_count == 15
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+def test_calendar_controller_additions_preserve_every_prior_publisher_input_locus() -> None:
+    module = "orchestration/calibration_calendar_controller.py"
+    root = ROOT / "src/mmaudit"
+    paths = _paths_before_legacy_cost_allowance(root)
+    environment = _environment_before_compiler_capture(root)
+    filesystem, interactive = _external_before_compiler_capture(root)
+    entropy = inventory_module._entropy_input_occurrences(root)
+    # Compare this historical snapshot before the later pipeline module.
+    filesystem = tuple(
+        r
+        for r in filesystem
+        if r[0]
+        not in {"orchestration/mutation_pipeline.py", "orchestration/mutation_reconstruction.py"}
+    )
+    entropy = tuple(
+        r
+        for r in entropy
+        if r[0]
+        not in {"orchestration/mutation_pipeline.py", "orchestration/mutation_reconstruction.py"}
+    )
+    later = {
+        *_FULL_TREE_ADDITIONS,
+        "models/calibration_checkpoint.py",
+        "orchestration/calibration_checkpoint_publication.py",
+    }
+    paths = [path for path in paths if path not in later]
+    environment = tuple(row for row in environment if row[0] not in later)
+    filesystem = tuple(row for row in filesystem if row[0] not in later)
+    assert inventory_module._canonical_sha256([p for p in paths if p != module]) == (
+        "570257c36cd2d8fb7c28536e3ea5493063d539d35eda14678a7d7bfa57176e7b"
+    )
+    assert inventory_module._canonical_sha256([list(x) for x in environment if x[0] != module]) == (
+        "852aa76c6c10853056558c58fbaa4ee0aec3a54ed174106ba72cd937c4d6518a"
+    )
+    assert inventory_module._canonical_sha256([list(x) for x in filesystem]) == (
+        "0973e31f4a0f066cb5bc84d93cff9cab4c81506831ebe657c253f483fb3ae033"
+    )
+    assert inventory_module._canonical_sha256([list(x) for x in entropy]) == (
+        "556dcc2d348b2b7bc3c6c3f11f8828edfb6e1aac0e1c5827b70528cbe32e3836"
+    )
+    assert sum(row[0] == module for row in environment) == 2
+    assert not any(row[0] == module for row in filesystem)
+    assert not interactive and len(entropy) == 20
+
+
+def test_checkpoint_publisher_inputs_do_not_grant_external_seal_or_native_authority(
+    inventory: AutonomyGateInventory,
+) -> None:
+    sources = {source.source_id: source for source in inventory.source_coverage}
+    anchors = (
+        "checkpoint-publication-subject",
+        "checkpoint-calendar-registration",
+        "checkpoint-calendar-native-measurement",
+        "checkpoint-calendar-source-owned-submit",
+        "checkpoint-calendar-retained-preparation",
+        "checkpoint-calendar-descriptor",
+        "checkpoint-calendar-original-history",
+        "checkpoint-calendar-readback",
+        "checkpoint-calendar-recovery",
+        "checkpoint-calendar-journal-preparation",
+        "checkpoint-calendar-journal-recovery",
+    )
+    selected = [sources[f"explicit:{anchor}"] for anchor in anchors]
+    selected.extend(
+        source
+        for key, source in sources.items()
+        if key.startswith("filesystem-input:orchestration.calibration_checkpoint_publication:")
+    )
+    assert len(selected) == 12
+    assert all(source.logical_gate_id == "gate-external-transparency-seal" for source in selected)
+    assert all(source.classification is SourceCoverageClassification.GATE for source in selected)
+    for module in (
+        "models.calibration_checkpoint",
+        "orchestration.calibration_checkpoint_publication",
+    ):
+        assert (
+            sources[f"audited-module:{module}"].logical_gate_id == "gate-runtime-package-integrity"
+        )
+    gate = next(
+        g for g in inventory.logical_gates if g.gate_id == "gate-external-transparency-seal"
+    )
+    assert gate.implementation_state is GateImplementationState.MISSING
+    assert inventory.unsatisfied_gate_count == 29 and inventory.current_manual_gate_count == 15
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+def test_checkpoint_additions_preserve_all_original_controller_input_loci() -> None:
+    root = ROOT / "src/mmaudit"
+    new = {
+        "models/calibration_checkpoint.py",
+        "orchestration/calibration_checkpoint_publication.py",
+    }
+    paths = _paths_before_legacy_cost_allowance(root)
+    environment = _environment_before_compiler_capture(root)
+    filesystem, interactive = _external_before_compiler_capture(root)
+    entropy = inventory_module._entropy_input_occurrences(root)
+    # Compare this historical snapshot before the later pipeline module.
+    filesystem = tuple(
+        r
+        for r in filesystem
+        if r[0]
+        not in {"orchestration/mutation_pipeline.py", "orchestration/mutation_reconstruction.py"}
+    )
+    entropy = tuple(
+        r
+        for r in entropy
+        if r[0]
+        not in {"orchestration/mutation_pipeline.py", "orchestration/mutation_reconstruction.py"}
+    )
+    # Later full-tree modules have their own complete immediate-predecessor test.
+    paths = [path for path in paths if path not in _FULL_TREE_ADDITIONS]
+    environment = tuple(row for row in environment if row[0] not in _FULL_TREE_ADDITIONS)
+    assert inventory_module._canonical_sha256([p for p in paths if p not in new]) == (
+        "64fa26c4702ee072b8e49dbb60b6c207147b076540776a07bfb3a8b15539eb6f"
+    )
+    assert inventory_module._canonical_sha256([list(x) for x in environment]) == (
+        "f7e98c98eade04a86b2fa2897b284b696f5fcdc7d6002b3bbe36d913614396cc"
+    )
+    assert inventory_module._canonical_sha256([list(x) for x in filesystem if x[0] not in new]) == (
+        "0973e31f4a0f066cb5bc84d93cff9cab4c81506831ebe657c253f483fb3ae033"
+    )
+    assert inventory_module._canonical_sha256([list(x) for x in entropy]) == (
+        "556dcc2d348b2b7bc3c6c3f11f8828edfb6e1aac0e1c5827b70528cbe32e3836"
+    )
+    assert sum(path in new for path in paths) == 2
+    assert not any(row[0] in new for row in environment)
+    assert [(p, scope, kind) for p, scope, kind, _ in filesystem if p in new] == [
+        ("orchestration/calibration_checkpoint_publication.py", "_names", "directory-enumeration")
+    ]
+    assert not interactive and len(entropy) == 20
+
+
+def test_checkpoint_controller_inputs_preserve_unsatisfied_external_seal_gate(
+    inventory: AutonomyGateInventory,
+) -> None:
+    sources = {source.source_id: source for source in inventory.source_coverage}
+    anchors = (
+        "execution",
+        "initial-tip",
+        "tip-custody",
+        "phase-retention",
+        "phase-files",
+        "proof-extension",
+    )
+    selected = [sources[f"explicit:checkpoint-controller-{anchor}"] for anchor in anchors]
+    assert all(source.logical_gate_id == "gate-external-transparency-seal" for source in selected)
+    assert all(source.classification is SourceCoverageClassification.GATE for source in selected)
+    gate = next(
+        g for g in inventory.logical_gates if g.gate_id == "gate-external-transparency-seal"
+    )
+    assert gate.implementation_state is GateImplementationState.MISSING
+    assert inventory.unsatisfied_gate_count == 29 and inventory.current_manual_gate_count == 15
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+def test_checkpoint_controller_preserves_the_entire_existing_external_input_surface() -> None:
+    root = ROOT / "src/mmaudit"
+    paths = _paths_before_legacy_cost_allowance(root)
+    environment = _environment_before_compiler_capture(root)
+    filesystem, interactive = _external_before_compiler_capture(root)
+    entropy = inventory_module._entropy_input_occurrences(root)
+    # Compare this historical snapshot before the later pipeline module.
+    filesystem = tuple(
+        r
+        for r in filesystem
+        if r[0]
+        not in {"orchestration/mutation_pipeline.py", "orchestration/mutation_reconstruction.py"}
+    )
+    entropy = tuple(
+        r
+        for r in entropy
+        if r[0]
+        not in {"orchestration/mutation_pipeline.py", "orchestration/mutation_reconstruction.py"}
+    )
+    paths = [path for path in paths if path not in _FULL_TREE_ADDITIONS]
+    environment = tuple(row for row in environment if row[0] not in _FULL_TREE_ADDITIONS)
+    assert inventory_module._canonical_sha256(paths) == (
+        "c2471ef24fd724fd8fe76bc15ceeb82fe97eef470c05749d877d4bb6c8b01a4e"
+    )
+    assert inventory_module._canonical_sha256([list(x) for x in environment]) == (
+        "f7e98c98eade04a86b2fa2897b284b696f5fcdc7d6002b3bbe36d913614396cc"
+    )
+    assert inventory_module._canonical_sha256([list(x) for x in filesystem]) == (
+        "997d5e65632eaabb8a55cd4933d456f689a60e4d372cce9813d7c7d9fa30178a"
+    )
+    assert inventory_module._canonical_sha256([list(x) for x in entropy]) == (
+        "556dcc2d348b2b7bc3c6c3f11f8828edfb6e1aac0e1c5827b70528cbe32e3836"
+    )
+    assert (len(paths), len(environment), len(filesystem), len(entropy)) == (333, 560, 2233, 20)
+    assert not interactive
+
+
+def test_owned_checkpoint_completion_does_not_satisfy_external_seal_authority(
+    inventory: AutonomyGateInventory,
+) -> None:
+    sources = {source.source_id: source for source in inventory.source_coverage}
+    for anchor in ("scope", "observation", "native-inputs"):
+        source = sources[f"explicit:checkpoint-completion-{anchor}"]
+        assert source.logical_gate_id == "gate-external-transparency-seal"
+        assert source.classification is SourceCoverageClassification.GATE
+    gate = next(
+        gate
+        for gate in inventory.logical_gates
+        if gate.gate_id == "gate-external-transparency-seal"
+    )
+    assert gate.implementation_state is GateImplementationState.MISSING
+    assert inventory.unsatisfied_gate_count == 29 and inventory.current_manual_gate_count == 15
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+def test_completion_scope_does_not_add_an_external_input_or_runtime_file() -> None:
+    root = ROOT / "src/mmaudit"
+    paths = _paths_before_legacy_cost_allowance(root)
+    environment = _environment_before_compiler_capture(root)
+    filesystem, interactive = _external_before_compiler_capture(root)
+    entropy = inventory_module._entropy_input_occurrences(root)
+    # Compare this historical snapshot before the later pipeline module.
+    filesystem = tuple(
+        r
+        for r in filesystem
+        if r[0]
+        not in {"orchestration/mutation_pipeline.py", "orchestration/mutation_reconstruction.py"}
+    )
+    entropy = tuple(
+        r
+        for r in entropy
+        if r[0]
+        not in {"orchestration/mutation_pipeline.py", "orchestration/mutation_reconstruction.py"}
+    )
+    paths = [path for path in paths if path not in _FULL_TREE_ADDITIONS]
+    environment = tuple(row for row in environment if row[0] not in _FULL_TREE_ADDITIONS)
+    assert inventory_module._canonical_sha256(paths) == (
+        "c2471ef24fd724fd8fe76bc15ceeb82fe97eef470c05749d877d4bb6c8b01a4e"
+    )
+    assert inventory_module._canonical_sha256([list(x) for x in environment]) == (
+        "f7e98c98eade04a86b2fa2897b284b696f5fcdc7d6002b3bbe36d913614396cc"
+    )
+    assert inventory_module._canonical_sha256([list(x) for x in filesystem]) == (
+        "997d5e65632eaabb8a55cd4933d456f689a60e4d372cce9813d7c7d9fa30178a"
+    )
+    assert inventory_module._canonical_sha256([list(x) for x in entropy]) == (
+        "556dcc2d348b2b7bc3c6c3f11f8828edfb6e1aac0e1c5827b70528cbe32e3836"
+    )
+    assert (len(paths), len(environment), len(filesystem), len(entropy)) == (333, 560, 2233, 20)
+    assert not interactive
+
+
+def test_native_release_input_join_cannot_grant_population_or_qualification_authority(
+    inventory: AutonomyGateInventory,
+) -> None:
+    sources = {source.source_id: source for source in inventory.source_coverage}
+    assert (
+        sources["explicit:native-calibration-successor-release-inputs"].logical_gate_id
+        == "gate-autonomous-model-authority"
+    )
+    assert (
+        sources["audited-module:orchestration.authenticated_calibration_release"].logical_gate_id
+        == "gate-runtime-package-integrity"
+    )
+    assert inventory.unsatisfied_gate_count == 29 and inventory.current_manual_gate_count == 15
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+def test_native_configuration_proposal_is_not_policy_or_release_admission(
+    inventory: AutonomyGateInventory,
+) -> None:
+    sources = {source.source_id: source for source in inventory.source_coverage}
+    for anchor in (
+        "native-calibration-config-proposal",
+        "native-calibration-config-readback",
+        "native-calibration-config-export",
+    ):
+        assert sources[f"explicit:{anchor}"].logical_gate_id == "gate-autonomous-model-authority"
+        assert sources[f"explicit:{anchor}"].classification is SourceCoverageClassification.GATE
+    assert sources[
+        "audited-module:orchestration.authenticated_calibration_config"
+    ].logical_gate_id == ("gate-runtime-package-integrity")
+    assert inventory.unsatisfied_gate_count == 29 and inventory.current_manual_gate_count == 15
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+def test_population_publication_inputs_cannot_satisfy_external_authentication(
+    inventory: AutonomyGateInventory,
+) -> None:
+    sources = {source.source_id: source for source in inventory.source_coverage}
+    for anchor in (
+        "calibration-registration-publication-subject",
+        "calibration-measurement-publication-subject",
+        "calibration-publication-prefix-comparison",
+    ):
+        assert sources[f"explicit:{anchor}"].logical_gate_id == "gate-external-transparency-seal"
+        assert sources[f"explicit:{anchor}"].classification is SourceCoverageClassification.GATE
+    assert sources["required:external-transparency-publication"].logical_gate_id == (
+        "gate-external-transparency-seal"
+    )
+    assert sources["audited-module:orchestration.calibration_publication"].logical_gate_id == (
+        "gate-runtime-package-integrity"
+    )
+    gate = next(
+        item
+        for item in inventory.logical_gates
+        if item.gate_id == "gate-external-transparency-seal"
+    )
+    assert gate.implementation_state is GateImplementationState.MISSING
+    assert inventory.unsatisfied_gate_count == 29 and inventory.current_manual_gate_count == 15
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
 def test_unresolved_findings_and_external_authorities_remain_separately_unsatisfied(
     inventory: AutonomyGateInventory,
 ) -> None:
@@ -1376,8 +3913,8 @@ def test_development_uncertain_carry_has_explicit_non_authorizing_coverage(
     ],
 )
 def test_development_judgment_execution_and_impact_are_explicitly_nonauthorizing(
-    inventory, source_id, gate_id
-):
+    inventory: AutonomyGateInventory, source_id: str, gate_id: str
+) -> None:
     source = next(item for item in inventory.source_coverage if item.source_id == source_id)
     assert source.logical_gate_id == gate_id
     assert source.classification is SourceCoverageClassification.GATE
@@ -1409,8 +3946,8 @@ def test_committed_inventory_is_canonical_self_hashed_and_current(
     ],
 )
 def test_executed_development_ensemble_remains_explicitly_nonauthorizing(
-    inventory, source_id, gate_id
-):
+    inventory: AutonomyGateInventory, source_id: str, gate_id: str
+) -> None:
     source = next(item for item in inventory.source_coverage if item.source_id == source_id)
     assert source.logical_gate_id == gate_id
     assert source.classification is SourceCoverageClassification.GATE
@@ -1433,8 +3970,8 @@ def test_executed_development_ensemble_remains_explicitly_nonauthorizing(
     ],
 )
 def test_manifest_development_corpus_remains_explicitly_nonauthorizing(
-    inventory, source_id, gate_id
-):
+    inventory: AutonomyGateInventory, source_id: str, gate_id: str
+) -> None:
     source = next(item for item in inventory.source_coverage if item.source_id == source_id)
     assert source.logical_gate_id == gate_id
     assert source.classification is SourceCoverageClassification.GATE
@@ -1442,7 +3979,9 @@ def test_manifest_development_corpus_remains_explicitly_nonauthorizing(
     assert inventory.runtime_authority is inventory.managed_run_ready is False
 
 
-def test_selected_development_deadline_is_a_nonauthorizing_transport_input(inventory):
+def test_selected_development_deadline_is_a_nonauthorizing_transport_input(
+    inventory: AutonomyGateInventory,
+) -> None:
     source = next(
         item
         for item in inventory.source_coverage
@@ -1470,8 +4009,8 @@ def test_selected_development_deadline_is_a_nonauthorizing_transport_input(inven
     ],
 )
 def test_manifest_candidate_review_preserves_all_nonauthorizing_gates(
-    inventory, source_id, gate_id
-):
+    inventory: AutonomyGateInventory, source_id: str, gate_id: str
+) -> None:
     source = next(item for item in inventory.source_coverage if item.source_id == source_id)
     assert source.logical_gate_id == gate_id
     assert source.classification is SourceCoverageClassification.GATE
@@ -1489,8 +4028,8 @@ def test_manifest_candidate_review_preserves_all_nonauthorizing_gates(
     ],
 )
 def test_manifest_candidate_measurement_does_not_promote_development_labels(
-    inventory, source_id, gate_id
-):
+    inventory: AutonomyGateInventory, source_id: str, gate_id: str
+) -> None:
     source = next(item for item in inventory.source_coverage if item.source_id == source_id)
     assert source.logical_gate_id == gate_id
     assert source.classification is SourceCoverageClassification.GATE
@@ -1508,8 +4047,8 @@ def test_manifest_candidate_measurement_does_not_promote_development_labels(
     ],
 )
 def test_manifest_ensemble_foundation_does_not_claim_an_executed_parent_or_authority(
-    inventory, source_id, gate_id
-):
+    inventory: AutonomyGateInventory, source_id: str, gate_id: str
+) -> None:
     source = next(item for item in inventory.source_coverage if item.source_id == source_id)
     assert source.logical_gate_id == gate_id
     assert source.classification is SourceCoverageClassification.GATE
@@ -1544,8 +4083,8 @@ def test_manifest_ensemble_foundation_does_not_claim_an_executed_parent_or_autho
     ],
 )
 def test_manifest_parent_checkpoint_does_not_promote_development_execution(
-    inventory, source_id, gate_id
-):
+    inventory: AutonomyGateInventory, source_id: str, gate_id: str
+) -> None:
     source = next(item for item in inventory.source_coverage if item.source_id == source_id)
     assert source.logical_gate_id == gate_id
     assert source.classification is SourceCoverageClassification.GATE
@@ -1617,8 +4156,8 @@ def test_manifest_parent_checkpoint_does_not_promote_development_execution(
     ],
 )
 def test_manifest_continuation_does_not_promote_response_coverage_to_audit_authority(
-    inventory, source_id, gate_id
-):
+    inventory: AutonomyGateInventory, source_id: str, gate_id: str
+) -> None:
     source = next(item for item in inventory.source_coverage if item.source_id == source_id)
     assert source.logical_gate_id == gate_id
     assert source.classification is SourceCoverageClassification.GATE
@@ -1660,8 +4199,8 @@ class _InnocuousNestedConfig(StrictModel):
     ],
 )
 def test_retained_stability_never_promotes_selected_runs_to_independent_audits(
-    inventory, source_id, gate_id
-):
+    inventory: AutonomyGateInventory, source_id: str, gate_id: str
+) -> None:
     source = next(item for item in inventory.source_coverage if item.source_id == source_id)
     assert source.logical_gate_id == gate_id
     assert source.classification is SourceCoverageClassification.GATE
@@ -1694,7 +4233,9 @@ def test_retained_stability_never_promotes_selected_runs_to_independent_audits(
         ("explicit:development-corpus-repeats-budget-handoff", "gate-cost-ledger-provisioning"),
     ],
 )
-def test_predeclared_candidate_series_cannot_self_qualify(inventory, source_id, gate_id):
+def test_predeclared_candidate_series_cannot_self_qualify(
+    inventory: AutonomyGateInventory, source_id: str, gate_id: str
+) -> None:
     source = next(item for item in inventory.source_coverage if item.source_id == source_id)
     assert source.logical_gate_id == gate_id
     assert source.classification is SourceCoverageClassification.GATE
@@ -1772,6 +4313,34 @@ def test_new_auxiliary_completion_entrypoint_parameter_fails_closed(
         _discover_completion_entrypoint_sources()
     with pytest.raises(AutonomyInventoryError, match="unclassified completion command parameter"):
         inventory_module._command_parameter_classification("new_completion_command", "innocuous")
+
+
+def test_model_owner_source_is_read_once_per_traversal_without_cross_call_cache(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class LocalOwner(StrictModel):
+        first: int = 1
+        second: str = "synthetic"
+
+    source = inventory_module._normalized_ast(LocalOwner)
+    observations: list[object] = []
+
+    def observe(owner: object) -> str:
+        observations.append(owner)
+        return source
+
+    monkeypatch.setattr(inventory_module, "_normalized_ast", observe)
+    first = inventory_module._discover_model_leaf_details(LocalOwner)
+    assert observations == [LocalOwner]
+    assert tuple(row[0] for row in first) == ("first", "second")
+    assert tuple(row[2] for row in first) == (1, 1)
+    assert inventory_module._discover_model_leaf_details(LocalOwner) == first
+    assert observations == [LocalOwner, LocalOwner]
+
+    source = inventory_module._canonical_ast_dump(ast.parse("class ChangedOwner: pass"))
+    changed = inventory_module._discover_model_leaf_details(LocalOwner)
+    assert observations == [LocalOwner, LocalOwner, LocalOwner]
+    assert tuple(row[1] for row in changed) != tuple(row[1] for row in first)
 
 
 def test_existing_field_semantics_drift_changes_the_objective_source_universe() -> None:
@@ -2067,6 +4636,21 @@ def test_authority_entropy_alias_is_detected_without_a_default_gate(tmp_path: Pa
     ]
     with pytest.raises(AutonomyInventoryError, match="unclassified entropy input authority"):
         inventory_module._entropy_input_classification("entropy.py", "authority_id")
+
+
+def test_binary_nonce_entropy_alias_cannot_escape_inventory_discovery(tmp_path: Path) -> None:
+    source_root = tmp_path / "mmaudit"
+    source_root.mkdir()
+    (source_root / "nonce.py").write_text(
+        "from secrets import token_bytes as fresh\ndef nonce():\n    return fresh(16)\n",
+        encoding="utf-8",
+    )
+    occurrences = inventory_module._entropy_input_occurrences(source_root)
+    assert [(path, scope, kind) for path, scope, kind, _ in occurrences] == [
+        ("nonce.py", "nonce", "secrets.token_bytes")
+    ]
+    with pytest.raises(AutonomyInventoryError, match="unclassified entropy input authority"):
+        inventory_module._entropy_input_classification("nonce.py", "nonce")
 
 
 def test_objective_drift_fails_before_any_runtime_discovery(tmp_path: Path) -> None:

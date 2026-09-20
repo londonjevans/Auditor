@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 import pytest
 from pydantic import ValidationError
@@ -316,16 +317,57 @@ def _report(
     *,
     execution_evidence: ExecutionEvidenceKind = ExecutionEvidenceKind.MOCK,
 ) -> ModelBenchmarkReport:
-    return asyncio.run(
-        run_model_benchmark(
-            corpus=suite,
-            targets=[ModelBenchmarkTarget(model_id=model_id)],
-            provider=_DeterministicProvider(
-                suite=suite,
-                execution_evidence=execution_evidence,
-            ),
+    # An explicit factory keeps pytest's outer policy loop installed and closes
+    # only this fixture's own runner, on both success and failure.
+    with asyncio.Runner(loop_factory=asyncio.new_event_loop) as runner:
+        return runner.run(
+            run_model_benchmark(
+                corpus=suite,
+                targets=[ModelBenchmarkTarget(model_id=model_id)],
+                provider=_DeterministicProvider(
+                    suite=suite,
+                    execution_evidence=execution_evidence,
+                ),
+            )
         )
-    )
+
+
+@pytest.mark.parametrize("raises", (False, True))
+def test_report_fixture_preserves_outer_loop_and_closes_its_owned_loop(
+    monkeypatch: pytest.MonkeyPatch, raises: bool
+) -> None:
+    """Synchronous fixture runners must not orphan pytest's current event loop."""
+
+    original_run = run_model_benchmark
+    captured: list[asyncio.AbstractEventLoop] = []
+
+    async def capture_loop(**kwargs: Any) -> ModelBenchmarkReport:
+        captured.append(asyncio.get_running_loop())
+        if raises:
+            raise ValueError("synthetic fixture failure")
+        return await original_run(**kwargs)
+
+    monkeypatch.setattr(f"{__name__}.run_model_benchmark", capture_loop)
+    previous_policy = asyncio.get_event_loop_policy()
+    isolated_policy = asyncio.DefaultEventLoopPolicy()
+    outer = isolated_policy.new_event_loop()
+    asyncio.set_event_loop_policy(isolated_policy)
+    isolated_policy.set_event_loop(outer)
+    try:
+        suite = load_model_benchmark_corpus(CORPUS_PATH)
+        if raises:
+            with pytest.raises(ValueError, match="synthetic fixture failure"):
+                _report(suite, MODEL_IDS[0])
+        else:
+            _report(suite, MODEL_IDS[0])
+        assert isolated_policy.get_event_loop() is outer
+        assert not outer.is_closed()
+        assert len(captured) == 1
+        assert captured[0] is not outer
+        assert captured[0].is_closed()
+    finally:
+        outer.close()
+        asyncio.set_event_loop_policy(previous_policy)
 
 
 def _as_structural_real(report: ModelBenchmarkReport) -> ModelBenchmarkReport:
@@ -533,16 +575,17 @@ def test_portfolio_persists_exact_all_failed_reports_without_runtime_usage(
     tmp_path: Path,
     inputs: _Inputs,
 ) -> None:
-    reports = tuple(
-        asyncio.run(
-            run_model_benchmark(
-                corpus=inputs.suite,
-                targets=[ModelBenchmarkTarget(model_id=model_id)],
-                provider=_UnavailableProvider(),
+    with asyncio.Runner(loop_factory=asyncio.new_event_loop) as runner:
+        reports = tuple(
+            runner.run(
+                run_model_benchmark(
+                    corpus=inputs.suite,
+                    targets=[ModelBenchmarkTarget(model_id=model_id)],
+                    provider=_UnavailableProvider(),
+                )
             )
+            for model_id in MODEL_IDS
         )
-        for model_id in MODEL_IDS
-    )
     diagnostics = tuple(
         CandidateBenchmarkDiagnostic(
             exact_model_id=model_id,

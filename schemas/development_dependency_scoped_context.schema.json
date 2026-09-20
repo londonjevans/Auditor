@@ -1,0 +1,689 @@
+{
+  "$defs": {
+    "DependencyFunctionDeclaration": {
+      "additionalProperties": false,
+      "properties": {
+        "body_byte_end": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "maximum": 262144,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Body Byte End"
+        },
+        "body_byte_start": {
+          "anyOf": [
+            {
+              "exclusiveMaximum": 262144,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Body Byte Start"
+        },
+        "byte_end": {
+          "exclusiveMinimum": 0,
+          "maximum": 262144,
+          "title": "Byte End",
+          "type": "integer"
+        },
+        "byte_start": {
+          "exclusiveMaximum": 262144,
+          "minimum": 0,
+          "title": "Byte Start",
+          "type": "integer"
+        },
+        "id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "function",
+            "constructor",
+            "modifier",
+            "fallback",
+            "receive"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 512,
+          "pattern": "^[A-Za-z_$][A-Za-z0-9_$]*$",
+          "title": "Name",
+          "type": "string"
+        },
+        "owner_type_id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Owner Type Id",
+          "type": "string"
+        },
+        "parameters": {
+          "items": {
+            "$ref": "#/$defs/DependencyTypeBinding"
+          },
+          "maxItems": 64,
+          "title": "Parameters",
+          "type": "array"
+        },
+        "returns": {
+          "items": {
+            "$ref": "#/$defs/DependencyTypeBinding"
+          },
+          "maxItems": 64,
+          "title": "Returns",
+          "type": "array"
+        },
+        "scope_id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Scope Id",
+          "type": "string"
+        },
+        "source": {
+          "maxLength": 512,
+          "pattern": "^(?:[A-Za-z0-9][A-Za-z0-9._-]*/)*[A-Za-z0-9][A-Za-z0-9._-]*\\.sol$",
+          "title": "Source",
+          "type": "string"
+        },
+        "source_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Sha256",
+          "type": "string"
+        },
+        "visibility": {
+          "enum": [
+            "public",
+            "external",
+            "private",
+            "internal",
+            "UNSPECIFIED"
+          ],
+          "title": "Visibility",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "source",
+        "source_sha256",
+        "owner_type_id",
+        "byte_start",
+        "byte_end",
+        "scope_id",
+        "kind",
+        "name",
+        "parameters",
+        "returns",
+        "visibility",
+        "body_byte_start",
+        "body_byte_end"
+      ],
+      "title": "DependencyFunctionDeclaration",
+      "type": "object"
+    },
+    "DependencyLexicalScope": {
+      "additionalProperties": false,
+      "properties": {
+        "byte_end": {
+          "exclusiveMinimum": 0,
+          "maximum": 262144,
+          "title": "Byte End",
+          "type": "integer"
+        },
+        "byte_start": {
+          "exclusiveMaximum": 262144,
+          "minimum": 0,
+          "title": "Byte Start",
+          "type": "integer"
+        },
+        "id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "CONTRACT",
+            "FUNCTION",
+            "BLOCK",
+            "FOR"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "owner_type_id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Owner Type Id",
+          "type": "string"
+        },
+        "parent_id": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Parent Id"
+        },
+        "source": {
+          "maxLength": 512,
+          "pattern": "^(?:[A-Za-z0-9][A-Za-z0-9._-]*/)*[A-Za-z0-9][A-Za-z0-9._-]*\\.sol$",
+          "title": "Source",
+          "type": "string"
+        },
+        "source_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "source",
+        "source_sha256",
+        "owner_type_id",
+        "byte_start",
+        "byte_end",
+        "kind",
+        "parent_id"
+      ],
+      "title": "DependencyLexicalScope",
+      "type": "object"
+    },
+    "DependencyScopedCall": {
+      "additionalProperties": false,
+      "properties": {
+        "argument_count": {
+          "anyOf": [
+            {
+              "maximum": 64,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Argument Count"
+        },
+        "byte_end": {
+          "exclusiveMinimum": 0,
+          "maximum": 262144,
+          "title": "Byte End",
+          "type": "integer"
+        },
+        "byte_start": {
+          "exclusiveMaximum": 262144,
+          "minimum": 0,
+          "title": "Byte Start",
+          "type": "integer"
+        },
+        "implementation_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 4096,
+          "title": "Implementation Ids",
+          "type": "array"
+        },
+        "implementation_member_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 4096,
+          "title": "Implementation Member Ids",
+          "type": "array"
+        },
+        "member": {
+          "maxLength": 512,
+          "pattern": "^[A-Za-z_$][A-Za-z0-9_$]*$",
+          "title": "Member",
+          "type": "string"
+        },
+        "member_declaration_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 4096,
+          "title": "Member Declaration Ids",
+          "type": "array"
+        },
+        "member_resolution": {
+          "enum": [
+            "DECLARATIONS_BOUND",
+            "NOT_ESTABLISHED"
+          ],
+          "title": "Member Resolution",
+          "type": "string"
+        },
+        "receiver": {
+          "$ref": "#/$defs/DependencyTypeBinding"
+        },
+        "receiver_form": {
+          "enum": [
+            "VALUE",
+            "TYPE_CAST",
+            "TYPE_MEMBER",
+            "THIS",
+            "UNSUPPORTED"
+          ],
+          "title": "Receiver Form",
+          "type": "string"
+        },
+        "receiver_value_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 4096,
+          "title": "Receiver Value Ids",
+          "type": "array"
+        },
+        "scope_id": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Scope Id"
+        },
+        "shortfalls": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 64,
+          "title": "Shortfalls",
+          "type": "array"
+        },
+        "source": {
+          "maxLength": 512,
+          "pattern": "^(?:[A-Za-z0-9][A-Za-z0-9._-]*/)*[A-Za-z0-9][A-Za-z0-9._-]*\\.sol$",
+          "title": "Source",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "byte_start",
+        "byte_end",
+        "scope_id",
+        "member",
+        "argument_count",
+        "receiver_form",
+        "receiver",
+        "receiver_value_ids",
+        "member_declaration_ids",
+        "implementation_ids",
+        "implementation_member_ids",
+        "shortfalls",
+        "member_resolution"
+      ],
+      "title": "DependencyScopedCall",
+      "type": "object"
+    },
+    "DependencyScopedMembers": {
+      "additionalProperties": false,
+      "properties": {
+        "gap_indices": {
+          "items": {
+            "type": "integer"
+          },
+          "maxItems": 4096,
+          "title": "Gap Indices",
+          "type": "array"
+        },
+        "members": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 256,
+          "minItems": 1,
+          "title": "Members",
+          "type": "array"
+        },
+        "primary": {
+          "maxLength": 512,
+          "pattern": "^(?:[A-Za-z0-9][A-Za-z0-9._-]*/)*[A-Za-z0-9][A-Za-z0-9._-]*\\.sol$",
+          "title": "Primary",
+          "type": "string"
+        },
+        "unresolved_call_indices": {
+          "items": {
+            "type": "integer"
+          },
+          "maxItems": 4096,
+          "title": "Unresolved Call Indices",
+          "type": "array"
+        }
+      },
+      "required": [
+        "primary",
+        "members",
+        "unresolved_call_indices",
+        "gap_indices"
+      ],
+      "title": "DependencyScopedMembers",
+      "type": "object"
+    },
+    "DependencyTargetGap": {
+      "additionalProperties": false,
+      "properties": {
+        "byte_start": {
+          "exclusiveMaximum": 262144,
+          "minimum": 0,
+          "title": "Byte Start",
+          "type": "integer"
+        },
+        "reason": {
+          "maxLength": 128,
+          "pattern": "^[A-Z_]+$",
+          "title": "Reason",
+          "type": "string"
+        },
+        "source": {
+          "maxLength": 512,
+          "pattern": "^(?:[A-Za-z0-9][A-Za-z0-9._-]*/)*[A-Za-z0-9][A-Za-z0-9._-]*\\.sol$",
+          "title": "Source",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "byte_start",
+        "reason"
+      ],
+      "title": "DependencyTargetGap",
+      "type": "object"
+    },
+    "DependencyTypeBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "byte_start": {
+          "exclusiveMaximum": 262144,
+          "minimum": 0,
+          "title": "Byte Start",
+          "type": "integer"
+        },
+        "candidate_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 4096,
+          "title": "Candidate Ids",
+          "type": "array"
+        },
+        "shortfall": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "pattern": "^[A-Z_]+$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Shortfall"
+        },
+        "source": {
+          "maxLength": 512,
+          "pattern": "^(?:[A-Za-z0-9][A-Za-z0-9._-]*/)*[A-Za-z0-9][A-Za-z0-9._-]*\\.sol$",
+          "title": "Source",
+          "type": "string"
+        },
+        "spelling": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Spelling",
+          "type": "string"
+        },
+        "target_id": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Id"
+        }
+      },
+      "required": [
+        "source",
+        "byte_start",
+        "spelling",
+        "candidate_ids"
+      ],
+      "title": "DependencyTypeBinding",
+      "type": "object"
+    },
+    "DependencyValueDeclaration": {
+      "additionalProperties": false,
+      "properties": {
+        "byte_end": {
+          "exclusiveMinimum": 0,
+          "maximum": 262144,
+          "title": "Byte End",
+          "type": "integer"
+        },
+        "byte_start": {
+          "exclusiveMaximum": 262144,
+          "minimum": 0,
+          "title": "Byte Start",
+          "type": "integer"
+        },
+        "id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "STATE",
+            "PARAMETER",
+            "RETURN",
+            "LOCAL"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 512,
+          "pattern": "^[A-Za-z_$][A-Za-z0-9_$]*$",
+          "title": "Name",
+          "type": "string"
+        },
+        "name_byte_start": {
+          "exclusiveMaximum": 262144,
+          "minimum": 0,
+          "title": "Name Byte Start",
+          "type": "integer"
+        },
+        "owner_type_id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Owner Type Id",
+          "type": "string"
+        },
+        "scope_id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Scope Id",
+          "type": "string"
+        },
+        "source": {
+          "maxLength": 512,
+          "pattern": "^(?:[A-Za-z0-9][A-Za-z0-9._-]*/)*[A-Za-z0-9][A-Za-z0-9._-]*\\.sol$",
+          "title": "Source",
+          "type": "string"
+        },
+        "source_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Sha256",
+          "type": "string"
+        },
+        "value_type": {
+          "$ref": "#/$defs/DependencyTypeBinding"
+        },
+        "visibility": {
+          "enum": [
+            "public",
+            "private",
+            "internal",
+            "UNSPECIFIED"
+          ],
+          "title": "Visibility",
+          "type": "string"
+        },
+        "visible_from": {
+          "maximum": 262144,
+          "minimum": 0,
+          "title": "Visible From",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "source",
+        "source_sha256",
+        "owner_type_id",
+        "byte_start",
+        "byte_end",
+        "scope_id",
+        "kind",
+        "name",
+        "name_byte_start",
+        "visible_from",
+        "visibility",
+        "value_type"
+      ],
+      "title": "DependencyValueDeclaration",
+      "type": "object"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/development_dependency_scoped_context.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "calls": {
+      "items": {
+        "$ref": "#/$defs/DependencyScopedCall"
+      },
+      "maxItems": 4096,
+      "title": "Calls",
+      "type": "array"
+    },
+    "complete_static_resolution": {
+      "const": false,
+      "default": false,
+      "title": "Complete Static Resolution",
+      "type": "boolean"
+    },
+    "functions": {
+      "items": {
+        "$ref": "#/$defs/DependencyFunctionDeclaration"
+      },
+      "maxItems": 4096,
+      "title": "Functions",
+      "type": "array"
+    },
+    "gaps": {
+      "items": {
+        "$ref": "#/$defs/DependencyTargetGap"
+      },
+      "maxItems": 4096,
+      "title": "Gaps",
+      "type": "array"
+    },
+    "policy": {
+      "default": "MODERN_LEXICAL_VALUES_AND_NOMINAL_MEMBERS_V1",
+      "enum": [
+        "MODERN_LEXICAL_VALUES_AND_NOMINAL_MEMBERS_V1",
+        "MODERN_LEXICAL_VALUES_AND_MODIFIER_HEADERS_V2",
+        "MODERN_LEXICAL_VALUES_AND_CONSTRUCTOR_HEADERS_V3"
+      ],
+      "title": "Policy",
+      "type": "string"
+    },
+    "primaries": {
+      "items": {
+        "$ref": "#/$defs/DependencyScopedMembers"
+      },
+      "maxItems": 256,
+      "minItems": 1,
+      "title": "Primaries",
+      "type": "array"
+    },
+    "scope": {
+      "const": "SOURCE_DECLARATIONS_NOT_COMPLETE_TYPECHECK_OR_DEPLOYED_DISPATCH",
+      "default": "SOURCE_DECLARATIONS_NOT_COMPLETE_TYPECHECK_OR_DEPLOYED_DISPATCH",
+      "title": "Scope",
+      "type": "string"
+    },
+    "scopes": {
+      "items": {
+        "$ref": "#/$defs/DependencyLexicalScope"
+      },
+      "maxItems": 4096,
+      "title": "Scopes",
+      "type": "array"
+    },
+    "source_inventory_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Source Inventory Sha256",
+      "type": "string"
+    },
+    "supplied_type_ids": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 4096,
+      "title": "Supplied Type Ids",
+      "type": "array"
+    },
+    "target_context_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Target Context Sha256",
+      "type": "string"
+    },
+    "values": {
+      "items": {
+        "$ref": "#/$defs/DependencyValueDeclaration"
+      },
+      "maxItems": 4096,
+      "title": "Values",
+      "type": "array"
+    }
+  },
+  "required": [
+    "source_inventory_sha256",
+    "target_context_sha256",
+    "supplied_type_ids",
+    "scopes",
+    "values",
+    "functions",
+    "calls",
+    "gaps",
+    "primaries"
+  ],
+  "title": "DependencyScopedContext",
+  "type": "object"
+}

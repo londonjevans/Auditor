@@ -63,23 +63,26 @@ _FROZEN_PIPELINE_RUN_PARAMETERS_SHA256 = (
     "55123fbc974864c8cae44eef98ac34c9c46bb625ea6784420290870367fe4748"
 )
 _FROZEN_COMPLETION_ENTRYPOINT_PARAMETERS_SHA256 = (
-    "d2480ffff787e69bdad9bb0ce39127beaada77cf84e971d9dd43cd586a2808c4"
+    "51f728caf38034b30bf88776a039b9df4887adf35f4645f82f0d06c5808a3899"
 )
 _FROZEN_AUDITED_MODULE_PATHS_SHA256 = (
-    "e43b2161e74b2994accb9d3dc6479daf0c3fec3985115f39e624cac56da3f752"
+    "6c7961edf762436bba1a941d16b13c24732976561fbd738cd7a217c5093af788"
 )
 _FROZEN_DIRECT_ENVIRONMENT_LOCI_SHA256 = (
-    "e7b2e29296448adc36ccbe145f89dd7e75d16579db21fa40068783ef52e916d9"
+    "d39430929f514d9023a465e11ede76dba5994034d0d732f35cf9c87a0c7b7d9d"
 )
 _FROZEN_PROJECT_SCRIPTS_SHA256 = "9c597fa232065af210cc6b85424e2571d49c6b1ef941c5470602e916ab98c452"
 _FROZEN_FILESYSTEM_INPUT_LOCI_SHA256 = (
-    "e620923d264b3c9da491c1e4872eb87bca17e10c289f176c69720361dd166432"
+    "321a8c4603179ad294e5af46e578e56452fc4ba3169f837a7d44d8ffbb338959"
 )
 _FROZEN_INTERACTIVE_INPUT_LOCI_SHA256 = (
     "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
 )
 _FROZEN_ENTROPY_INPUT_LOCI_SHA256 = (
-    "2c6625ea6c47281deb350151cb369c8e2f08e0eee853fca319ff8bbcaef5a9fd"
+    "0733596cdf7a505c59105dc60a1c8c22a9c65873112b7f45ffc4c47be0aad5b0"
+)
+_FROZEN_RUNTIME_EXECUTION_LOCI_SHA256 = (
+    "d0d6bd48f4c7c1da3f7135eea2e6c3810b2b7b8a524c8b61189ef41a41191d9f"
 )
 
 
@@ -95,6 +98,9 @@ class CompletionInputSourceKind(StrEnum):
     roots, host/platform/process identity, Python runtime identity, and clock
     observations. ``ENTROPY_INPUT`` is the separately frozen finite set of random-value
     loci reviewed for completion-visible authority, resume, ledger, and replay effects.
+    ``RUNTIME_EXECUTION_INPUT`` separately binds elapsed clocks, imported module state,
+    process/descriptor observations and generated execution producers. It is a conservative
+    syntactic inventory, not proof of dynamic dataflow or native dependency closure.
     """
 
     AUDIT_CONFIG_LEAF = "AUDIT_CONFIG_LEAF"
@@ -107,6 +113,7 @@ class CompletionInputSourceKind(StrEnum):
     COMPLETION_ENTRYPOINT_PARAMETER = "COMPLETION_ENTRYPOINT_PARAMETER"
     DIRECT_ENVIRONMENT_INPUT = "DIRECT_ENVIRONMENT_INPUT"
     ENTROPY_INPUT = "ENTROPY_INPUT"
+    RUNTIME_EXECUTION_INPUT = "RUNTIME_EXECUTION_INPUT"
     AUDITED_MODULE_UNIVERSE = "AUDITED_MODULE_UNIVERSE"
     EXPLICIT_NON_FIELD_GATE = "EXPLICIT_NON_FIELD_GATE"
     REQUIRED_MISSING_GATE = "REQUIRED_MISSING_GATE"
@@ -209,6 +216,7 @@ class AutonomyGateInventory(StrictModel):
     discovery_scope: Literal[
         "TYPED_BOUNDARIES_REGISTERED_ENTRYPOINTS_RUNTIME_PACKAGE_RESOURCES_"
         "UNSEALED_ENV_HOST_WALL_CLOCK_AUTHORITY_ENTROPY_FILESYSTEM_INTERACTIVE_"
+        "RUNTIME_STATE_ELAPSED_CLOCK_PROCESS_IO_GENERATED_CODE_"
         "OPAQUE_AUTHORITIES_"
         "EXPLICIT_MISSING_OBJECTIVE_BOUNDARIES"
     ]
@@ -234,7 +242,7 @@ class AutonomyGateInventory(StrictModel):
     cli_run_parameter_count: Literal[53]
     pipeline_init_parameter_count: Literal[29]
     pipeline_run_parameter_count: Literal[16]
-    completion_entrypoint_parameter_count: Literal[355]
+    completion_entrypoint_parameter_count: Literal[360]
     source_kind_counts: dict[CompletionInputSourceKind, int] = Field(
         min_length=len(CompletionInputSourceKind),
         max_length=len(CompletionInputSourceKind),
@@ -809,6 +817,28 @@ def _assert_frozen_source_shape(
         raise AutonomyInventoryError(f"{label} source shape drifted from the closed inventory")
 
 
+def _canonical_ast_dump(value: object) -> str:
+    """Pin location-free parsed AST bytes independently of Python's debug formatting.
+
+    Preserve the inventory's Python 3.13 representation on Python 3.12 as well:
+    omit empty sequence fields and absent optional fields, but retain literal None,
+    expression contexts, field order, and every nonempty semantic value.
+    """
+
+    if isinstance(value, ast.AST):
+        fields = []
+        for name, field in ast.iter_fields(value):
+            if isinstance(field, list) and not field:
+                continue
+            if field is None and getattr(type(value), name, ...) is None:
+                continue
+            fields.append(f"{name}={_canonical_ast_dump(field)}")
+        return f"{type(value).__name__}({', '.join(fields)})"
+    if isinstance(value, list):
+        return f"[{', '.join(_canonical_ast_dump(item) for item in value)}]"
+    return repr(value)
+
+
 def _normalized_ast(value: Any) -> str:
     """Return location-free AST for a callable/class, with a deterministic fallback."""
 
@@ -817,7 +847,7 @@ def _normalized_ast(value: Any) -> str:
     except (OSError, TypeError):
         return repr(value)
     parsed = ast.parse(textwrap.dedent(source))
-    return ast.dump(parsed, annotate_fields=True, include_attributes=False)
+    return _canonical_ast_dump(parsed)
 
 
 def _qualified_name(value: object) -> str:
@@ -893,7 +923,12 @@ def _metadata_descriptor(value: object) -> object:
     return {"type": _qualified_name(value), "attributes": attributes}
 
 
-def _field_descriptor(field: FieldInfo, owner: type[BaseModel]) -> dict[str, object]:
+def _field_descriptor(
+    field: FieldInfo,
+    owner: type[BaseModel],
+    *,
+    owner_semantics_sha256: str,
+) -> dict[str, object]:
     try:
         validation_schema: object = TypeAdapter(field.rebuild_annotation()).json_schema()
     except (TypeError, ValueError):
@@ -907,7 +942,7 @@ def _field_descriptor(field: FieldInfo, owner: type[BaseModel]) -> dict[str, obj
         default = _canonical_default(field.default)
     return {
         "owner": _qualified_name(owner),
-        "owner_semantics_sha256": hashlib.sha256(_normalized_ast(owner).encode()).hexdigest(),
+        "owner_semantics_sha256": owner_semantics_sha256,
         "validation_schema": validation_schema,
         "default": default,
     }
@@ -957,9 +992,14 @@ def _discover_model_leaf_details(
     ) -> None:
         if current in active:
             raise AutonomyInventoryError("recursive AuditConfig model is unsupported")
+        # All fields in this traversal share the same observed owner source.
+        # Re-observe on every traversal; never cache source across inventory builds.
+        owner_semantics_sha256 = hashlib.sha256(_normalized_ast(current).encode()).hexdigest()
         for field_name, field in current.model_fields.items():
             base_path = f"{prefix}.{field_name}" if prefix else field_name
-            descriptor = _field_descriptor(field, current)
+            descriptor = _field_descriptor(
+                field, current, owner_semantics_sha256=owner_semantics_sha256
+            )
             nested = _nested_model_paths(field.annotation)
             if nested:
                 for marker, child in nested:
@@ -1658,7 +1698,18 @@ def _command_parameter_classification(
         "upgrade_price_cap_profile_v3",
     }:
         return SourceCoverageClassification.GATE, "gate-autonomous-model-authority"
-    if command_name == "models_emit_selection_plan_reactivation" and parameter_name == "candidate":
+    if (
+        command_name == "models_emit_selection_plan_reactivation"
+        and parameter_name == "reserve_then_reconcile_costs"
+    ):
+        return SourceCoverageClassification.GATE, "gate-cost-ledger-provisioning"
+    if command_name == "models_emit_selection_plan_reactivation" and parameter_name in {
+        "candidate",
+        "candidate_endpoint_trial",
+        "refresh_endpoint_inventory",
+        "primary_judge_endpoint",
+        "replay_judge_endpoint",
+    }:
         return SourceCoverageClassification.GATE, "gate-autonomous-model-authority"
     if command_name == "models_list_endpoints" and parameter_name == "model_id":
         return SourceCoverageClassification.GATE, "gate-autonomous-model-authority"
@@ -2024,7 +2075,7 @@ def _read_normalized_module_ast(path: Path) -> str:
         raise AutonomyInventoryError(
             f"audited Python module cannot be parsed: {path.name}"
         ) from exc
-    return ast.dump(parsed, annotate_fields=True, include_attributes=False)
+    return _canonical_ast_dump(parsed)
 
 
 def _module_source_id(relative_path: str) -> str:
@@ -2330,7 +2381,7 @@ class _EnvironmentAuthorityVisitor(_ScopedBoundaryVisitor):
             (
                 scope,
                 kind,
-                ast.dump(node, annotate_fields=True, include_attributes=False),
+                _canonical_ast_dump(node),
             )
         )
 
@@ -2472,6 +2523,16 @@ def _direct_environment_gate(
         return "gate-human-signoff-boundary"
     if kind == "wall-clock":
         return "gate-trusted-time-independent-replay"
+    if relative_path in {
+        "orchestration/opentimestamps_calendar_journal.py",
+        "orchestration/calibration_calendar_publication.py",
+        "orchestration/calibration_calendar_controller.py",
+        "orchestration/calibration_checkpoint_publication.py",
+    } and kind in {
+        "process-identity",
+        "host-identity",
+    }:
+        return "gate-external-transparency-seal"
     if kind in {"process-identity", "process-identity-binding"}:
         if relative_path in {
             "benchmark/foundry_mutation_executor.py",
@@ -2480,7 +2541,10 @@ def _direct_environment_gate(
             "models/authenticated_calibration.py",
         }:
             return "gate-benchmark-evidence-authority"
-        if relative_path == "orchestration/budgets.py":
+        if relative_path in {
+            "orchestration/budgets.py",
+            "orchestration/authenticated_calibration_accounting.py",
+        }:
             return "gate-cost-ledger-provisioning"
         if relative_path in {
             "models/openrouter.py",
@@ -2501,7 +2565,11 @@ def _direct_environment_gate(
             if "privacy_evidence_custody" in scope:
                 return "gate-client-privacy-consent"
             return "gate-release-evidence-pipeline"
-        if relative_path == "orchestration/truncation_recovery_evidence.py":
+        if relative_path in {
+            "orchestration/truncation_recovery_evidence.py",
+            "orchestration/truncation_tree_evidence.py",
+            "orchestration/truncation_tree_promotion.py",
+        }:
             return "gate-release-evidence-pipeline"
         if relative_path == "isolation/container.py":
             return "gate-reproduction-capability-policy"
@@ -2558,6 +2626,12 @@ def _direct_environment_gate(
             return "gate-reproduction-capability-policy"
     if kind == "path-resolution":
         return "gate-managed-toolchain-bundle"
+    if (
+        relative_path == "solidity/formal.py"
+        and scope == "_CompiledPropertyToolAdapter.dependencies"
+        and kind == "environment-call"
+    ):
+        return "gate-managed-toolchain-bundle"
     if kind in {"host-platform", "host-identity", "python-runtime"}:
         return "gate-managed-toolchain-bundle"
     if kind == "temporary-root":
@@ -2582,6 +2656,8 @@ def _direct_environment_gate(
         "scanners/clean_chain.py",
         "scanners/foundry.py",
         "scanners/slither.py",
+        "scanners/solc_capture.py",
+        "solidity/solc_capture_worker.py",
         "isolation/container.py",
     }:
         return "gate-managed-toolchain-bundle"
@@ -2636,13 +2712,13 @@ class _EntropyBoundaryVisitor(_ScopedBoundaryVisitor):
 
     def visit_Call(self, node: ast.Call) -> None:
         call_name = self._qualified_name(node.func) or self._binding_resolution(node.func)
-        if call_name in {"secrets.token_hex", "uuid.uuid4"}:
+        if call_name in {"secrets.token_hex", "secrets.token_bytes", "uuid.uuid4"}:
             scope = ".".join(self.scope) if self.scope else "module"
             self.occurrences.append(
                 (
                     scope,
                     call_name,
-                    ast.dump(node, annotate_fields=True, include_attributes=False),
+                    _canonical_ast_dump(node),
                 )
             )
         self.generic_visit(node)
@@ -2673,6 +2749,13 @@ def _entropy_input_classification(
     relative_path: str,
     scope: str,
 ) -> tuple[SourceCoverageClassification, str | None]:
+    if relative_path == "orchestration/mutation_pipeline.py" and scope == "_run_project":
+        return SourceCoverageClassification.GATE, "gate-benchmark-evidence-authority"
+    if (
+        relative_path == "orchestration/opentimestamps_calendar_transport.py"
+        and scope == "_prepare_submission_context"
+    ):
+        return SourceCoverageClassification.GATE, "gate-external-transparency-seal"
     if relative_path == "orchestration/cost_ledger.py":
         return SourceCoverageClassification.GATE, "gate-cost-ledger-provisioning"
     if relative_path == "models/openrouter.py":
@@ -2885,7 +2968,7 @@ class _ExternalInputBoundaryVisitor(_ScopedBoundaryVisitor):
                 (
                     self._scope(),
                     filesystem_kind,
-                    ast.dump(node, annotate_fields=True, include_attributes=False),
+                    _canonical_ast_dump(node),
                 )
             )
         interactive = call_name in {
@@ -2902,7 +2985,7 @@ class _ExternalInputBoundaryVisitor(_ScopedBoundaryVisitor):
             self.interactive.append(
                 (
                     self._scope(),
-                    ast.dump(node, annotate_fields=True, include_attributes=False),
+                    _canonical_ast_dump(node),
                 )
             )
         self.generic_visit(node)
@@ -2934,7 +3017,15 @@ def _external_input_occurrences(
 
 
 _FILESYSTEM_MODULE_GATE_IDS: dict[str, str] = {
+    "scanners/solc_capture.py": "gate-managed-toolchain-bundle",
+    "solidity/solc_capture_worker.py": "gate-managed-toolchain-bundle",
+    "orchestration/mutation_reconstruction.py": "gate-benchmark-evidence-authority",
+    "orchestration/mutation_pipeline.py": "gate-benchmark-evidence-authority",
+    "orchestration/calibration_calendar_publication.py": "gate-external-transparency-seal",
+    "orchestration/calibration_checkpoint_publication.py": "gate-external-transparency-seal",
+    "orchestration/opentimestamps_calendar_journal.py": "gate-external-transparency-seal",
     "orchestration/development_corpus_ensemble.py": "gate-release-evidence-pipeline",
+    "orchestration/development_tree.py": "gate-release-evidence-pipeline",
     "adversarial_acceptance.py": "gate-release-evidence-pipeline",
     "agents/base.py": "gate-runtime-package-integrity",
     "benchmark/certificate.py": "gate-benchmark-evidence-authority",
@@ -2977,6 +3068,8 @@ _FILESYSTEM_MODULE_GATE_IDS: dict[str, str] = {
     "models/retry_continuity.py": "gate-managed-profile",
     "operator_secrets.py": "gate-provider-secret-transport",
     "orchestration/autonomy_gate_inventory.py": "gate-runtime-package-integrity",
+    "orchestration/calibration_population.py": "gate-authenticated-real-campaign",
+    "orchestration/authenticated_calibration_measurement.py": "gate-authenticated-real-campaign",
     "orchestration/actor_model.py": "gate-client-audit-scope",
     "orchestration/certification.py": "gate-release-evidence-pipeline",
     "orchestration/ci.py": "gate-release-evidence-pipeline",
@@ -3014,6 +3107,7 @@ _FILESYSTEM_MODULE_GATE_IDS: dict[str, str] = {
     "release_verification.py": "gate-release-evidence-pipeline",
     "reporting/json_report.py": "gate-report-delivery",
     "repository/configuration_custody.py": "gate-managed-profile",
+    "repository/development_corpus_tree.py": "gate-client-audit-scope",
     "repository/directory_custody.py": "gate-release-evidence-pipeline",
     "repository/discovery.py": "gate-client-audit-scope",
     "repository/file_custody.py": "gate-release-evidence-pipeline",
@@ -3195,6 +3289,11 @@ def _filesystem_input_gate(relative_path: str, scope: str, expression: str = "")
         if scope in {"_compile_one", "_file_sha256", "_managed_compilation_selection"}:
             return "gate-managed-toolchain-bundle"
     if relative_path == "solidity/formal.py" and scope in {
+        "_CompiledPropertyToolAdapter.dependencies",
+        "_CompiledPropertyToolAdapter.prepare_workspace_with_dependencies",
+        "_CompiledPropertyToolAdapter.build_command_with_dependencies",
+        "_CompiledPropertyToolAdapter.validate_pre_execution_inputs",
+        "_observe_property_compiler",
         "FormalAdapter.available",
         "HalmosAdapter.build_command_with_dependencies",
         "HalmosAdapter.dependencies",
@@ -3274,6 +3373,312 @@ def _discover_external_input_sources(source_root: Path) -> list[_SourceDraft]:
                     }
                 ),
                 gate_id=_filesystem_input_gate(relative_path, scope, expression),
+            )
+        )
+    return drafts
+
+
+_RUNTIME_CALL_KINDS = {
+    **dict.fromkeys(
+        ("time.monotonic", "time.monotonic_ns", "time.perf_counter", "time.perf_counter_ns"),
+        "elapsed-clock",
+    ),
+    **dict.fromkeys(
+        (
+            "subprocess.Popen",
+            "subprocess.run",
+            "subprocess.call",
+            "subprocess.check_call",
+            "subprocess.check_output",
+            "asyncio.create_subprocess_exec",
+            "asyncio.create_subprocess_shell",
+            "os.execve",
+            "os.execv",
+            "os.execvpe",
+            "os.execvp",
+            "os.execl",
+            "os.execle",
+            "os.execlp",
+            "os.execlpe",
+            "os.fork",
+            "os.posix_spawn",
+            "os.posix_spawnp",
+        ),
+        "child-dispatch",
+    ),
+    **dict.fromkeys(
+        (
+            "os.read",
+            "os.write",
+            "os.close",
+            "os.fdopen",
+            "os.pipe",
+            "os.pipe2",
+            "os.dup",
+            "os.dup2",
+            "os.set_blocking",
+            "os.fsync",
+            "fcntl.flock",
+            "fcntl.lockf",
+            "fcntl.fcntl",
+            "select.select",
+            "select.poll",
+            "select.epoll",
+            "select.kqueue",
+            "selectors.DefaultSelector",
+            "selectors.SelectSelector",
+        ),
+        "descriptor-io",
+    ),
+    **dict.fromkeys(
+        ("os.kill", "os.killpg", "os.waitpid", "os.waitid", "os.getpgid", "os.setsid"),
+        "process-lifecycle",
+    ),
+    "builtins.exec": "dynamic-code",
+    "builtins.compile": "dynamic-code",
+}
+_RUNTIME_METHOD_NAMES = frozenset(
+    {
+        "poll",
+        "wait",
+        "kill",
+        "terminate",
+        "communicate",
+        "send_signal",
+        "fileno",
+        "read",
+        "read1",
+        "readinto",
+        "write",
+        "close",
+        "select",
+        "register",
+        "unregister",
+        "get_map",
+    }
+)
+_RUNTIME_STATE_NAMES = frozenset(
+    {
+        "sys.modules",
+        "trusted_sys.modules",
+        "sys.flags",
+        "sys.stdlib_module_names",
+        "sys.path",
+        "sys.meta_path",
+        "sys.path_hooks",
+        "sys.path_importer_cache",
+    }
+)
+_GENERATED_EXECUTION_SCOPES = frozenset(
+    {
+        ("scanners/solc_capture.py", "_worker_bootstrap"),
+        ("scanners/solc_capture.py", "prepare_solc_capture"),
+        ("scanners/solc_capture.py", "prepare_owned_coverage_launch"),
+        ("scanners/solc_capture.py", "prepare_owned_debugger_launch"),
+    }
+)
+
+
+class _RuntimeExecutionBoundaryVisitor(_ScopedBoundaryVisitor):
+    """Conservative syntactic runtime boundary; never execute or attest inspected code.
+
+    Receiver methods/attributes are intentionally a superset, not inferred object types.
+    Opaque dynamic behavior remains bound by the complete module AST. Explicit generated
+    producers retain their entire AST, including literal code and interpolated handoffs.
+    This inventory does not prove interpreter or native dependency closure.
+    """
+
+    def __init__(self, aliases: Mapping[str, str], relative_path: str) -> None:
+        super().__init__({**aliases, "exec": "builtins.exec", "compile": "builtins.compile"})
+        self.relative_path = relative_path
+        self.occurrences: list[tuple[str, str, str]] = []
+
+    def _record(self, kind: str, node: ast.AST) -> None:
+        self.occurrences.append(
+            (
+                ".".join(self.scope) if self.scope else "module",
+                kind,
+                _canonical_ast_dump(node),
+            )
+        )
+
+    def _bind(self, name: str, resolved: str | None) -> None:
+        if (
+            resolved in _RUNTIME_CALL_KINDS
+            or resolved in _RUNTIME_STATE_NAMES
+            or (
+                resolved is not None
+                and "." in resolved
+                and resolved.rsplit(".", 1)[-1] in _RUNTIME_METHOD_NAMES
+            )
+        ):
+            self._alias_frames[-1][name] = str(resolved)
+        else:
+            super()._bind(name, resolved)
+
+    def _binding_resolution(self, value: ast.AST) -> str | None:
+        literal = self._literal_getattr(value)
+        if literal is not None:
+            candidate = ".".join(literal)
+            if (
+                candidate in _RUNTIME_CALL_KINDS
+                or candidate in _RUNTIME_STATE_NAMES
+                or literal[1] in _RUNTIME_METHOD_NAMES
+            ):
+                return candidate
+        return super()._binding_resolution(value)
+
+    def _visit_function(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
+        scope = ".".join((*self.scope, node.name))
+        if (self.relative_path, scope) in _GENERATED_EXECUTION_SCOPES:
+            self.scope.append(node.name)
+            self._record("generated-code-producer", node)
+            self.scope.pop()
+        super()._visit_function(node)
+
+    def visit_Call(self, node: ast.Call) -> None:
+        name = self._qualified_name(node.func) or self._binding_resolution(node.func)
+        kind = _RUNTIME_CALL_KINDS.get(name or "")
+        if kind is not None:
+            self._record(kind, node)
+        elif (isinstance(node.func, ast.Attribute) and node.func.attr in _RUNTIME_METHOD_NAMES) or (
+            name is not None and "." in name and name.rsplit(".", 1)[-1] in _RUNTIME_METHOD_NAMES
+        ):
+            self._record("runtime-method", node)
+        literal = self._literal_getattr(node)
+        if literal is not None:
+            if ".".join(literal) in _RUNTIME_STATE_NAMES:
+                self._record("python-runtime-state", node)
+            elif literal[1] in {"__file__", "__cached__", "__spec__"}:
+                self._record("imported-module-attribute", node)
+        elif name == "builtins.getattr":
+            self._record("dynamic-attribute", node)
+        self.generic_visit(node)
+
+    def visit_Attribute(self, node: ast.Attribute) -> None:
+        name = self._qualified_name(node)
+        if name is not None and any(
+            name == root or name.startswith(root + ".") for root in _RUNTIME_STATE_NAMES
+        ):
+            self._record("python-runtime-state", node)
+            return
+        if node.attr in {"__file__", "__cached__", "__spec__"}:
+            self._record("imported-module-attribute", node)
+        elif node.attr in {"stdin", "stdout", "stderr", "returncode", "pid"}:
+            self._record("process-observation", node)
+        self.generic_visit(node)
+
+    def visit_Name(self, node: ast.Name) -> None:
+        if not isinstance(node.ctx, ast.Load):
+            return
+        if self._qualified_name(node) in _RUNTIME_STATE_NAMES:
+            self._record("python-runtime-state", node)
+        elif node.id == "__file__":
+            self._record("imported-module-attribute", node)
+
+
+def _runtime_execution_occurrences(source_root: Path) -> tuple[tuple[str, str, str, str], ...]:
+    """Discover closed execution observations without evaluating source or templates."""
+    result: list[tuple[str, str, str, str]] = []
+    for path in _python_source_paths(source_root):
+        relative = path.relative_to(source_root).as_posix()
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=relative)
+        except (OSError, UnicodeError, SyntaxError) as exc:
+            raise AutonomyInventoryError(
+                f"runtime-input module cannot be parsed: {relative}"
+            ) from exc
+        visitor = _RuntimeExecutionBoundaryVisitor(_import_aliases(tree), relative)
+        visitor.visit(tree)
+        result.extend((relative, *row) for row in visitor.occurrences)
+    return tuple(result)
+
+
+_RUNTIME_EXECUTION_MODULE_GATES = {
+    "isolation/oci_layer.py": "gate-managed-toolchain-bundle",
+    "models/authenticated_runner.py": "gate-authenticated-real-campaign",
+    "models/candidate_benchmark.py": "gate-benchmark-evidence-authority",
+    # This close clears invocation-private pure results; it is not process or descriptor I/O.
+    "models/development_corpus_replay.py": "gate-client-audit-scope",
+    "models/development_transport.py": "gate-release-evidence-pipeline",
+    "models/openrouter.py": "gate-authenticated-real-campaign",
+    "orchestration/authenticated_calibration_openrouter.py": "gate-authenticated-real-campaign",
+    "orchestration/authenticated_runner_openrouter.py": "gate-authenticated-real-campaign",
+    "orchestration/authenticated_runner_smoke_openrouter.py": "gate-authenticated-real-campaign",
+    "orchestration/calibration_calendar_controller.py": "gate-external-transparency-seal",
+    "orchestration/development_audit.py": "gate-release-evidence-pipeline",
+    "orchestration/development_corpus.py": "gate-release-evidence-pipeline",
+    "orchestration/development_corpus_judgment.py": "gate-release-evidence-pipeline",
+    "orchestration/development_corpus_resume.py": "gate-release-evidence-pipeline",
+    "orchestration/development_ensemble.py": "gate-release-evidence-pipeline",
+    "orchestration/development_judgment.py": "gate-release-evidence-pipeline",
+    "orchestration/managed_image_layers.py": "gate-managed-toolchain-bundle",
+    "scanners/fork_rpc.py": "gate-fork-environment",
+    # These are supplied transcript dataclass fields, not a new subprocess owner.
+    "scanners/foundry_debugger.py": "gate-full-quality-analysis",
+    # Offline finding replay's shared elapsed-clock ceiling, not a new executor.
+    "scanners/foundry_normalization.py": "gate-full-quality-analysis",
+    "scanners/hardhat_execution.py": "gate-full-quality-analysis",
+    "scanners/hardhat_protocol.py": "gate-full-quality-analysis",
+    "scanners/offline_fork_service.py": "gate-fork-environment",
+    "scanners/runtime_evidence.py": "gate-full-quality-analysis",
+}
+
+
+def _runtime_execution_gate(relative: str, scope: str, kind: str, expression: str) -> str:
+    if kind in {
+        "python-runtime-state",
+        "imported-module-attribute",
+        "dynamic-attribute",
+        "dynamic-code",
+    }:
+        return "gate-runtime-package-integrity"
+    if kind == "generated-code-producer":
+        return "gate-managed-toolchain-bundle"
+    if relative == "cli.py":
+        if scope in {
+            "models_list_endpoints.execute",
+            "models_refresh.execute",
+            "models_check.execute",
+            "_refetch_qualification_generations",
+            "_model_metadata",
+        }:
+            return "gate-autonomous-model-authority"
+        if scope == "_openrouter_authentication_valid.validate":
+            return "gate-provider-secret-transport"
+    if relative in _RUNTIME_EXECUTION_MODULE_GATES:
+        return _RUNTIME_EXECUTION_MODULE_GATES[relative]
+    return _filesystem_input_gate(relative, scope, expression)
+
+
+def _discover_runtime_execution_sources(source_root: Path) -> list[_SourceDraft]:
+    occurrences = _runtime_execution_occurrences(source_root)
+    _assert_frozen_source_shape(
+        label="runtime execution, elapsed clock and generated code loci",
+        observed=[list(row) for row in occurrences],
+        expected_sha256=_FROZEN_RUNTIME_EXECUTION_LOCI_SHA256,
+    )
+    drafts: list[_SourceDraft] = []
+    counts: dict[tuple[str, str, str], int] = {}
+    for relative, scope, kind, expression in occurrences:
+        key = (relative, scope, kind)
+        ordinal = counts.get(key, 0) + 1
+        counts[key] = ordinal
+        module = relative.removesuffix(".py").replace("/", ".").lower()
+        drafts.append(
+            _classified_source(
+                source_id=f"runtime-input:{module}:{scope.lower()}:{kind}:{ordinal}",
+                source_kind=CompletionInputSourceKind.RUNTIME_EXECUTION_INPUT,
+                source_path=f"src/mmaudit/{relative}:{scope}:{kind}:{ordinal}",
+                semantics=_canonical_sha256(
+                    {
+                        "relative_path": relative,
+                        "scope": scope,
+                        "kind": kind,
+                        "expression": expression,
+                    }
+                ),
+                gate_id=_runtime_execution_gate(relative, scope, kind, expression),
             )
         )
     return drafts
@@ -3398,12 +3803,19 @@ def _default_explicit_sources() -> list[_SourceDraft]:
         read_development_stability_selection,
     )
     from mmaudit.benchmark.development_ensemble import score_development_ensemble
+    from mmaudit.benchmark.model_portfolio import (
+        transfer_trusted_candidate_benchmark_campaign_verification,
+    )
     from mmaudit.development_cli import (
+        development_corpus_coverage_command,
         ensemble_development_manifest_command,
+        freeze_development_tree_command,
         measure_development_controls_command,
         measure_development_stability_command,
+        plan_development_tree_command,
         repeat_development_manifest_command,
         resume_development_manifest_command,
+        run_development_tree_plan_command,
         score_development_history_command,
     )
     from mmaudit.isolation.container import (
@@ -3419,15 +3831,36 @@ def _default_explicit_sources() -> list[_SourceDraft]:
         read_authenticated_model_calibration,
         revoke_verified_authenticated_model_calibration,
     )
+    from mmaudit.models.authenticated_runner import (
+        retain_verified_cross_lineage_runner_custody,
+        transfer_verified_cross_lineage_runner_custody,
+    )
+    from mmaudit.models.calibration_checkpoint import (
+        build_calibration_checkpoint_subject,
+        extend_calibration_checkpoint_proof,
+    )
+    from mmaudit.models.candidate_selection import CandidateSelectionPlanCostTransitionBinding
     from mmaudit.models.development_audit import prepare_development_audit
     from mmaudit.models.development_corpus import (
+        DevelopmentCorpusPartitionOrigin,
+        DevelopmentCorpusSourcePartition,
+        DevelopmentCorpusTreeEvidence,
         freeze_development_corpus,
         prepare_development_corpus,
+    )
+    from mmaudit.models.development_corpus_coverage import (
+        DevelopmentCorpusCoverage,
+        compute_development_corpus_coverage,
     )
     from mmaudit.models.development_corpus_ensemble import prepare_development_corpus_ensemble
     from mmaudit.models.development_corpus_judgment import (
         prepare_development_corpus_judgment,
         require_development_corpus_judgment_candidate,
+    )
+    from mmaudit.models.development_corpus_partition import (
+        DevelopmentCorpusPartition,
+        derive_development_corpus_partition,
+        validate_development_corpus_partition,
     )
     from mmaudit.models.development_corpus_repeats import (
         prepare_development_corpus_repeats,
@@ -3454,8 +3887,106 @@ def _default_explicit_sources() -> list[_SourceDraft]:
         review_development_corpus_shard,
         review_development_judgment_shard,
     )
+    from mmaudit.models.development_tree_execution import DevelopmentTreeExecutionProgress
+    from mmaudit.models.development_tree_plan import DevelopmentTreePlan, plan_development_tree
+    from mmaudit.models.development_tree_request_bounds import development_tree_review_claims_bound
+    from mmaudit.models.generation_evidence import transfer_trusted_generation_verification
+    from mmaudit.models.opentimestamps_calendar import (
+        assemble_opentimestamps_submission_proof,
+        prepare_opentimestamps_calendar_request,
+        prepare_opentimestamps_submission,
+        replay_opentimestamps_calendar_response,
+    )
+    from mmaudit.models.opentimestamps_replay import (
+        replay_detached_opentimestamps_proof,
+        replay_opentimestamps_calendar_proof,
+    )
+    from mmaudit.models.route_cost_reservations import (
+        ExactRouteCostReservation,
+        OperatorRouteCostAttemptEvidence,
+        RouteCostReservationPlanningEnvelope,
+        RouteCostReservationPolicy,
+        operator_cost_attempts_from_usage,
+        project_route_reserved_rates,
+        require_route_cost_reservation_request,
+    )
     from mmaudit.models.schemas import AuditReport
     from mmaudit.operator_secrets import load_operator_secrets, select_operator_secret_file
+    from mmaudit.orchestration.authenticated_calibration_config import (
+        build_authenticated_calibration_config_proposal,
+        proposed_successor_config_bytes,
+        read_authenticated_calibration_config_proposal,
+    )
+    from mmaudit.orchestration.authenticated_calibration_measurement import (
+        execute_registered_calibration_measurement,
+        load_registered_calibration_measurement,
+        registered_calibration_measurement_scope,
+    )
+    from mmaudit.orchestration.authenticated_calibration_openrouter import (
+        _owned_calibration_batch,
+        _owned_registered_calibration_scope,
+        authenticated_openrouter_calibration_scope,
+        registered_openrouter_calibration_scope,
+    )
+    from mmaudit.orchestration.authenticated_calibration_release import (
+        validate_authenticated_calibration_successor_release_inputs,
+    )
+    from mmaudit.orchestration.authenticated_runner_openrouter import (
+        _owned_authenticated_openrouter_runner_scope,
+    )
+    from mmaudit.orchestration.budgets import EndpointRequestCostBound
+    from mmaudit.orchestration.calibration_calendar_controller import (
+        _CheckpointSeed,
+        _freeze_checkpoint_seed,
+        _native_output_bindings,
+        _record_calendar_measurement,
+        _record_calendar_registration,
+        _RecordedCheckpointPublication,
+        _RecordedPublication,
+        _require_calendar_recording,
+        _retain_checkpoint_publication,
+        _retain_publication,
+        _RetainedNativeCompletion,
+        checkpoint_calibration_completion_scope,
+        execute_calendar_recorded_calibration_measurement,
+        execute_checkpoint_recorded_calibration_measurement,
+        observe_checkpoint_calibration_completion,
+    )
+    from mmaudit.orchestration.calibration_calendar_publication import (
+        PreparedCalibrationCalendarPublication,
+        load_calibration_calendar_publication,
+        prepare_calibration_measurement_calendar,
+        prepare_calibration_registration_calendar,
+        recover_calibration_calendar_publication,
+    )
+    from mmaudit.orchestration.calibration_calendar_publication import (
+        _prepare as retain_population_calendar_preparation,
+    )
+    from mmaudit.orchestration.calibration_calendar_publication import (
+        _read_retained as read_population_calendar_descriptor,
+    )
+    from mmaudit.orchestration.calibration_checkpoint_publication import (
+        PreparedCalibrationCheckpointPublication,
+        load_calibration_checkpoint_publication,
+        prepare_calibration_measurement_checkpoint,
+        prepare_calibration_registration_checkpoint,
+        recover_calibration_checkpoint_publication,
+    )
+    from mmaudit.orchestration.calibration_checkpoint_publication import (
+        _prepare as retain_checkpoint_calendar_preparation,
+    )
+    from mmaudit.orchestration.calibration_checkpoint_publication import (
+        _read_retained as read_checkpoint_calendar_descriptor,
+    )
+    from mmaudit.orchestration.calibration_checkpoint_publication import (
+        _retain_original_calendar_history as retain_checkpoint_calendar_history,
+    )
+    from mmaudit.orchestration.calibration_population import load_calibration_population_journal
+    from mmaudit.orchestration.calibration_publication import (
+        build_calibration_measurement_publication,
+        build_calibration_publication_comparison,
+        build_calibration_registration_publication,
+    )
     from mmaudit.orchestration.consensus import preliminary_status
     from mmaudit.orchestration.cost_ledger import AtomicCostLedger
     from mmaudit.orchestration.development_audit import run_development_audit
@@ -3469,6 +4000,9 @@ def _default_explicit_sources() -> list[_SourceDraft]:
     from mmaudit.orchestration.development_corpus_control_measurement import (
         measure_development_corpus_score_file,
         write_development_corpus_control_measurement,
+    )
+    from mmaudit.orchestration.development_corpus_coverage import (
+        measure_development_corpus_coverage_files,
     )
     from mmaudit.orchestration.development_corpus_ensemble import (
         _bind_child as bind_corpus_ensemble_child,
@@ -3521,6 +4055,18 @@ def _default_explicit_sources() -> list[_SourceDraft]:
     from mmaudit.orchestration.development_ensemble import _report as ensemble_accounting_report
     from mmaudit.orchestration.development_ensemble import run_development_ensemble
     from mmaudit.orchestration.development_judgment import run_development_judgment
+    from mmaudit.orchestration.development_tree import (
+        _accounting_guard as tree_accounting_guard,
+    )
+    from mmaudit.orchestration.development_tree import (
+        _restore_case as restore_tree_case,
+    )
+    from mmaudit.orchestration.development_tree import (
+        _time_guard as tree_time_guard,
+    )
+    from mmaudit.orchestration.development_tree import (
+        run_development_tree_plan,
+    )
     from mmaudit.orchestration.managed_fork_archives import (
         ManagedForkArchives,
         ManagedForkArchiveSource,
@@ -3531,6 +4077,34 @@ def _default_explicit_sources() -> list[_SourceDraft]:
     from mmaudit.orchestration.managed_image_files import verify_managed_image_files
     from mmaudit.orchestration.managed_image_layers import verify_managed_image_layers
     from mmaudit.orchestration.managed_image_metadata import read_managed_image_metadata
+    from mmaudit.orchestration.opentimestamps_calendar_journal import (
+        PreparedCalendarJournal,
+        load_calibration_calendar_journal,
+        prepare_calibration_calendar_journal,
+        prepare_calibration_checkpoint_calendar_journal,
+        recover_calibration_calendar_journal,
+        recover_calibration_checkpoint_calendar_journal,
+    )
+    from mmaudit.orchestration.opentimestamps_calendar_journal import (
+        _locked_journal as locked_calendar_journal,
+    )
+    from mmaudit.orchestration.opentimestamps_calendar_journal import (
+        _perform as perform_calendar_journal_exchange,
+    )
+    from mmaudit.orchestration.opentimestamps_calendar_transport import (
+        _exchange as exchange_opentimestamps_calendar,
+    )
+    from mmaudit.orchestration.opentimestamps_calendar_transport import (
+        _prepare_submission_context as prepare_calendar_context,
+    )
+    from mmaudit.orchestration.opentimestamps_calendar_transport import (
+        _submit_prepared_context as submit_prepared_calendar_context,
+    )
+    from mmaudit.orchestration.opentimestamps_calendar_transport import (
+        lookup_opentimestamps_calendar,
+        submit_calibration_publication_calendar,
+        submit_opentimestamps_calendar,
+    )
     from mmaudit.orchestration.pipeline import (
         AuditPipeline,
         _enforce_post_judge_execution_severity_accounting,
@@ -3545,7 +4119,27 @@ def _default_explicit_sources() -> list[_SourceDraft]:
     from mmaudit.reporting.client import _finding_detail
     from mmaudit.reporting.development_stability import render_development_stability_report
     from mmaudit.reporting.markdown import _status_qualification
-    from mmaudit.repository.development_corpus import load_development_corpus
+    from mmaudit.repository.development_corpus import (
+        DevelopmentCorpusPartitionCustody,
+        _require_partition_origin,
+        load_development_corpus,
+    )
+    from mmaudit.repository.development_corpus_partition import (
+        load_development_corpus_partition,
+        materialize_development_corpus_partition,
+    )
+    from mmaudit.repository.development_corpus_tree import (
+        capture_development_corpus_tree,
+        freeze_development_corpus_tree,
+        observe_development_corpus_tree,
+        revalidate_captured_development_corpus_tree,
+        revalidate_development_corpus_tree,
+    )
+    from mmaudit.repository.development_tree_plan import (
+        load_development_tree_plan,
+        revalidate_loaded_development_tree_plan,
+        write_development_tree_plan,
+    )
     from mmaudit.repository.directory_custody import prepare_owned_empty_directory
     from mmaudit.scanners.base import sanitized_scanner_environment
     from mmaudit.scanners.clean_chain import TrustedCleanAnvilLauncher
@@ -3563,11 +4157,389 @@ def _default_explicit_sources() -> list[_SourceDraft]:
     from mmaudit.scanners.offline_fork_rpc import load_offline_fork_rpc_archive
     from mmaudit.scanners.offline_fork_service import OfflineForkRpcLease
     from mmaudit.scanners.trivy import TrivyScanner
+    from mmaudit.solidity.dependency_calls import (
+        DependencyCallContext,
+        DependencyConstructorBinding,
+        build_dependency_call_context,
+    )
+    from mmaudit.solidity.dependency_constructors import _ConstructorResolver
+    from mmaudit.solidity.dependency_scopes import (
+        DependencyScopedContext,
+        build_dependency_scoped_context,
+    )
+    from mmaudit.solidity.dependency_static_closure import (
+        DevelopmentStaticCallClosure,
+        compute_static_call_closure,
+    )
+    from mmaudit.solidity.dependency_syntax import (
+        DependencySyntaxContext,
+        build_dependency_syntax_context,
+    )
     from mmaudit.solidity.formal import FormalRunner
     from mmaudit.solidity.invariant_execution import FoundryInvariantRunner
     from mmaudit.solidity.reproduction import ForkReproductionRunner
 
     sources = [
+        _explicit_anchor(
+            "checkpoint-completion-scope",
+            checkpoint_calibration_completion_scope,
+            "gate-external-transparency-seal",
+        ),
+        _explicit_anchor(
+            "checkpoint-completion-observation",
+            observe_checkpoint_calibration_completion,
+            "gate-external-transparency-seal",
+        ),
+        _explicit_anchor(
+            "checkpoint-completion-native-inputs",
+            _RetainedNativeCompletion.require_unchanged,
+            "gate-external-transparency-seal",
+        ),
+        _explicit_anchor(
+            "checkpoint-controller-execution",
+            execute_checkpoint_recorded_calibration_measurement,
+            "gate-external-transparency-seal",
+        ),
+        _explicit_anchor(
+            "checkpoint-controller-initial-tip",
+            _freeze_checkpoint_seed,
+            "gate-external-transparency-seal",
+        ),
+        _explicit_anchor(
+            "checkpoint-controller-tip-custody",
+            _CheckpointSeed.require_unchanged,
+            "gate-external-transparency-seal",
+        ),
+        _explicit_anchor(
+            "checkpoint-controller-phase-retention",
+            _retain_checkpoint_publication,
+            "gate-external-transparency-seal",
+        ),
+        _explicit_anchor(
+            "checkpoint-controller-phase-files",
+            _RecordedCheckpointPublication.require_unchanged,
+            "gate-external-transparency-seal",
+        ),
+        _explicit_anchor(
+            "checkpoint-controller-proof-extension",
+            extend_calibration_checkpoint_proof,
+            "gate-external-transparency-seal",
+        ),
+        _explicit_anchor(
+            "calendar-controller-execution",
+            execute_calendar_recorded_calibration_measurement,
+            "gate-external-transparency-seal",
+        ),
+        _explicit_anchor(
+            "calendar-controller-registration",
+            _record_calendar_registration,
+            "gate-external-transparency-seal",
+        ),
+        _explicit_anchor(
+            "calendar-controller-measurement",
+            _record_calendar_measurement,
+            "gate-external-transparency-seal",
+        ),
+        _explicit_anchor(
+            "calendar-controller-custody",
+            _require_calendar_recording,
+            "gate-external-transparency-seal",
+        ),
+        _explicit_anchor(
+            "calendar-controller-phase-files",
+            _RecordedPublication.require_unchanged,
+            "gate-external-transparency-seal",
+        ),
+        _explicit_anchor(
+            "calendar-controller-phase-retention",
+            _retain_publication,
+            "gate-external-transparency-seal",
+        ),
+        _explicit_anchor(
+            "calendar-controller-native-output-bindings",
+            _native_output_bindings,
+            "gate-external-transparency-seal",
+        ),
+        _explicit_anchor(
+            "population-calendar-registration",
+            prepare_calibration_registration_calendar,
+            "gate-external-transparency-seal",
+        ),
+        _explicit_anchor(
+            "population-calendar-native-measurement",
+            prepare_calibration_measurement_calendar,
+            "gate-external-transparency-seal",
+        ),
+        _explicit_anchor(
+            "population-calendar-source-owned-submit",
+            PreparedCalibrationCalendarPublication.submit,
+            "gate-external-transparency-seal",
+        ),
+        _explicit_anchor(
+            "population-calendar-retained-preparation",
+            retain_population_calendar_preparation,
+            "gate-external-transparency-seal",
+        ),
+        _explicit_anchor(
+            "population-calendar-descriptor",
+            read_population_calendar_descriptor,
+            "gate-external-transparency-seal",
+        ),
+        _explicit_anchor(
+            "population-calendar-readback",
+            load_calibration_calendar_publication,
+            "gate-external-transparency-seal",
+        ),
+        _explicit_anchor(
+            "population-calendar-recovery",
+            recover_calibration_calendar_publication,
+            "gate-external-transparency-seal",
+        ),
+        _explicit_anchor(
+            "durable-calendar-journal-preparation",
+            prepare_calibration_calendar_journal,
+            "gate-external-transparency-seal",
+        ),
+        _explicit_anchor(
+            "checkpoint-publication-subject",
+            build_calibration_checkpoint_subject,
+            "gate-external-transparency-seal",
+        ),
+        _explicit_anchor(
+            "checkpoint-calendar-registration",
+            prepare_calibration_registration_checkpoint,
+            "gate-external-transparency-seal",
+        ),
+        _explicit_anchor(
+            "checkpoint-calendar-native-measurement",
+            prepare_calibration_measurement_checkpoint,
+            "gate-external-transparency-seal",
+        ),
+        _explicit_anchor(
+            "checkpoint-calendar-source-owned-submit",
+            PreparedCalibrationCheckpointPublication.submit,
+            "gate-external-transparency-seal",
+        ),
+        _explicit_anchor(
+            "checkpoint-calendar-retained-preparation",
+            retain_checkpoint_calendar_preparation,
+            "gate-external-transparency-seal",
+        ),
+        _explicit_anchor(
+            "checkpoint-calendar-descriptor",
+            read_checkpoint_calendar_descriptor,
+            "gate-external-transparency-seal",
+        ),
+        _explicit_anchor(
+            "checkpoint-calendar-original-history",
+            retain_checkpoint_calendar_history,
+            "gate-external-transparency-seal",
+        ),
+        _explicit_anchor(
+            "checkpoint-calendar-readback",
+            load_calibration_checkpoint_publication,
+            "gate-external-transparency-seal",
+        ),
+        _explicit_anchor(
+            "checkpoint-calendar-recovery",
+            recover_calibration_checkpoint_publication,
+            "gate-external-transparency-seal",
+        ),
+        _explicit_anchor(
+            "checkpoint-calendar-journal-preparation",
+            prepare_calibration_checkpoint_calendar_journal,
+            "gate-external-transparency-seal",
+        ),
+        _explicit_anchor(
+            "checkpoint-calendar-journal-recovery",
+            recover_calibration_checkpoint_calendar_journal,
+            "gate-external-transparency-seal",
+        ),
+        _explicit_anchor(
+            "durable-calendar-journal-submission",
+            PreparedCalendarJournal.submit,
+            "gate-external-transparency-seal",
+        ),
+        _explicit_anchor(
+            "durable-calendar-journal-dispatch",
+            perform_calendar_journal_exchange,
+            "gate-external-transparency-seal",
+        ),
+        _explicit_anchor(
+            "durable-calendar-journal-process-exclusion",
+            locked_calendar_journal,
+            "gate-external-transparency-seal",
+        ),
+        _explicit_anchor(
+            "durable-calendar-journal-readback",
+            load_calibration_calendar_journal,
+            "gate-external-transparency-seal",
+        ),
+        _explicit_anchor(
+            "durable-calendar-journal-recovery",
+            recover_calibration_calendar_journal,
+            "gate-external-transparency-seal",
+        ),
+        _explicit_anchor(
+            "owned-opentimestamps-calendar-context",
+            prepare_calendar_context,
+            "gate-external-transparency-seal",
+        ),
+        _explicit_anchor(
+            "owned-opentimestamps-prepared-calendar-submission",
+            submit_prepared_calendar_context,
+            "gate-external-transparency-seal",
+        ),
+        _explicit_anchor(
+            "owned-opentimestamps-calendar-exchange",
+            exchange_opentimestamps_calendar,
+            "gate-external-transparency-seal",
+        ),
+        _explicit_anchor(
+            "owned-opentimestamps-calendar-submission",
+            submit_opentimestamps_calendar,
+            "gate-external-transparency-seal",
+        ),
+        _explicit_anchor(
+            "owned-opentimestamps-calendar-lookup",
+            lookup_opentimestamps_calendar,
+            "gate-external-transparency-seal",
+        ),
+        _explicit_anchor(
+            "owned-calibration-calendar-submission",
+            submit_calibration_publication_calendar,
+            "gate-external-transparency-seal",
+        ),
+        _explicit_anchor(
+            "offline-opentimestamps-proof-replay",
+            replay_detached_opentimestamps_proof,
+            "gate-external-transparency-seal",
+        ),
+        _explicit_anchor(
+            "offline-opentimestamps-calendar-proof-replay",
+            replay_opentimestamps_calendar_proof,
+            "gate-external-transparency-seal",
+        ),
+        _explicit_anchor(
+            "offline-opentimestamps-calendar-request",
+            prepare_opentimestamps_calendar_request,
+            "gate-external-transparency-seal",
+        ),
+        _explicit_anchor(
+            "offline-opentimestamps-calendar-response",
+            replay_opentimestamps_calendar_response,
+            "gate-external-transparency-seal",
+        ),
+        _explicit_anchor(
+            "offline-opentimestamps-submission-context",
+            prepare_opentimestamps_submission,
+            "gate-external-transparency-seal",
+        ),
+        _explicit_anchor(
+            "offline-opentimestamps-submission-assembly",
+            assemble_opentimestamps_submission_proof,
+            "gate-external-transparency-seal",
+        ),
+        _explicit_anchor(
+            "native-calibration-successor-release-inputs",
+            validate_authenticated_calibration_successor_release_inputs,
+            "gate-autonomous-model-authority",
+        ),
+        _explicit_anchor(
+            "native-calibration-config-proposal",
+            build_authenticated_calibration_config_proposal,
+            "gate-autonomous-model-authority",
+        ),
+        _explicit_anchor(
+            "native-calibration-config-readback",
+            read_authenticated_calibration_config_proposal,
+            "gate-autonomous-model-authority",
+        ),
+        _explicit_anchor(
+            "native-calibration-config-export",
+            proposed_successor_config_bytes,
+            "gate-autonomous-model-authority",
+        ),
+        _explicit_anchor(
+            "calibration-registration-publication-subject",
+            build_calibration_registration_publication,
+            "gate-external-transparency-seal",
+        ),
+        _explicit_anchor(
+            "calibration-measurement-publication-subject",
+            build_calibration_measurement_publication,
+            "gate-external-transparency-seal",
+        ),
+        _explicit_anchor(
+            "calibration-publication-prefix-comparison",
+            build_calibration_publication_comparison,
+            "gate-external-transparency-seal",
+        ),
+        _explicit_anchor(
+            "registered-native-measurement-lifecycle",
+            registered_calibration_measurement_scope,
+            "gate-authenticated-real-campaign",
+        ),
+        _explicit_anchor(
+            "registered-measurement-execution",
+            execute_registered_calibration_measurement,
+            "gate-authenticated-real-campaign",
+        ),
+        _explicit_anchor(
+            "registered-measurement-data-readback",
+            load_registered_calibration_measurement,
+            "gate-authenticated-real-campaign",
+        ),
+        _explicit_anchor(
+            "owned-registered-calibration-batch",
+            _owned_registered_calibration_scope,
+            "gate-authenticated-real-campaign",
+        ),
+        _explicit_anchor(
+            "registered-calibration-population",
+            registered_openrouter_calibration_scope,
+            "gate-authenticated-real-campaign",
+        ),
+        _explicit_anchor(
+            "owned-calibration-batch-lifecycle",
+            _owned_calibration_batch,
+            "gate-authenticated-real-campaign",
+        ),
+        _explicit_anchor(
+            "calibration-population-attempt-prefix",
+            load_calibration_population_journal,
+            "gate-authenticated-real-campaign",
+        ),
+        _explicit_anchor(
+            "authenticated-calibration-batch-ownership",
+            authenticated_openrouter_calibration_scope,
+            "gate-authenticated-real-campaign",
+        ),
+        _explicit_anchor(
+            "authenticated-retained-runner-handoff",
+            _owned_authenticated_openrouter_runner_scope,
+            "gate-authenticated-real-campaign",
+        ),
+        _explicit_anchor(
+            "retained-runner-ledger-custody",
+            retain_verified_cross_lineage_runner_custody,
+            "gate-authenticated-real-campaign",
+        ),
+        _explicit_anchor(
+            "runner-custody-transfer",
+            transfer_verified_cross_lineage_runner_custody,
+            "gate-authenticated-real-campaign",
+        ),
+        _explicit_anchor(
+            "campaign-custody-transfer",
+            transfer_trusted_candidate_benchmark_campaign_verification,
+            "gate-benchmark-evidence-authority",
+        ),
+        _explicit_anchor(
+            "generation-custody-transfer",
+            transfer_trusted_generation_verification,
+            "gate-autonomous-model-authority",
+        ),
         _explicit_anchor(
             "authenticated-calibration-observation",
             observe_authenticated_model_calibration,
@@ -3692,6 +4664,209 @@ def _default_explicit_sources() -> list[_SourceDraft]:
         _explicit_anchor(
             "development-corpus-selected-source-loader",
             load_development_corpus,
+            "gate-client-audit-scope",
+        ),
+        _explicit_anchor(
+            "development-scoped-context-evidence",
+            DependencyScopedContext,
+            "gate-client-audit-scope",
+        ),
+        _explicit_anchor(
+            "development-scoped-source-resolution",
+            build_dependency_scoped_context,
+            "gate-client-audit-scope",
+        ),
+        _explicit_anchor(
+            "development-typed-call-evidence",
+            DependencyCallContext,
+            "gate-client-audit-scope",
+        ),
+        _explicit_anchor(
+            "development-argument-return-resolution",
+            build_dependency_call_context,
+            "gate-client-audit-scope",
+        ),
+        _explicit_anchor(
+            "development-syntax-census-evidence",
+            DependencySyntaxContext,
+            "gate-client-audit-scope",
+        ),
+        _explicit_anchor(
+            "development-source-syntax-accounting",
+            build_dependency_syntax_context,
+            "gate-client-audit-scope",
+        ),
+        _explicit_anchor(
+            "development-tree-evidence",
+            DevelopmentCorpusTreeEvidence,
+            "gate-client-audit-scope",
+        ),
+        _explicit_anchor(
+            "development-constructor-evidence",
+            DependencyConstructorBinding,
+            "gate-client-audit-scope",
+        ),
+        _explicit_anchor(
+            "development-constructor-source-resolution",
+            _ConstructorResolver,
+            "gate-client-audit-scope",
+        ),
+        _explicit_anchor(
+            "development-static-closure-evidence",
+            DevelopmentStaticCallClosure,
+            "gate-client-audit-scope",
+        ),
+        _explicit_anchor(
+            "development-static-closure-computation",
+            compute_static_call_closure,
+            "gate-client-audit-scope",
+        ),
+        _explicit_anchor(
+            "development-primary-context-partition",
+            DevelopmentCorpusSourcePartition,
+            "gate-client-audit-scope",
+        ),
+        _explicit_anchor(
+            "development-partition-origin",
+            DevelopmentCorpusPartitionOrigin,
+            "gate-client-audit-scope",
+        ),
+        _explicit_anchor(
+            "development-partition-evidence",
+            DevelopmentCorpusPartition,
+            "gate-client-audit-scope",
+        ),
+        _explicit_anchor(
+            "development-partition-derivation",
+            derive_development_corpus_partition,
+            "gate-client-audit-scope",
+        ),
+        _explicit_anchor(
+            "development-partition-replay",
+            validate_development_corpus_partition,
+            "gate-client-audit-scope",
+        ),
+        _explicit_anchor(
+            "development-partition-custody",
+            DevelopmentCorpusPartitionCustody,
+            "gate-client-audit-scope",
+        ),
+        _explicit_anchor(
+            "development-partition-origin-handoff",
+            _require_partition_origin,
+            "gate-client-audit-scope",
+        ),
+        _explicit_anchor(
+            "development-partition-bound-loader",
+            load_development_corpus_partition,
+            "gate-client-audit-scope",
+        ),
+        _explicit_anchor(
+            "development-partition-output",
+            materialize_development_corpus_partition,
+            "gate-managed-output-provisioning",
+        ),
+        _explicit_anchor(
+            "development-tree-primary-coverage-evidence",
+            DevelopmentCorpusCoverage,
+            "gate-client-audit-scope",
+        ),
+        _explicit_anchor(
+            "development-auto-tree-plan", DevelopmentTreePlan, "gate-client-audit-scope"
+        ),
+        _explicit_anchor(
+            "development-auto-tree-preflight", plan_development_tree, "gate-budget-ceiling"
+        ),
+        _explicit_anchor(
+            "development-auto-tree-review-bound",
+            development_tree_review_claims_bound,
+            "gate-budget-ceiling",
+        ),
+        _explicit_anchor(
+            "development-auto-tree-output",
+            write_development_tree_plan,
+            "gate-managed-output-provisioning",
+        ),
+        _explicit_anchor(
+            "development-auto-tree-loader", load_development_tree_plan, "gate-client-audit-scope"
+        ),
+        _explicit_anchor(
+            "development-auto-tree-custody",
+            revalidate_loaded_development_tree_plan,
+            "gate-client-audit-scope",
+        ),
+        _explicit_anchor(
+            "development-auto-tree-controller",
+            run_development_tree_plan,
+            "gate-release-evidence-pipeline",
+        ),
+        _explicit_anchor(
+            "development-auto-tree-resume", restore_tree_case, "gate-release-evidence-pipeline"
+        ),
+        _explicit_anchor(
+            "development-auto-tree-accounting",
+            tree_accounting_guard,
+            "gate-cost-ledger-provisioning",
+        ),
+        _explicit_anchor("development-auto-tree-time", tree_time_guard, "gate-budget-ceiling"),
+        _explicit_anchor(
+            "development-auto-tree-progress",
+            DevelopmentTreeExecutionProgress,
+            "gate-release-evidence-pipeline",
+        ),
+        _explicit_anchor(
+            "development-auto-tree-plan-cli",
+            plan_development_tree_command,
+            "gate-client-audit-scope",
+        ),
+        _explicit_anchor(
+            "development-auto-tree-run-cli",
+            run_development_tree_plan_command,
+            "gate-release-evidence-pipeline",
+        ),
+        _explicit_anchor(
+            "development-tree-primary-coverage-computation",
+            compute_development_corpus_coverage,
+            "gate-client-audit-scope",
+        ),
+        _explicit_anchor(
+            "development-tree-primary-coverage-output",
+            measure_development_corpus_coverage_files,
+            "gate-managed-output-provisioning",
+        ),
+        _explicit_anchor(
+            "development-tree-primary-coverage-cli",
+            development_corpus_coverage_command,
+            "gate-client-audit-scope",
+        ),
+        _explicit_anchor(
+            "development-tree-namespace",
+            observe_development_corpus_tree,
+            "gate-client-audit-scope",
+        ),
+        _explicit_anchor(
+            "development-tree-capture",
+            capture_development_corpus_tree,
+            "gate-client-audit-scope",
+        ),
+        _explicit_anchor(
+            "development-tree-root-replay",
+            revalidate_development_corpus_tree,
+            "gate-client-audit-scope",
+        ),
+        _explicit_anchor(
+            "development-tree-capture-revalidation",
+            revalidate_captured_development_corpus_tree,
+            "gate-client-audit-scope",
+        ),
+        _explicit_anchor(
+            "development-tree-manifest-output",
+            freeze_development_corpus_tree,
+            "gate-managed-output-provisioning",
+        ),
+        _explicit_anchor(
+            "development-tree-freeze-cli",
+            freeze_development_tree_command,
             "gate-client-audit-scope",
         ),
         _explicit_anchor(
@@ -4118,6 +5293,51 @@ def _default_explicit_sources() -> list[_SourceDraft]:
             "gate-cost-ledger-provisioning",
         ),
         _explicit_anchor(
+            "operator-reservation-policy",
+            RouteCostReservationPolicy,
+            "gate-cost-ledger-provisioning",
+        ),
+        _explicit_anchor(
+            "operator-reservation-cost-transition",
+            CandidateSelectionPlanCostTransitionBinding,
+            "gate-cost-ledger-provisioning",
+        ),
+        _explicit_anchor(
+            "operator-reservation-contract",
+            ExactRouteCostReservation,
+            "gate-cost-ledger-provisioning",
+        ),
+        _explicit_anchor(
+            "operator-reservation-attempt-evidence",
+            OperatorRouteCostAttemptEvidence,
+            "gate-cost-ledger-provisioning",
+        ),
+        _explicit_anchor(
+            "operator-reservation-planning-envelope",
+            RouteCostReservationPlanningEnvelope,
+            "gate-cost-ledger-provisioning",
+        ),
+        _explicit_anchor(
+            "operator-reservation-rate-projection",
+            project_route_reserved_rates,
+            "gate-cost-ledger-provisioning",
+        ),
+        _explicit_anchor(
+            "operator-reservation-usage-binding",
+            operator_cost_attempts_from_usage,
+            "gate-cost-ledger-provisioning",
+        ),
+        _explicit_anchor(
+            "operator-reservation-request-binding",
+            require_route_cost_reservation_request,
+            "gate-cost-ledger-provisioning",
+        ),
+        _explicit_anchor(
+            "operator-reservation-budget-consumer",
+            EndpointRequestCostBound.from_route_cost_reservation,
+            "gate-cost-ledger-provisioning",
+        ),
+        _explicit_anchor(
             "development-uncertain-estimate-carry",
             development_uncertain_reservations,
             "gate-cost-ledger-provisioning",
@@ -4419,6 +5639,7 @@ def build_autonomy_gate_inventory(
         *_discover_direct_environment_sources(root / "src" / "mmaudit"),
         *_discover_entropy_input_sources(root / "src" / "mmaudit"),
         *_discover_external_input_sources(root / "src" / "mmaudit"),
+        *_discover_runtime_execution_sources(root / "src" / "mmaudit"),
         *_discover_packaging_entrypoint_sources(root),
         *(list(explicit_sources) if explicit_sources is not None else _default_explicit_sources()),
         *_required_sources(),
@@ -4468,6 +5689,7 @@ def build_autonomy_gate_inventory(
         "discovery_scope": (
             "TYPED_BOUNDARIES_REGISTERED_ENTRYPOINTS_RUNTIME_PACKAGE_RESOURCES_"
             "UNSEALED_ENV_HOST_WALL_CLOCK_AUTHORITY_ENTROPY_FILESYSTEM_INTERACTIVE_"
+            "RUNTIME_STATE_ELAPSED_CLOCK_PROCESS_IO_GENERATED_CODE_"
             "OPAQUE_AUTHORITIES_"
             "EXPLICIT_MISSING_OBJECTIVE_BOUNDARIES"
         ),
@@ -4489,7 +5711,7 @@ def build_autonomy_gate_inventory(
         "cli_run_parameter_count": 53,
         "pipeline_init_parameter_count": 29,
         "pipeline_run_parameter_count": 16,
-        "completion_entrypoint_parameter_count": 355,
+        "completion_entrypoint_parameter_count": 360,
         "source_kind_counts": {
             kind.value: sum(item.source_kind is kind for item in source_coverage)
             for kind in CompletionInputSourceKind

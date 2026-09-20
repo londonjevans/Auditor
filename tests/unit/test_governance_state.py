@@ -16,6 +16,8 @@ from scripts.validate_governance_state import (
     EngineeringState,
     OperatorObservation,
     combined_queue_statuses,
+    derive_requirement_status,
+    project_current_requirements,
     validate_governance_documents,
     validate_governance_state,
     validate_operator_observation,
@@ -30,6 +32,65 @@ from tests.governance_state_support import (
 )
 
 ROOT = Path(__file__).parents[2]
+
+
+@pytest.mark.parametrize(
+    "tickets,expected",
+    [
+        (["queued"], "QUEUED"),
+        (["done"], "COMPLETE"),
+        (["queued", "partial"], "PARTIAL"),
+        (["done", "queued"], "PARTIAL"),
+        (["run", "partial"], "IN_PROGRESS"),
+        (["safe", "queued"], "BLOCKED_SAFETY"),
+        (["tech"], "BLOCKED_TECHNICAL"),
+        (["ALL"], "IN_PROGRESS"),
+    ],
+)
+def test_current_requirement_status_is_derived_from_all_declared_tickets(
+    tickets: list[str], expected: str
+) -> None:
+    statuses = {
+        "queued": "QUEUED",
+        "done": "COMPLETE",
+        "partial": "PARTIAL",
+        "run": "IN_PROGRESS",
+        "safe": "BLOCKED_SAFETY",
+        "tech": "BLOCKED_TECHNICAL",
+    }
+    assert derive_requirement_status(tickets, statuses) == expected
+
+
+@pytest.mark.parametrize(
+    "tickets", [[], ["one", "one"], ["missing"], ["ALL", "one"], ["withdrawn"]]
+)
+def test_requirement_projection_refuses_missing_duplicate_or_ineligible_ticket_mapping(
+    tickets: list[str],
+) -> None:
+    with pytest.raises(ValueError):
+        derive_requirement_status(
+            tickets, {"one": "QUEUED", "withdrawn": "WITHDRAWN_OPERATOR_ERROR"}
+        )
+
+
+def test_current_requirement_projection_does_not_rewrite_frozen_mutation_history() -> None:
+    projection = project_current_requirements(ROOT)
+    assert projection.status == "NONAUTHORIZING_COORDINATION"
+    assert list(projection.current_requirement_statuses) == list("ABCDEFGHIJKLMNOPQRSTUV")
+    assert projection.historical_requirement_statuses["V"] == "QUEUED"
+    statuses = combined_queue_statuses(
+        [
+            (ROOT / path).read_text()
+            for path in (
+                "docs/codex_work_queue.md",
+                "docs/remediation/v3/work_queue.md",
+            )
+        ]
+    )
+    assert projection.current_requirement_statuses["V"] == derive_requirement_status(
+        ["V3-MUTATION-001", "V3-BYTECODE-001", "V3-ENGINES-001", "V3-RELEASE-001"],
+        statuses,
+    )
 
 
 def test_make_check_runs_read_only_governance_before_the_full_suite() -> None:
@@ -151,6 +212,55 @@ def test_queue_parser_rejects_ambiguous_or_unclassified_tickets(mutation: str) -
         second = first.replace("QUEUED", "NOT_A_STATUS")
     with pytest.raises(ValueError):
         combined_queue_statuses([first, second])
+
+
+@pytest.mark.parametrize("annotation", ("", " (synthetic batch totals)"))
+def test_named_operator_ledger_is_bound_without_relabelling_the_cumulative_ledger(
+    annotation: str,
+) -> None:
+    original, historical = synthetic_operator_history()
+    entry = (FIXTURES / "operator_new_entry.md").read_text()
+    entry = entry.replace("Ledger now", "Ledger-6 now").replace("USD.", f"USD{annotation}.")
+    content = prepend_report(original, entry.encode())
+    observation = synthetic_operator_observation(content).model_copy(
+        update={"reported_ledger_label": "Ledger-6"}
+    )
+    validate_operator_observation(content, observation, historical)
+    assert observation.reported_ledger_label == "Ledger-6"
+    assert historical["global_ledger_entry_count"] == 3
+    assert historical["global_ledger_spent_usd_exact"] == "0.12500000"
+
+
+@pytest.mark.parametrize("reported_label", ("Ledger", "Ledger-7"))
+def test_named_operator_ledger_refuses_attribution_to_another_ledger(reported_label: str) -> None:
+    original, historical = synthetic_operator_history()
+    entry = (FIXTURES / "operator_new_entry.md").read_bytes()
+    content = prepend_report(original, entry.replace(b"Ledger now", b"Ledger-6 now"))
+    observation = synthetic_operator_observation(content).model_copy(
+        update={"reported_ledger_label": reported_label}
+    )
+    with pytest.raises(ValueError):
+        validate_operator_observation(content, observation, historical)
+
+
+def test_named_operator_ledger_does_not_hide_a_second_accounting_statement() -> None:
+    original, historical = synthetic_operator_history()
+    entry = (FIXTURES / "operator_new_entry.md").read_bytes()
+    entry += b"\nLedger-6 now at 7 entries / `1.37500000` USD.\n"
+    content = prepend_report(original, entry)
+    with pytest.raises(ValueError):
+        validate_operator_observation(content, synthetic_operator_observation(content), historical)
+
+
+@pytest.mark.parametrize(
+    "annotation", (" (outer (nested))", " (cross\nline)", " (" + "x" * 257 + ")")
+)
+def test_operator_ledger_annotation_must_be_single_line_and_bounded(annotation: str) -> None:
+    original, historical = synthetic_operator_history()
+    entry = (FIXTURES / "operator_new_entry.md").read_text()
+    content = prepend_report(original, entry.replace("USD.", f"USD{annotation}.").encode())
+    with pytest.raises(ValueError):
+        validate_operator_observation(content, synthetic_operator_observation(content), historical)
 
 
 @pytest.mark.parametrize("report_count", (0, 1, 2))

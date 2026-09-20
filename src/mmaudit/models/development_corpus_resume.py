@@ -5,13 +5,16 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 from decimal import Decimal
-from typing import Any, Literal, Self
+from typing import TYPE_CHECKING, Any, Literal, Self
 
 from pydantic import Field, model_validator
 
 from mmaudit.benchmark.development_corpus import DevelopmentCorpusBenchmarkScore
 from mmaudit.models.development_audit import _AuditArtifact, development_ledger_request_id
 from mmaudit.models.development_corpus import (
+    MAX_DEVELOPMENT_CORPUS_CLAIMS,
+    MAX_DEVELOPMENT_CORPUS_FILES,
+    MAX_DEVELOPMENT_CORPUS_PRIMARY_LINES,
     DevelopmentCorpusAccountingEntry,
     DevelopmentCorpusMaterial,
     DevelopmentCorpusObservation,
@@ -25,8 +28,17 @@ from mmaudit.models.development_review import DevelopmentReviewMetadata, _Develo
 from mmaudit.orchestration.cost_ledger import CostEntryStatus
 from mmaudit.orchestration.manifest import canonical_sha256
 
+if TYPE_CHECKING:
+    from mmaudit.repository.development_corpus import LoadedDevelopmentCorpus
+
 MAX_DEVELOPMENT_CORPUS_CONTINUATIONS = 8
 MAX_DEVELOPMENT_CORPUS_RESUME_BYTES = 64_000_000
+MAX_DEVELOPMENT_CORPUS_RESUME_REQUESTS = MAX_DEVELOPMENT_CORPUS_FILES * (
+    MAX_DEVELOPMENT_CORPUS_CONTINUATIONS + 1
+)
+MAX_DEVELOPMENT_CORPUS_RESUME_ACCOUNTED_REQUESTS = (
+    MAX_DEVELOPMENT_CORPUS_FILES + MAX_DEVELOPMENT_CORPUS_CONTINUATIONS
+)
 _SHA = r"^[0-9a-f]{64}$"
 type _StopReason = Literal["SHARD_INCOMPLETE", "LOCAL_FAILURE", "INTERRUPTED"]
 
@@ -43,8 +55,10 @@ class DevelopmentCorpusResumePlan(_AuditArtifact):
     original_candidate_sha256: str = Field(pattern=_SHA)
     continuation_index: int = Field(ge=1, le=MAX_DEVELOPMENT_CORPUS_CONTINUATIONS)
     candidate: DevelopmentCorpusPlan
-    selected_shard_ids: tuple[str, ...] = Field(min_length=1, max_length=64)
-    reused_observed_shard_ids: tuple[str, ...] = Field(max_length=64)
+    selected_shard_ids: tuple[str, ...] = Field(
+        min_length=1, max_length=MAX_DEVELOPMENT_CORPUS_FILES
+    )
+    reused_observed_shard_ids: tuple[str, ...] = Field(max_length=MAX_DEVELOPMENT_CORPUS_FILES)
     estimated_continuation_cost_usd: Decimal = Field(gt=0, le=250)
     plan_sha256: str = Field(pattern=_SHA)
 
@@ -82,8 +96,12 @@ class DevelopmentCorpusResumeAttempt(_AuditArtifact):
     transport: Literal["MOCK_HTTP", "HTTP_OBSERVATION"]
     status: Literal["OBSERVED_ALL_SELECTED_SHARDS", "INCOMPLETE"]
     stop_reason: _StopReason | None
-    observations: tuple[DevelopmentCorpusShardObservation, ...] = Field(max_length=64)
-    accounting: tuple[DevelopmentCorpusAccountingEntry, ...] = Field(max_length=64)
+    observations: tuple[DevelopmentCorpusShardObservation, ...] = Field(
+        max_length=MAX_DEVELOPMENT_CORPUS_FILES
+    )
+    accounting: tuple[DevelopmentCorpusAccountingEntry, ...] = Field(
+        max_length=MAX_DEVELOPMENT_CORPUS_FILES
+    )
     elapsed_seconds: float = Field(ge=0, allow_inf_nan=False)
 
     @model_validator(mode="after")
@@ -154,14 +172,16 @@ class DevelopmentCorpusResumeSummary(_DevelopmentModel):
     )
     status: Literal["OBSERVED_ALL_SOURCES_ACROSS_RECORDED_ATTEMPTS", "INCOMPLETE"]
     original_first_attempt_status: Literal["OBSERVED_ALL_SHARDS", "INCOMPLETE"]
-    original_first_attempt_completed_shard_count: int = Field(ge=0, le=64)
+    original_first_attempt_completed_shard_count: int = Field(ge=0, le=MAX_DEVELOPMENT_CORPUS_FILES)
     continuation_count: int = Field(ge=0, le=MAX_DEVELOPMENT_CORPUS_CONTINUATIONS)
-    cumulative_completed_shard_count: int = Field(ge=0, le=64)
-    unobserved_shard_ids: tuple[str, ...] = Field(max_length=64)
-    selected_primary_line_count: int = Field(gt=0, le=640_000)
-    primary_lines_with_observed_responses: int = Field(ge=0, le=640_000)
-    candidate_claim_count: int = Field(ge=0, le=1024)
-    accounted_request_count: int = Field(ge=0, le=72)
+    cumulative_completed_shard_count: int = Field(ge=0, le=MAX_DEVELOPMENT_CORPUS_FILES)
+    unobserved_shard_ids: tuple[str, ...] = Field(max_length=MAX_DEVELOPMENT_CORPUS_FILES)
+    selected_primary_line_count: int = Field(gt=0, le=MAX_DEVELOPMENT_CORPUS_PRIMARY_LINES)
+    primary_lines_with_observed_responses: int = Field(
+        ge=0, le=MAX_DEVELOPMENT_CORPUS_PRIMARY_LINES
+    )
+    candidate_claim_count: int = Field(ge=0, le=MAX_DEVELOPMENT_CORPUS_CLAIMS)
+    accounted_request_count: int = Field(ge=0, le=MAX_DEVELOPMENT_CORPUS_RESUME_ACCOUNTED_REQUESTS)
     total_accounted_cost_usd: Decimal = Field(ge=0)
     reported_actual_cost_usd: Decimal = Field(ge=0)
     uncertain_accounted_cost_usd: Decimal = Field(ge=0)
@@ -201,7 +221,7 @@ def _summary(
         primary_lines_with_observed_responses=sum(
             source.line_count
             for source, shard in zip(
-                original.plan.manifest.sources, original.plan.shards, strict=True
+                original.plan.manifest.primary_sources, original.plan.shards, strict=True
             )
             if shard.shard_id in complete
         ),
@@ -392,6 +412,7 @@ def prepare_development_corpus_resume(
     history: DevelopmentCorpusResumeHistory,
     endpoint_snapshot: DevelopmentReviewMetadata,
     run_id: str,
+    source_custody: LoadedDevelopmentCorpus | None = None,
 ) -> PreparedDevelopmentCorpusResume:
     """Select only missing responses under the exact original context and request configuration."""
 
@@ -421,6 +442,7 @@ def prepare_development_corpus_resume(
         run_id=run_id,
         maximum_completion_tokens=original.shards[0].estimate.maximum_completion_tokens,
         maximum_run_seconds=original.maximum_run_seconds,
+        source_custody=source_custody,
     )
     _same_configuration(original, candidate.plan)
     selected = history.summary.unobserved_shard_ids

@@ -1,0 +1,246 @@
+{
+  "$defs": {
+    "EvidenceTransparencyCheckpoint": {
+      "additionalProperties": false,
+      "description": "One append-only log checkpoint, still non-authorizing when serialized.",
+      "properties": {
+        "checkpoint_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Checkpoint Sha256",
+          "type": "string"
+        },
+        "log_id_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Log Id Sha256",
+          "type": "string"
+        },
+        "previous_checkpoint_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Previous Checkpoint Sha256"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "tree_root_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Tree Root Sha256",
+          "type": "string"
+        },
+        "tree_size": {
+          "maximum": 10000,
+          "minimum": 1,
+          "title": "Tree Size",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "log_id_sha256",
+        "tree_size",
+        "tree_root_sha256",
+        "checkpoint_sha256"
+      ],
+      "title": "EvidenceTransparencyCheckpoint",
+      "type": "object"
+    },
+    "EvidenceTransparencyPrefixProof": {
+      "additionalProperties": false,
+      "description": "Bounded full-prefix proof of inclusion and append-only extension.",
+      "properties": {
+        "authority_subject_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Authority Subject Sha256",
+          "type": "string"
+        },
+        "checkpoint": {
+          "$ref": "#/$defs/EvidenceTransparencyCheckpoint"
+        },
+        "leaf_sha256s": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 10000,
+          "minItems": 1,
+          "title": "Leaf Sha256S",
+          "type": "array"
+        },
+        "prefix_proof_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Prefix Proof Sha256",
+          "type": "string"
+        },
+        "previous_checkpoint": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EvidenceTransparencyCheckpoint"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "subject_leaf_index": {
+          "exclusiveMaximum": 10000,
+          "minimum": 0,
+          "title": "Subject Leaf Index",
+          "type": "integer"
+        },
+        "subject_leaf_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Subject Leaf Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "previous_checkpoint",
+        "checkpoint",
+        "authority_subject_sha256",
+        "subject_leaf_index",
+        "subject_leaf_sha256",
+        "leaf_sha256s",
+        "prefix_proof_sha256"
+      ],
+      "title": "EvidenceTransparencyPrefixProof",
+      "type": "object"
+    },
+    "PublicationPhase": {
+      "enum": [
+        "POPULATION_REGISTRATION",
+        "MEASURED_POPULATION"
+      ],
+      "type": "string"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/calibration_checkpoint_subject.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Explicitly domain-separated subject binding one population phase to its log history.",
+  "properties": {
+    "artifact_kind": {
+      "const": "CALIBRATION_CHECKPOINT_SUBJECT",
+      "default": "CALIBRATION_CHECKPOINT_SUBJECT",
+      "title": "Artifact Kind",
+      "type": "string"
+    },
+    "external_comparison_required": {
+      "const": true,
+      "default": true,
+      "title": "External Comparison Required",
+      "type": "boolean"
+    },
+    "external_publication_verified": {
+      "const": false,
+      "default": false,
+      "title": "External Publication Verified",
+      "type": "boolean"
+    },
+    "model_qualification_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Model Qualification Authorized",
+      "type": "boolean"
+    },
+    "phase": {
+      "$ref": "#/$defs/PublicationPhase"
+    },
+    "policy_adoption_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Policy Adoption Authorized",
+      "type": "boolean"
+    },
+    "population_subject_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Population Subject Sha256",
+      "type": "string"
+    },
+    "pre_dispatch_anchoring_verified": {
+      "const": false,
+      "default": false,
+      "title": "Pre Dispatch Anchoring Verified",
+      "type": "boolean"
+    },
+    "provider_call_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Provider Call Authorized",
+      "type": "boolean"
+    },
+    "publication_profile": {
+      "const": "CALIBRATION_TRANSPARENCY_CHECKPOINT_V1",
+      "default": "CALIBRATION_TRANSPARENCY_CHECKPOINT_V1",
+      "title": "Publication Profile",
+      "type": "string"
+    },
+    "registration_checkpoint_subject_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Registration Checkpoint Subject Sha256"
+    },
+    "registration_event_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Registration Event Sha256",
+      "type": "string"
+    },
+    "release_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Release Authorized",
+      "type": "boolean"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "serialized_authority": {
+      "const": false,
+      "default": false,
+      "title": "Serialized Authority",
+      "type": "boolean"
+    },
+    "subject_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Subject Sha256",
+      "type": "string"
+    },
+    "transparency_proof": {
+      "$ref": "#/$defs/EvidenceTransparencyPrefixProof"
+    }
+  },
+  "required": [
+    "phase",
+    "population_subject_sha256",
+    "registration_event_sha256",
+    "registration_checkpoint_subject_sha256",
+    "transparency_proof",
+    "subject_sha256"
+  ],
+  "title": "CalibrationCheckpointSubject",
+  "type": "object"
+}

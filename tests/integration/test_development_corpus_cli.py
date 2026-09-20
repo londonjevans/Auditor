@@ -16,6 +16,7 @@ import mmaudit.repository.development_corpus as corpus_io
 from mmaudit.cli import app
 from mmaudit.constants import ExitCode
 from mmaudit.models.development_corpus import (
+    MAX_DEVELOPMENT_CORPUS_MANIFEST_BYTES,
     DevelopmentCorpusMaterial,
     DevelopmentCorpusObservation,
     freeze_development_corpus,
@@ -171,7 +172,7 @@ def test_bad_manifest_or_metadata_refuses_before_credentials_and_dispatch(
             manifest.read_text().replace('"total_source_bytes":12213', '"total_source_bytes":NaN')
         )
     elif kind == "oversize":
-        manifest.write_text(" " * 131073)
+        manifest.write_text(" " * (MAX_DEVELOPMENT_CORPUS_MANIFEST_BYTES + 1))
     elif kind in {"manifest_link", "source_link"}:
         target = manifest if kind == "manifest_link" else source
         retained = target.with_name("original-" + target.name)

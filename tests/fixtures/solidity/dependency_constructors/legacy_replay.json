@@ -1,0 +1,88 @@
+{
+  "basis": "Captured from verified source-root-admission predecessor before constructor implementation; source-only synthetic cases",
+  "cases": [
+    {
+      "manifest_json_sha256": "bfb817afd80bb4180a3ce1f912d1ce2a8e66c1dbacd18b2789abd1805ddc5215",
+      "manifest_sha256": "f599e611658a1c339f113a9a03ede580da68b6018455dec25783009b19495355",
+      "options": {},
+      "prompt_sha256": "e8255aac3d288d5ca85c7598a7aa9ab6539353f7bc710b0e93abf1e6da454ec5",
+      "schema_version": "1.0"
+    },
+    {
+      "manifest_json_sha256": "93faef2d382835eac2250391bb4812826372bffb60b49f3422c538716fd4ebb2",
+      "manifest_sha256": "9d991dd86bb38c345b12bb958752856b4935d826851457400a0eb247e64f4124",
+      "options": {
+        "dependency_remapping_text": ""
+      },
+      "prompt_sha256": "7da5d7fc0795c96ac41ab7480d449ea4c42f3b76563ebcf2e4c60942753b2e1c",
+      "schema_version": "1.1"
+    },
+    {
+      "manifest_json_sha256": "a8d918d08569efb2afda5f76ff315f2e541e36993f24d5b92f7cba76fbfe5ed9",
+      "manifest_sha256": "a42d2bcc65788f349d4f981cf600aa721a86c876e5a1e9c4f9c50898e9b4f8de",
+      "options": {
+        "dependency_remapping_text": "",
+        "dependency_target_context": true
+      },
+      "prompt_sha256": "6e3c03653c6a4d47f5f1a07a1c1affdd7f1744084e23abbe164d1cebfa79ac13",
+      "schema_version": "1.2"
+    },
+    {
+      "manifest_json_sha256": "4dcb2535f474fd96c2fc468c6cad425a7bbb1119b2f31a4bf7bfba42de907288",
+      "manifest_sha256": "b1c20354f5f80559949eb09de21544d63c32447ada2d2b65414978013908810e",
+      "options": {
+        "dependency_remapping_text": "",
+        "dependency_scoped_context": true,
+        "dependency_target_context": true
+      },
+      "prompt_sha256": "eb174803c77c3599d559257b59a71c5b02e7135c4a40ec9723f989f81c669cfd",
+      "schema_version": "1.4"
+    },
+    {
+      "manifest_json_sha256": "c05f3d3a1e9df347204b3244b964c183babde3741aaad00ca51fe692839ded17",
+      "manifest_sha256": "3d00b2381e5f90473f66c0369de1837f6563a72ee02d81c71b1a960a5bd706e9",
+      "options": {
+        "dependency_call_context": true,
+        "dependency_remapping_text": "",
+        "dependency_scoped_context": true,
+        "dependency_target_context": true
+      },
+      "prompt_sha256": "40a39e61c8669f2f447023b6d0ba7e7515aeef97b123dc7cf8f9c8d27c8b3ae2",
+      "schema_version": "1.5"
+    },
+    {
+      "manifest_json_sha256": "cbb729c59691adf37fe5617052fbec9696eebeda09410659594d9809613ba8b8",
+      "manifest_sha256": "ebf211a09be908920f233fbc1e0a75e4394fb09adf437d280c1df0c09dc7a409",
+      "options": {
+        "dependency_call_context": true,
+        "dependency_remapping_text": "",
+        "dependency_scoped_context": true,
+        "dependency_syntax_context": true,
+        "dependency_target_context": true
+      },
+      "prompt_sha256": "5db931cea3798401622edf1c95673b2e22d617dc43cc4960c19afedbe0e066db",
+      "schema_version": "1.6"
+    },
+    {
+      "manifest_json_sha256": "a0aa218aa455ec2a93ffeb249669411ad37f6a9e24ba770e59d19b7f84d16454",
+      "manifest_sha256": "08a537c3465875a14be06740084a043eb23851093ed2e4be546a7f99a8f90d69",
+      "options": {
+        "dependency_call_context": true,
+        "dependency_modifier_context": true,
+        "dependency_remapping_text": "",
+        "dependency_scoped_context": true,
+        "dependency_syntax_context": true,
+        "dependency_target_context": true
+      },
+      "prompt_sha256": "0ae9832f9ae0d60013e51e14360fb36544233b070e4e0e650c56cdd923c725a8",
+      "schema_version": "1.7"
+    }
+  ],
+  "predecessor_receipt_sha256": "7ad8eebd823e7acd993710d660985c2725ddbb21ac5431932eb592942751df79",
+  "source_sha256s": {
+    "Bases.sol": "f3925f722f6330418e9404a091cbca7eb1f4cee20aad7d85770ac231063e124b",
+    "Factory.sol": "cfe6785b645190aa6d8e44842177ce5c5dc6b1d78979d625bb4acadab91b2c7e",
+    "Guard.sol": "21d6a61648840fba9ff55a143354f4b3a7a7a9172941a63423fdc591e72f0320",
+    "Products.sol": "4ebd6b49e80285db1dc56fe50b96e8e193b964480f536b5079e863526db81759"
+  }
+}

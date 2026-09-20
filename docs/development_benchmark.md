@@ -364,19 +364,35 @@ Prepare the typed manifest with the pure `freeze_development_corpus` API using a
 explicit, sorted tuple of `(relative_filename, original_bytes)`. It performs no file
 discovery or I/O. The CLI consumes that manifest; it does not find sources, follow imports,
 download dependencies, compile or execute Solidity. Scope must be declared
-`OPERATOR_SUPPLIED_SYNTHETIC` or `OPERATOR_SUPPLIED_PUBLIC`, but that declaration and its
-hash do not authenticate provenance, licensing or ground truth. `EXPLICIT_MANIFEST_ONLY`
-and `dependency_closure: NOT_ESTABLISHED` remain fixed.
+`OPERATOR_SUPPLIED_SYNTHETIC`, `OPERATOR_SUPPLIED_PUBLIC`, or `OPERATOR_SUPPLIED_PROTOCOL`,
+but that declaration and its hash do not authenticate provenance, licensing or ground truth.
+The default version1.0 manifest retains `EXPLICIT_MANIFEST_ONLY`
+and `dependency_closure: NOT_ESTABLISHED`. Computed tree/closure and explicit primary/context
+versions are described below; defaults and historical artifacts are not promoted.
 
-The inventory permits 1–64 lexicographically sorted, case-fold-distinct relative `.sol`
-paths, at most 65536 bytes and 10000 lines per source, and 524288 total original bytes.
+`OPERATOR_SUPPLIED_PROTOCOL` is the real-source review mode for operator-supplied deployed
+or undeployed protocol source. Its system prompt reviews source-supported security properties
+without requiring a predeclared invariant or describing the input as a synthetic non-deployable
+fixture. The existing synthetic/public candidate prompts are unchanged. A protocol declaration
+does not verify deployment state or authorize fetching dependencies, contacting live systems,
+executing Solidity, or making a provider call. The response remains version3.0, with unvalidated
+security hypotheses and the existing advisory/invariant field distinctions.
+
+The inventory permits 1–256 lexicographically sorted, case-fold-distinct relative `.sol`
+paths, at most 262144 bytes (256 KiB) and 10000 lines per source, and 8388608 (8 MiB)
+total original bytes. Manifests are bounded at 524288 bytes and source/result artifacts
+at 64000000 bytes, including serialized source expansion. These development-only capacity
+changes were explicitly authorized by the operator on 2026-09-13; they do not change cost policy.
 The loader refuses traversal, aliases, links, hard-linked/special files, malformed or
 ambiguous UTF-8, secret-like content and any exact path/byte/hash/line drift. It reads only
 selected members and revalidates their bindings before handing off the immutable snapshot.
 These global bounds do not promise that the selected endpoint's request/token capacity
-or the estimated budget can admit every otherwise valid corpus.
+or the estimated budget can admit every otherwise valid corpus. In particular, the unchanged
+4000000-byte request bound, conservative endpoint byte/input and context checks, cost policy,
+ledger caps, uncertain-billing stop, routes and runtime deadlines may still refuse preparation
+or execution. Qualification, sealing and AUTHRUNNER are unchanged.
 
-Each selected file receives one request with its entire primary file and the entire
+Each selected primary file receives one request with its entire primary file and the entire
 selected source snapshot as context. Requests share one exact model/metadata selection,
 completion allowance and one-attempt estimated-cost policy. Full context is repeated per
 file, so input cost scales with both corpus size and file count; this is not semantic
@@ -392,8 +408,8 @@ and source-bounded primary/origin lines. It retains the coarse v2 vulnerability 
 allowlists remain unchanged. Coordinate validity is not semantic correctness.
 
 Owned mode0700 output retains `plan.json`, exact original UTF-8 material in `sources.json`,
-observed `file-0001.json` through at most `file-0064.json`, and `result.json`, all mode0600.
-Every selected file/line and candidate remains in the denominator; failures, missing shards,
+observed `file-0001.json` through at most `file-0256.json`, and `result.json`, all mode0600.
+Every selected primary file/line and candidate remains in the denominator; failures, missing shards,
 unreturned requests and unknown/overrun costs remain visible. Generation reuse, replay and
 owned-output drift refuse. Completion means responses were observed for selected files:
 `RESPONSE_COMPLETION_NOT_VALIDATED_ANALYSIS_COVERAGE`. All audit, validation, qualification
@@ -403,8 +419,10 @@ General-manifest candidate review is available separately through `judge-manifes
 Optional source-manifest candidate scoring and the manifest ensemble are described below.
 General-manifest cross-configuration comparison remains unavailable. The existing fixed scorer,
 `judge-audit` and `ensemble-corpus` retain their v2 three-file scope.
-Local tests use the larger paired synthetic source fixture and a64-file
-boundary with exact MockTransport and real network/process traps; they do not demonstrate
+Local tests retain the previous paired synthetic source fixture and 64-file controls, with
+additional synthetic 189779/262144-byte source, eleven-larger-file ingestion, 256-file scope,
+prompt-selection, cost-stop and custody regressions. Tests use exact MockTransport and real
+network/process traps; they do not demonstrate
 real-model quality, whole-protocol coverage, independent roots or a completed autonomous audit.
 
 ### Continuing an incomplete candidate without repeating observed sources
@@ -414,6 +432,8 @@ candidate. Supply either `--candidate-audit-file` plus its original `--source-ma
 and optional `--original-score-file`, or a previous continuation's `--history-file`.
 Also select `--endpoint-snapshot`, the same `--cost-ledger`, `--secrets-env-file`, a new
 `--run-id` and fresh `--output-dir`. Paths must be absolute, distinct and non-overlapping.
+Tree-backed histories additionally require paired `--source-manifest` and `--corpus-root`
+inputs that replay the exact retained source snapshot; see actual-root admission below.
 Both `--accept-estimate-risk` and `--allow-code-egress` are required before input reads.
 These interface details are not a selected paid command or authorization to inspect private files.
 
@@ -491,8 +511,9 @@ retains exact history totals; reported actual-cost sums are not a settled total 
 durations exclude unobserved between-run waits and scoring/finalization work, not end-to-end time.
 
 The separate composed score has a 96 MB byte cap; the history reader/writer stays at 64 MB and older
-consumers keep their limits. Source/claim/stage/request bounds remain 64/1024/8/72 accounted requests;
-up to 576 selected planned requests can remain visible across nine entirely incomplete stages.
+fixed-fixture consumers keep their limits. Source/claim/stage/request bounds are now
+256/4096/8/264 accounted requests; up to2304 selected planned requests can remain visible
+across nine entirely incomplete stages. The eight-continuation and monetary limits are unchanged.
 Outputs require a fresh private directory and exact input/output file and ancestor custody.
 Invalid inputs, custody drift or scoring failures never return scoring success. Already durable
 history and charges are retained if a derivative cannot be written; original cancellation takes
@@ -545,6 +566,580 @@ Review-impact/comparison
 policies and repeated-run stability are separate work. Location coverage establishes neither
 validated findings, independent/exhaustive truth, root independence nor audit/release eligibility.
 
+### Computed dependency evidence (partial V3-DEPCLOSURE-001)
+
+The pure `freeze_development_corpus` API accepts `dependency_remapping_text=""` to
+compute a version1.1 manifest over its exact supplied source tuple. Supply the actual local
+remapping text instead when needed. Omitting this argument preserves the version1.0
+manifest bytes, digest and `NOT_ESTABLISHED` interpretation. This API does not discover a
+filesystem tree, fetch dependencies, compile source, or authorize a provider call.
+
+The versioned witness hashes every supplied source and the complete remapping text. It records
+recursive per-primary import membership, exact import byte/line locations, missing or unsupported
+paths, malformed import directives, lexical/delimiter gaps and unsupported remapping lines.
+Relative local imports and unique longest-prefix directory remappings are supported; contextual,
+absolute, ambiguous and unsupported remappings are not guessed. `IMPORT_CLOSED` means only that
+the supported lexical import dependencies resolve inside the supplied source set. It does not
+establish valid Solidity syntax/types, filesystem-tree completeness or call implementations.
+
+The existing semantic graph is rebuilt from supplied bytes without artifact-directory reads;
+its digest, dependency facts, warnings and complete typed omission records remain bound to the
+witness. Lexical candidate references expose generic member calls that the heuristic graph can
+miss, but are not a complete semantic call inventory. `CALL_CLOSED` cannot be earned by this
+slice. Every primary retains `COMPLETE_STATIC_TARGET_AND_IMPLEMENTER_RESOLUTION_UNAVAILABLE`.
+Complete static type/call resolution, every in-tree implementer and stronger source-tree custody
+are required by the composed closure mode below. Neither an interface import nor a graph
+without retained edges establishes that stronger claim.
+
+The same API additionally accepts `dependency_target_context=True` with explicit remapping
+text to produce a version1.2 manifest and version1.1 witness. This opt-in adds exact
+contract/interface/library declaration identities, source import namespaces and aliases,
+supported explicit type/cast receivers, and nominal transitive supplied implementation context.
+For example, a supported `IReserve(value).method()` reference includes supplied descendants of
+`IReserve` and their recursive imports, not just its interface file. Duplicate names retain all
+candidates rather than choosing the first. Potential shadowing, missing symbols, unresolved
+inheritance, cycles, parent import-parse gaps and unsupported remappings remain explicit
+shortfalls; unsupported namespaces cannot produce a unique accepted binding.
+
+This earlier declaration-only version is not a Solidity typechecker. Typed value receivers such as
+`reserve.method()`, full lexical scopes, overloads, function bodies and member dispatch remain
+unproved. The nominal implementation list can include abstract declarations and does not prove
+a concrete deployed implementation. A member named `transfer` or `call` is not itself evidence
+of an address primitive. Every member dispatch stays `NOT_ESTABLISHED`, with
+`complete_static_resolution=false`. Record, namespace-work and serialized-context overflow
+refuse the artifact; context is not silently trimmed into a stronger closure claim.
+
+Actual retained material and every candidate/reviewer request carry the exact new context and
+its limitations. Existing default version1.0 and import-only version1.1 artifacts remain
+byte-for-byte replayable: synthetic regression controls compare manifests, witnesses and source
+request strings against output from the hash-pinned predecessor implementation. That declaration
+context API does not itself discover a filesystem tree; the separate capture path below does.
+
+Actual source consumers recompute the witness from the retained bytes, rather than trusting its
+self-hash or declared status. The local loader, candidate requests, both reviewer requests and
+retained source material share that identity. Changed/dropped source, forged witnesses and
+modified prepared context refuse before dispatch. The existing file, source, manifest, request,
+token, time and cost bounds still apply; dependency evidence adds input bytes and cannot bypass
+an envelope. Witness overflow refuses the whole artifact, never truncates it into a closed claim.
+
+These legacy modes keep all selected files as primary shards; explicit context-only membership
+is described below. Automatic tree partitioning remains V3-AUTOPARTITION-001. No cost, uncertain-billing, route,
+lineage, qualification, seal or AUTHRUNNER rule changes. A fully observed development ensemble is
+still an unvalidated model observation, not an audit-completion or safety certificate.
+
+### Complete supplied-root Solidity capture
+
+`mmaudit development freeze-tree` is provider-free. It takes `--corpus-root`, an explicit
+`--remappings-file`, `--corpus-id`, `--source-scope` and a fresh `--output-dir`, and writes
+`manifest.json` for the existing manifest audit commands. The source scope must be one of
+`OPERATOR_SUPPLIED_SYNTHETIC`, `OPERATOR_SUPPLIED_PUBLIC` or `OPERATOR_SUPPLIED_PROTOCOL`.
+No credentials, model selection, ledger, code-egress consent or paid execution is involved.
+
+The collector enumerates every recursive `.sol` source under that exact supplied root, using
+descriptor-relative, no-follow traversal and two matching complete namespace observations.
+There is no ignore list or silent exclusion. Links, shared files, special files, cross-mount
+entries, unreadable directories, case collisions, unsupported source paths and sensitive
+control-plane directories (including `.git`) refuse capture. Supply a source snapshot, not a
+checkout containing control-plane material. Ordinary non-source files are counted and their
+names/types contribute only to directory digests; their contents, including `.env`, are never
+read or sent to models. The explicitly selected remapping file is read separately and must not
+be a sensitive path. Its exact bytes are frozen and rechecked during capture/output.
+
+Existing limits remain 256 source files, 262,144 bytes per source and 8,388,608 source bytes,
+plus the existing line/manifest/witness/request/token/time limits. Enumeration additionally
+allows at most 4,096 entries, 512 directories and 32 directory levels. Empty directories are
+recorded. Overflows refuse the entire capture; nothing is trimmed into a complete-looking
+snapshot. Context-only accounting and automatic budget/time partitioning remain separate work.
+
+By default, the version1.3 manifest binds version1.1 dependency context and a source-tree receipt:
+exact source-inventory hash, every relative directory's child-name/type digest and entry counts.
+`LOCAL_TREE_SNAPSHOT_REQUIRES_ROOT_REPLAY` and `root_replay_required=true` deliberately do not
+authenticate a filesystem from a manifest's self-hash. The actual loader re-enumerates the
+supplied root and rechecks every selected source byte. It refuses a resealed omitted/changed
+namespace. Same-process handoff additionally binds directory/file identities and timestamps,
+so added/removed files, equal-byte object replacement and namespace drift cannot silently
+change the selected universe. The actual retained material and candidate/both-reviewer requests
+include every captured source and the same receipt. Output may not overlap the input tree;
+failed output validation cannot leave an accepted manifest.
+
+This is a snapshot of the chosen local root, not proof of its external provenance, completeness
+of a deployed protocol, off-tree dependencies, full Solidity type/member resolution, reachability
+or audit quality. Non-source contents are outside the receipt's persistent scope; object metadata
+is checked for continuity during capture/handoff. This tree-only mode cannot earn `CALL_CLOSED`. Legacy
+version1.0/1.1/1.2 manifests still load only their explicit members, omit the new receipt, and do
+not gain retrospective tree-completeness credit. Cost, uncertain-billing, route, qualification,
+lineage, seal and AUTHRUNNER rules are unchanged.
+
+### Actual-root admission for tree-backed work
+
+Every manifest carrying `source_tree_evidence` requires actual root replay when preparing or
+executing a candidate, judgment, ensemble, repeat series or continuation. This applies to all
+tree-bearing versions 1.3–1.7, including reviews with no available claims and direct shard
+transport. A retained manifest/source tuple or self-hashed tree receipt alone is insufficient.
+Pure historical artifact decoding remains available without a root; it does not admit execution.
+
+The Python preparers accept `source_custody=loaded`, where `loaded` is the exact
+`LoadedDevelopmentCorpus` returned by `load_development_corpus`. Preparation and parent rebuilds
+recheck its original manifest, complete namespace, selected source bytes and object continuity.
+The handle and absolute filesystem paths are not serialized into plans, requests or results.
+Selected-only legacy inputs retain their existing default behavior and artifact bytes.
+
+`audit-manifest`, `ensemble-manifest` and `repeat-manifest` pass their loaded tree custody through
+automatically. For a tree-backed `judge-manifest` or `resume-manifest`, additionally supply the
+paired `--source-manifest` and `--corpus-root` options. These must match the exact retained
+candidate/history source material; they cannot change the source snapshot or the original run's
+configuration. Each invocation explicitly selects its local root; the receipt does not authenticate
+its external origin or persistent filesystem identity. Missing, unpaired, changed or overlapping
+CLI inputs refuse before secret loading or a new reservation. This interface description authorizes
+no provider call.
+
+Direct dispatch rechecks the actual root after reservation and before the first transport await,
+then again after transport and cost reconciliation. A pre-dispatch failure follows the existing
+undispatched-hold release path. Drift during a dispatched call stops normal completion without
+clearing its billed or uncertain liability. The existing uncertain-billing stop, reservation
+limits and all other cost rules remain unchanged. Strict JSON replay retains graph-omission
+arrays, counts and commitments; admitting their record never treats omitted analysis as complete.
+These checks bind a selected local snapshot, not external provenance, deployed wiring or full
+static call closure. Every original `CALL_CLOSED` predicate still applies.
+
+### Scoped values and nominal member context
+
+`freeze_development_corpus(..., dependency_target_context=True,
+dependency_scoped_context=True, dependency_remapping_text=...)` opts into manifest1.4 and
+dependency witness1.2. The provider-free `development freeze-tree --scoped-targets` option
+also includes this evidence and retains the complete supplied-root replay requirement.
+The existing default capture and every older manifest/witness version keep their earlier
+meaning; an older artifact is not silently recomputed under the new scope policy.
+Synthetic replay controls compare all four earlier manifest versions, their existing witnesses
+and all eight per-primary source prompts with the hash-verified pre-scoped implementation.
+
+The bounded resolver shares the existing byte lexer and import-namespace fixed point. It records
+source-owned contract/function/block/for scopes, typed state variables, parameters, named returns
+and locals, including their visibility start and exact source spans. Lookup distinguishes actual
+shadowing from a same-named declaration in a different function. Supported type aliases, ordinary
+typed receivers, explicit casts, library members and `this` receivers carry exact member
+declaration IDs and supplied nominal implementation body IDs. Inherited bodies point to their
+actual declaring source; conflicting inherited values/bodies and same-arity overloads are not
+resolved by choosing the first match. Member arity, return-type and visibility shortfalls remain
+visible, including an interface with no supplied body.
+
+`DECLARATIONS_BOUND` means those source declarations were bound by this named policy. It is not
+proof of valid Solidity, runtime dispatch, deployment addresses, concrete deployability, full
+argument typing or complete static call closure. The policy supports modern block scoping with
+an exact or caret `0.5`–`0.8` pragma; missing or other scope-version specifications retain a shortfall.
+Function-return/array receivers, `super`/base dispatch, extension methods, unresolved modifiers,
+assembly/try/do scopes, tuple declarations, named call arguments, call options and unsupported
+nested types do not gain a complete binding. Existing graph omissions and legacy candidate
+references are retained. This declaration-only mode cannot earn `CALL_CLOSED`; successful
+declaration binding cannot replace the composed closure proof below.
+
+Actual source consumers recompute both contexts and all declarations before request preparation;
+the exact scoped evidence and every selected source reach retained candidate and both-reviewer
+requests. Resealed dropped/changed context and source-tree drift refuse. Limits remain 4,096
+records per population, 1,000,000 resolution-work units, 32 scope levels and the existing
+393,216-byte complete witness ceiling, with the unchanged manifest/request/source limits.
+Nothing is silently dropped when a limit is reached. This extra context counts as request input
+under the existing conservative cost estimate and may make an existing budget insufficient.
+The tests retain that refusal and separately exercise a fully mocked, adequately budgeted
+handoff. No operational cost policy, route, ledger, uncertainty, qualification, seal or
+AUTHRUNNER rule changes; context-only accounting and automatic partitioning remain separate
+dependent tickets.
+
+### Argument and return-type call context
+
+`freeze_development_corpus(..., dependency_target_context=True,
+dependency_scoped_context=True, dependency_call_context=True,
+dependency_remapping_text=...)` explicitly selects manifest 1.5/witness 1.3.
+The offline `development freeze-tree --typed-calls` option includes the required earlier
+contexts and preserves actual supplied-root replay. The default remains manifest 1.3;
+`--scoped-targets` alone remains 1.4. Versions 1.0–1.4 retain their earlier bytes and meaning,
+including selected-only and tree-bearing 1.4. Pinned synthetic controls compare their manifest,
+witness and source-prompt bytes against SHA-verified predecessor implementation snapshots.
+
+The pure resolver records lexical call candidates outside excluded declaration headers,
+including undotted internal calls, explicit conversions, intrinsics and nested calls through
+returned interface values. Supported primitive and nominal argument types use conservative
+implicit conversion rules; multiple applicable overloads remain ambiguous, even when one is
+an exact match. Integer widening, fixed-byte widening and nominal ancestry are not discarded
+to make a single candidate appear unique. Typed calls retain exact argument/source spans,
+supporting value identities, nested-call offsets, return types, member candidates and all
+nominal implementation body references. Cross-file imports and return-type aliases bind to
+the actual declaring source, not merely a similarly named interface.
+
+`STATIC_DECLARATIONS_BOUND` is a supported source declaration/body binding, not compilation,
+deployed dispatch, deployability or full static call closure. Data locations for reference
+types, unsupported expressions, indirect/dynamic/array receivers, base/extension dispatch,
+call options, named/tuple arguments, unresolved scopes and implementation conflicts retain
+shortfalls. Version-dependent global values are supported only for the explicit 0.8 policy;
+earlier accepted lexical-scope versions do not receive guessed address-payability bindings.
+String contents cannot become Boolean literals or call delimiters.
+Nominal conversions account for inherited receiver payability; missing/cyclic ancestry and
+parse gaps prevent a conversion binding. Non-payable-address or nominal downcasts involving
+an unresolved fallback-payability distinction retain an explicit conversion shortfall.
+Complete statement/expression
+grammar, every supported call site and all original graph/parse/omission/confidence criteria
+remain mandatory before `CALL_CLOSED` can be earned. The context's complete-resolution flag
+stays false; this mode does not complete V3-DEPCLOSURE-001.
+
+Actual source consumers recompute all evidence. Retained sources and candidate/both-reviewer
+requests carry the same typed context and every selected source. Source/type/body drift and
+resealed or altered request evidence refuse. The resolver retains existing record/work/context
+ceilings and adds a 32-level expression/call recursion bound; over-limit evidence is not truncated.
+Extra evidence counts against unchanged request and cost limits. The six-file mock handoff
+retains the insufficient USD 40 shared-headroom refusal and separately succeeds with test-only
+USD 60 total/USD 3 per-attempt inputs. No operational policy, ledger, uncertain-billing, route,
+lineage, qualification, seal or AUTHRUNNER change is made. Context-only accounting and automatic
+partitioning remain dependent tickets.
+
+### Independent source grammar and call-census accounting
+
+The offline `development freeze-tree --syntax-context` option selects manifest 1.6/witness 1.4
+and includes the earlier target, lexical-scope and typed-call contexts. The pure freezing API
+requires `dependency_syntax_context=True` with all three earlier flags explicitly true.
+Default and earlier modes are unchanged. Versions 1.0–1.5 replay exact predecessor manifest,
+witness and source-prompt bytes, including selected-only and tree-bearing versions.
+
+An independent bounded parser starts at the first token of every exact supplied source and
+either reaches EOF under its supported grammar or records the entire unparsed declaration
+suffix and exact failure offset. It accounts for state/local initializers, inheritance and
+modifier arguments, conditions, loops, returns, nested expressions, casts, creation, arrays,
+named arguments and call options. Each parsed call records its exact source/opening/end spans
+and is joined against the entire typed-call population. Missing typed calls, span mismatches
+and extra typed calls remain visible; header calls cannot disappear behind excluded regions.
+Calls already discovered before an unsupported suffix remain on the record.
+
+`SUPPORTED_GRAMMAR_ACCOUNTED` means only that this parser reached EOF. `EXACT_SPAN` means only
+that both analyses recorded the same call span, not that the target resolved or that the code
+typechecks. The version-1.6 grammar supports exact/caret 0.8 pragmas; unsupported pragma forms,
+mapping/function types, implicit modifier invocation without parentheses, using directives,
+try/catch, assembly/Yul and other unrecognized forms
+retain gaps. Earlier scope/type-resolution shortfalls remain even for supported syntax.
+No compiler or deployed-dispatch claim is made, and `complete_static_resolution` stays false.
+Event/custom-error statements require their dedicated qualified call/argument grammar;
+unsupported unary-plus and leading-zero decimal forms also retain syntax gaps.
+
+Source consumers recompute the complete evidence before using it. Actual local root loading,
+retained material and mock candidate/both-reviewer requests preserve the same evidence and all
+source bytes; altered source, census or requests refuse. All source, witness, manifest, request,
+time and cost ceilings remain enforced. Parsing has a shared 1,000,000-work ceiling, depth 32
+and at most 4,096 calls; exceeding a bound refuses the complete artifact instead of truncating.
+No operational cost/uncertainty/route/lineage/qualification/seal/AUTHRUNNER rule changes.
+
+V3-DEPCLOSURE-001 remains unfinished. Complete supported type/member/call resolution, actual
+complete-root custody and all original graph/parse/omission/provenance/confidence/implementer
+predicates are still required for `CALL_CLOSED`. Syntax accounting cannot substitute for them,
+and a self-hashed tree receipt alone is not proof of actual root custody. Context-only accounting
+and automatic partitioning remain dependent tickets.
+
+### Modifier argument and implementation context
+
+The offline `development freeze-tree --modifier-context` option selects manifest 1.7/witness 1.5
+and includes all earlier context modes. The pure API requires `dependency_modifier_context=True`
+and every preceding context flag. Earlier selections and serialized artifacts remain unchanged.
+
+This mode parses parameterless modifier declarations with or without parentheses and records
+every explicit or implicit function-header application. Function parameters are visible to
+modifier arguments; body locals and named return values are not. Nested argument calls retain
+their own exact spans and type evidence. The independent syntax census also records implicit
+applications, so absence of parentheses cannot hide a missing dependency. For `IMPLICIT_MODIFIER`,
+`call_byte_start` is the actual first modifier-name byte, not an invented opening parenthesis.
+
+Nominal modifier lookup includes inherited declarations and all supplied derived implementation
+bodies. Calls inside those bodies contribute their interface implementations to per-primary
+membership. Qualified ancestor applications bind the explicitly named base rather than dispatching
+to descendant overrides. Ambiguous inheritance, missing bodies, incompatible or unproved overrides,
+unresolved arguments and unsupported base-constructor headers retain shortfalls. A changed override
+signature cannot disappear behind a matching inherited body. This is bounded static source context,
+not proof of modifier execution order, reachability, compilation or deployed dispatch.
+
+Source consumers recompute this evidence. Actual root loading, retained material and mocked
+candidate/both-reviewer requests preserve every selected source and the same modifier evidence;
+source, body, population or request drift refuses. The existing byte, record, work, depth, request
+and cost bounds still apply. No graph fact or confidence is upgraded by a modifier binding, and
+`CALL_CLOSED` remains unavailable until every original closure predicate is satisfied. A serialized
+tree receipt still cannot substitute for actual complete-root custody. No provider, route, cost,
+uncertain-billing, lineage, qualification, seal or AUTHRUNNER change is selected.
+
+### Constructor argument and ancestor-body context
+
+The offline `development freeze-tree --constructor-context` option selects manifest 1.8/witness
+1.6 and includes the earlier context modes. The pure API requires
+`dependency_constructor_context=True` alongside all preceding context flags. Older selections,
+artifact bytes and prompts keep their original behavior; they are not retroactively promoted.
+
+`CREATION` binds the exact nominal contract, its own constructor signature and every supplied
+contract ancestor. Explicit constructor bodies and types with implicit constructors are recorded
+separately. Constructors are never selected from inherited overloads, and construction does not
+dispatch to descendants. `BASE_CONSTRUCTOR` binds one inheritance-header or constructor-header
+invocation's own declaration and argument types. Each creation additionally records its base
+argument call sites; missing parameter supply, duplicate supply, repeated direct bases, invalid
+ancestor kinds, missing bodies and recursive argument dependencies remain explicit shortfalls.
+
+The independent syntax census joins actual creation and inheritance-argument spans, including
+nested calls. Constructor parameters are available to their header arguments; body locals and
+named returns are not. Unsupported pre-initialization value/function dependencies, named argument
+forms, arrays, creation options, ambiguous types, unsupported conversions and abstract creation
+are not guessed. State initializers, ancestor bodies and constructor modifiers remain part of
+the retained source and call context. An implicit constructor has no fabricated body or source
+call. This evidence is not initialization order, execution, reachability or deployability proof.
+
+Actual source/root replay, retained material and mock candidate/both-reviewer requests bind the
+same evidence and source bytes. Source or request drift refuses before new reservations. The
+existing source, graph, witness, work, depth, request and cost limits remain unchanged; even a
+minimal graph envelope may refuse a too-small bound. No original graph fact, omission, provenance
+or confidence is hidden or upgraded. All original static-closure predicates still precede
+`CALL_CLOSED`; constructor context alone cannot earn it. No provider, cost, uncertain-billing, route,
+lineage, qualification, seal or AUTHRUNNER change is selected.
+
+### Computed static call closure over the supplied tree
+
+The offline `development freeze-tree --call-closure` option selects manifest1.9/witness1.7,
+includes every preceding context mode and requires a complete local-tree receipt. This is a
+source-only operation, not a provider command. `dependency_static_closure=True` also requires
+all preceding context flags and tree evidence through the Python freeze APIs. Every runtime
+consumer additionally requires actual-root custody; source tuples and self-hashes are insufficient.
+
+`SOURCE_GRAPH_SYNTAX_TYPED_CALL_CLOSURE_V1` composes the original graph with the independently
+counted grammar/typed-call populations and exact nominal declarations and bodies. Its named edge
+set is `DEPENDENCY`, `INHERITANCE`, `MODIFIER`, `INTERNAL_CALL`, `EXTERNAL_CALL`, `LOW_LEVEL_CALL`,
+`DELEGATECALL` and `CONTRACT_CREATION`. Imports, declared nominal types, call arguments/results,
+modifiers, constructor ancestors and all supplied nominal interface implementers contribute
+source dependencies. Per-primary least-fixed-point membership, exact edge/evidence indices,
+source/graph/input digests and every refusal are retained in the proof and all three role prompts.
+
+Only a complete composition can earn `CALL_CLOSED`. Every original relevant graph fact must
+join the source evidence, have confidence at least0.9 and retain compiler/static-tool provenance.
+Heuristic facts are never regraded, even when a separate typed call binds. Missing implementers
+or bodies, unresolved or ambiguous calls/types, unsupported syntax/dynamic calls, off-tree imports,
+unparsed suffixes, census mismatches, graph omissions and warnings block the stronger claim.
+Byte/record/work ceilings refuse the whole proof rather than truncate evidence. Request/source
+drift refuses through the existing custody and accounting gates; none of those gates is relaxed.
+
+The original graph can miss generic member calls. The independent complete supported grammar
+and typed census supply those dependencies; an empty graph alone is never accepted as closure.
+For example, the synthetic controller/interface fixture closes through both supplied implementations
+and their library, while fixtures containing original low-confidence facts remain `NOT_ESTABLISHED`.
+Component `complete_static_resolution=false` fields remain: no component independently proves
+the composed relation. Requested call-closure mode reports either `CALL_CLOSED` or
+`NOT_ESTABLISHED`, retaining separate per-primary import evidence without a silent fallback.
+
+This is bounded static dependency closure over the chosen supplied tree, not complete Solidity
+type checking, compilation, deployed protocol completeness, address wiring, reachability, finding
+validation, lineage independence or audit completion. Version1.9 keeps all sources as paid primaries;
+the opt-in version1.10 partition below separates primary and context roles. Automatic partitioning
+remains unfinished under V3-AUTOPARTITION-001. Earlier manifest and prompt versions retain their exact bytes and meaning.
+No cost, uncertain-billing, route, qualification, sealing or AUTHRUNNER policy changes are included.
+
+### Explicit primary/context sources and complete-tree response accounting
+
+Offline `development freeze-tree --primary-source src/Controller.sol` selects manifest1.10.
+Repeat `--primary-source` for each intended primary; this also enables the complete static-closure
+evidence chain. The manifest hashes a sorted, disjoint `source_partition` whose primary/context
+union is exactly the retained source inventory. No file is fetched or omitted. The pure API accepts
+an exact `primary_filenames` tuple with the same static-tree evidence prerequisites. Omitting this
+option preserves previous manifests, prompts, hashes and all-primary semantics.
+
+Only primaries produce candidate shards and their possible reviewer requests. Shard IDs retain
+their original positions in the full source inventory, so a partition may use `file-0002` and
+`file-0005` without dispatching the intervening context files. Context-only source remains in
+candidate and reviewer prompts, retained `sources.json`, computed closure, source custody and
+valid root-cause/reference coordinates. Context incurs its actual input-size estimate in each
+request; it creates no separate primary reservation. All original request/token/cost and whole-run
+limits still apply. The selected-primary completion denominator excludes context, while the
+separate tree-level record below prevents that exclusion from becoming a whole-tree completion claim.
+
+Offline `development corpus-coverage` takes an absolute `--manifest-file` and `--corpus-root` for
+the complete reference tree, zero or more explicit `--record-file` paths to retained candidate
+`result.json` or continuation `result.json` files, and a fresh `--output-dir`. It makes no provider
+call and opens no ledger or credentials. The reusable computation and custody writer are separate
+from CLI parsing, so automatic partitioning can consume the same contract later.
+
+The mode0700 output contains mode0600 `coverage.json`. The bounded artifact preserves its reference
+material and every supplied original/history record, plus exact per-record and whole-tree
+projections. It records original-first-attempt and cumulative successful primary paths separately;
+context-only, failed, missing, unobserved and unselected paths; and source drift or identity
+shortfalls that invalidate credit. A changed context source invalidates that record's primary
+credit even when its primary bytes match. Duplicate or overlapping original/resumed requests,
+reservations and generations refuse instead of counting twice. Record order does not change the
+result. A complete-tree reference must be replayed from its actual source root when writing output;
+input/object/root drift and overlapping, linked, reused or oversized output refuse.
+
+`original_first_attempt_complete` additionally requires every selected original run to be fully
+observed; a later successful original run cannot erase an earlier selected failed original.
+The record describes only its explicit input set, not undisclosed earlier trials or a qualified
+benchmark cohort. Existing first-attempt scoring is not changed.
+
+`failed_primary_paths` and `missing_primary_paths` retain gaps present in any selected record;
+another record may subsequently cover those paths. `unobserved_primary_paths` reports selected
+primaries still lacking a successful response, and `not_successfully_observed_paths` includes
+both those gaps and every never-selected reference file. `context_only_paths` contains files used
+as context but never selected as a primary. A manifest may be `OBSERVED_ALL_SHARDS` while its
+tree-level status remains `INCOMPLETE`. Only exact response coverage of every reference source,
+with no included identity shortfall, earns `ALL_PRIMARY_RESPONSES_OBSERVED`. This is not validated
+analysis, independence, audit completion, qualification or release authority; all such flags stay false.
+
+Coverage accepts at most256 records, at most64000000 aggregate selected input/artifact bytes and
+the same bound on total source replay work. Bounds refuse the whole operation, never trim an
+incomplete population. First-attempt history and known/unknown liabilities are retained unchanged.
+Manifest1.10 retains the complete supplied tree as primary-plus-context. Minimal source bundles
+use the separately versioned origin-bound contract below; automatic scheduling remains unfinished.
+
+### Original-tree-bound minimal source bundles
+
+The provider-free `derive_development_corpus_partition` API accepts an original complete-tree
+material and an exact sorted primary-path tuple. Each selected primary must already have earned
+`CALL_CLOSED` in that original tree. The bundle retains the exact union of those original member
+sets, including every required in-tree implementer, then recomputes static closure on the subset.
+It preserves source bytes, relative coordinates, scope and remapping text. It cannot omit a required
+implementer by computing closure only after shrinking the tree.
+
+The bounded `development_corpus_partition` recipe binds the original manifest, tree and static
+closure digests. Derived manifest1.11 adds mandatory `source_origin` with those same bindings;
+it cannot be loaded as an ordinary manifest without the original source custody. This is source
+provenance only, not authenticated model ancestry, lineage independence or audit authority.
+
+`materialize_development_corpus_partition` writes a fresh, disjoint, private bundle directory:
+exact selected sources under `source/`, plus `manifest.json` and `partition.json`. It does not
+modify originals. Both roots, source bytes and the recipe's bytes/file identity are rechecked
+through the existing candidate, reviewer and resume consumers. A later invocation must use
+`load_development_corpus_partition` with the actual original tree and recipe; stripping the origin
+custody refuses. A failed write may leave a partial unaccepted bundle; output is never silently
+reused or recursively deleted. Bundle recipes are bounded to1048576 bytes.
+
+Each synchronous source-custody guard has local tables for duplicate deterministic material
+validation and strict manifest parsing. Material keys contain the complete serialized
+content; manifest keys contain the exact freshly read bytes, not just a declared digest. Each
+private table is bounded to the original/derived pair and discarded on return. No source,
+file-identity, root, namespace or recipe verdict is cached. All four original-tree manifest and
+source read passes remain, with a final recipe check and an in-memory material comparison before
+returning. Changed, malformed or oversized inputs cannot reuse a prior successful parse. This
+reduces repeated pure validation; it does not change spending, timeout, retry or source-admission
+policy or prove whole-catalog runtime and memory bounds. Automatic tree invocations additionally
+own bounded detached pure replay tables as described below; ordinary callers still start fresh.
+
+For offline whole-tree coverage, repeat `development corpus-coverage --partition-file PATH` for
+each selected bundle recipe alongside its explicit result/history files. Coverage1.1 replays each
+recipe against the original complete source tree before accepting a derived namespace. Missing
+origin evidence produces `SOURCE_ORIGIN_NOT_REPLAYED` and no response credit, even when both
+namespaces happen to match. Duplicate, unused, forged or oversized recipes refuse. At most256
+recipes are admitted, and their bytes and selected source replay work count toward the unchanged
+64000000-byte aggregate bounds. Omitting recipes preserves legacy coverage1.0 serialization.
+
+This is a tested prerequisite, not the full tree-to-budgeted-plan controller. No automatic
+all-source partition catalog, aggregate cost/time preflight, scheduling or CLI execution handoff
+is supplied by these APIs. Those remain V3-AUTOPARTITION-001. Response coverage is still not
+validated audit coverage; no provider call or cost, uncertainty, route, qualification, sealing
+or AUTHRUNNER policy change is included.
+
+### Automatic whole-tree development planning and stage resume (in progress)
+
+`development plan-tree` takes an explicit source tree, remappings file, corpus identity/scope,
+policy file and fresh output directory. The policy binds a run identity, the unchanged
+`DevelopmentCostPolicy`, three ordered frozen role metadata records, three completion allowances,
+and whole-tree request/time bounds. It computes every original primary's minimal closed bundle,
+not an operator-selected subset. The resulting private `plan.json` and `manifest.json` preserve
+every unplaceable source and per-role shortfall. Planning does not open a ledger, load credentials,
+materialize execution bundles or contact a provider. `REFUSED` is retained evidence, not admission.
+
+Candidate envelopes use exact serialized requests. Reviewer envelopes include the largest bounded
+claim population and worst-case nested JSON escaping; they are size-only supersets, never invented
+candidate observations. A cheap candidate or empty potential response cannot hide an oversized
+review request. Whole-plan estimates reserve both existing reviewer allowances per primary.
+These are conditional resource bounds, not provider latency, billing or completion guarantees.
+
+`development run-tree-plan` requires the same original tree, remappings and policy files,
+the retained plan, an existing ledger, explicit secret-file selection and both existing
+estimate-risk/source-egress acknowledgments. Default execution schedules every pending primary
+and its two available reviews in deterministic order. Each source bundle retains actual original
+and derived root custody. The optional invocation-stage limit pauses at a closed stage boundary;
+`--resume` reopens the same output and identities, never a new budget or a repeated candidate.
+
+Preflight covers every original source before execution. Bundles are then materialized only when
+their scheduled turn arrives; untouched slots remain explicitly pending in whole-tree coverage.
+Every existing bundle, including an older eagerly prepared layout, is replayed before resumed
+dispatch. Accounting and elapsed-time guards run before creating a future bundle as well as before
+its request. An unknown bill never permits automatic preparation of the next bundle.
+
+Each invocation fully recomputes the retained plan once and holds a private detached snapshot.
+Subsequent boundaries compare that exact selection while rechecking the actual source bytes,
+namespace/file identity, policy/remapping/plan files, current route eligibility and review grammar.
+This shares only construction of identical preflight envelopes, not filesystem custody or live
+eligibility. Reviewer start records bind the single prepared request actually dispatched.
+
+The tree invocation also owns two-entry LRU tables for strict parsing of exact material JSON and
+freshly read manifest bytes. Each table can retain the original tree and current derived bundle;
+other inputs evict the oldest result and must validate normally. Callers receive detached models,
+not the cached objects. Raw input equality, strict validation and unchanged private result bytes
+are required; invalid inputs never enter the tables. The material/manifest cacheability bounds
+are 64,000,000/8,388,608 bytes per entry, not new source-admission limits: larger otherwise-valid
+inputs parse without caching. Current parser/source-rule bindings and source bounds invalidate
+earlier reuse when changed. These are in-process computation checks, not executable attestation.
+Nested invocations have fresh tables. Different tasks or threads cannot inherit reuse, and all
+entries and owner references are cleared on return, exception or cancellation. A cold resume
+must earn its own results. Original source/root/namespace/manifest/recipe observations, route
+eligibility, ledger, deadline and output-custody checks are never replaced by these tables.
+
+Each manifest's selected time allowance is divided among its three stages. Immutable start/end
+receipts retain the original request identity, durable child binding and measured active interval.
+Closed elapsed intervals and pending allowances are checked cumulatively across invocations;
+offline planning/preparation and time between invocations are not measured active execution.
+Between-stage input, accounting and request-preparation checks count inside the next stage window.
+A closed interval cannot claim less elapsed time than its durable child result. A closed stage
+that failed before reservation counts as zero paid attempts and retains incomplete source coverage.
+A missing end receipt is not evidence of an unsent request and cannot cause redispatch, even when
+a child result exists. A paid failure is retained without an automatic retry; DEVRETRY is separate.
+Source/policy/recipe/result drift, identity reuse, unknown billing under STOP, active reservations,
+overruns and exhausted headroom/time continue to refuse. Historical ledger entries are untouched.
+
+Progress and coverage records distinguish response coverage from candidate/reviewer completion.
+Their typed fields must agree on primary slots, paid-attempt counts, active elapsed intervals,
+known/uncertain/reserved accounting and source coverage. These consistency checks do not authenticate
+the record or replace replay of its original durable children and source roots.
+The controller now persists `progress-0000.json` before dispatch and a bounded progress summary
+after each closed stage, before a captured child exception is re-raised. Full source-bearing
+coverage remains an invocation-return or captured-child-failure artifact; it is not copied after
+every successful reviewer. A progress suffix counts closed stages, not paid attempts: a closed
+pre-reservation failure still counts zero paid attempts. The latest checkpoint describes its
+retained closed prefix, not the final bill or outcome of a subsequent unclosed request. If source
+or output custody is lost, or the process is killed before closing a stage, no newer checkpoint
+is promised and the existing unclosed-stage refusal remains in force.
+
+Within one invocation, the controller retains at most one computed coverage population for the
+exact serialized original reference, candidate records and partition recipes. Reviewer-only
+checkpoints may reuse that pure result because they do not change candidate response coverage;
+primary/reviewer status, costs and elapsed intervals are still computed afresh. Input and result
+byte bounds remain, changed inputs require full recomputation, and changed cached result bytes
+refuse. A new invocation starts without this private state. All live source, checkpoint, other
+retained-file, policy, route and ledger checks remain in place; no I/O verdict is reused. The
+ordinary coverage reader independently replays every emitted artifact as before. This avoids
+duplicate deterministic work, not an unproved claim of full-catalog runtime or memory performance.
+
+Retained tree execution files are revalidated in same-root batches of at most 8192 files.
+One root and at most one current parent descriptor are held within a synchronous batch; every
+file is still reopened and fully read four times. Each read rejoins the exact live file metadata,
+all original lexical ancestor objects/modes, and both held directory identities. Directory-entry
+churn permits only the existing caller-owned metadata changes, never a replaced or linked file or
+directory. Expected bindings and ancestry are detached and checked for drift, byte/count bounds
+remain, and all descriptors close on normal and exceptional exits. A new guard opens fresh
+descriptors and rereads all files; no earlier positive I/O result is reused. The shared low-level
+reader is factored without changing the ordinary single-file release reader's strict defaults.
+Synthetic race/restart and same-workload timing checks do not establish full-catalog performance.
+
+Before resumed dispatch, every retained progress/coverage file is strictly parsed and compared
+with the exact corresponding prefix of original child records and elapsed receipts. Later primary
+slots remain pending in every prefix. The checkpoint namespace is bounded and canonical; future
+counts or foreign root entries refuse. File bytes, file identity and the retained namespace remain
+under custody during later requests. Sparse older checkpoint layouts remain readable only when
+their retained files match the reconstructed original prefixes. A missing current summary can be
+rederived from an already closed child without repeating the request or changing the ledger.
+This does not authenticate the completeness of an externally edited historical archive. Checkpoint
+bookkeeping is outside the already closed active-stage interval, so these records do not measure
+total command wall time or promise provider latency.
+An empty candidate skips paid reviews as `NO_CANDIDATES`, never as a clean or qualified audit.
+These new APIs/commands have local synthetic/mock execution controls; broader capacity, interruption,
+custody-race and artifact/gate acceptance remain required under V3-AUTOPARTITION-001. No real provider
+performance, unattended qualified audit, route/lineage adoption, sealing or release is established.
+
 ### Full-manifest development ensemble
 
 `development ensemble-manifest` executes a development-only full-manifest candidate and two
@@ -588,10 +1183,11 @@ disagreement and one/two-refutation counts never filter claims or establish revi
 `available_claim_opinion_observation_fraction` measures only available-opinion completion: it
 can be1.0 with incomplete original source scope. Original incomplete quality remains null.
 Parent result/score artifacts use a separate256MB bounded descriptor-safe writer. Ordinary100MB
-evidence APIs and child16MB candidate/32MB score/64MB review ceilings remain unchanged.
+evidence APIs and child32MB score/64MB review ceilings remain unchanged; development corpus
+candidate artifacts now have their own64MB ceiling without changing the fixed-fixture writer.
 
 Local tests execute the real parent and CLI using synthetic MockTransport, fake credentials,
-disposable local ledgers and actual network/process traps. Maximum structural execution covers
+disposable local ledgers and actual network/process traps. Retained structural execution covers
 64sources/1024original claims/2048opinions/192first-attempt requests, not maximum artifact bytes
 or semantic audit quality. Paired, partial, empty, failure and cancellation cases retain original
 scope/costs; separate I/O tests really cross100MB while ordinary readers still refuse that size.
@@ -769,7 +1365,7 @@ options. Supply an absolute, distinct, normalized local JSON path and its explic
 lowercase SHA-256. Neither option is accepted alone. Omitting both retains the existing
 candidate-only requests and outputs. This interface does not select a paid run.
 
-The separate `DevelopmentCorpusBenchmarkTruth` contract has1–64 exact selected source records
+The separate `DevelopmentCorpusBenchmarkTruth` contract has1–256 exact selected source records
 and1–1024 uniquely sorted PLANTED/GUARDED controls. Each control has an exact nested origin,
 required origin line, class, frozen severity, named invariant and bounded primary claim sites.
 All coordinates must fit the actual source lengths. Provenance must be declared as
@@ -794,7 +1390,8 @@ class/primary-site/origin/required-anchor predicates; ambiguous matches receive 
 root credit. Only the first invariant claim for a planted root earns root credit; subsequent
 consequences remain duplicates, guarded claims remain unmatched invariants, and advisories
 cannot erase a missed root or improve precision by relabeling. Matched-site weights use
-frozen label severity. Up to1024 claims/roots and10240 weighted units are supported.
+frozen label severity. Up to4096 claims and1024 declared roots are supported: up to10240
+weighted root units and40960 weighted claim units. The truth-label limit and matcher are unchanged.
 These are `STRUCTURAL_LABEL_MATCHES_NOT_VALIDATED_FINDINGS`, not semantic precision/recall
 or evidence of superiority to professional auditors.
 
@@ -818,7 +1415,8 @@ No opinion filters original claims, and all audit/qualification/release flags re
 
 `development judge-manifest` consumes an exact v3 `DevelopmentCorpusObservation` through
 `--candidate-audit-file` and its original `sources.json` through `--source-material-file`.
-It does not rediscover files or reread a mutable source tree. Supply explicit absolute,
+Selected-only legacy review uses the retained bytes without rediscovery. Tree-backed review also
+requires the original manifest/root pair and refuses any drift, as described above. Supply absolute,
 distinct paths for `--endpoint-snapshot`, `--cost-ledger`, `--secrets-env-file` and a new
 `--output-dir`, together with `--run-id`, `--budget-usd` and `--per-attempt-usd`.
 Both `--accept-estimate-risk` and `--allow-code-egress` are required before input reads.
@@ -826,7 +1424,7 @@ These interface details do not select a provider run or authorize spending.
 
 The full original candidate and manifest remain in the review plan. Observed nonempty
 shards receive one review request each, with unchanged ordered `file-0001:01` through
-`file-0064:16` claim IDs and the entire frozen source context. Observed empty sources are
+`file-0256:16` claim IDs and the entire frozen source context. Observed empty sources are
 recorded separately from unobserved candidate sources; neither receives a request.
 An incomplete candidate is accepted without manufacturing a filtered complete candidate:
 its review result remains `INCOMPLETE`, with `CANDIDATE_INCOMPLETE` after every available

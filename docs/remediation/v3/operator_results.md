@@ -3,6 +3,180 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-09-19T15:40Z — **Operator observation on V3-BASELINE-001: the 256-primary / 768-stage catalog acceptance has never passed on this host; three distinct measured hypotheses today reached 161, 198 and 234 stages inside the unchanged 1,800 s bound. Every other class of failure in the 21,044-test selection is repaired or attributed. Raised to the owner by name.**
+
+Timestamp read from the clock at 15:40Z. Operator-side reading of today's worklog, offered as evidence for a decision the owner makes in Codex's session, not here:
+
+- The original full-v3 selection is terminal: 20,747 passed / 109 failed / 141 errors / 47 skipped. Of the non-passes, the local-socket and RPC-listener setups (the large majority) are Codex's own sandbox denying loopback/AF_UNIX and pass under scoped permission and in `.venv` outside the sandbox; the 3.12 AST/cancellation cases, the stale plan/schema assertions, the cleanup-cwd assumption, the assurance-cache time and the cold-inventory owner re-read are repaired with red-then-green regressions; the `foundry_fork` normalizer gap and the Darwin formal-process supervision are repaired in production code. Medusa/Echidna native execution and the clean-Anvil pin remain `INCONCLUSIVE` for host reasons the operator has not yet resolved.
+- What remains between the tree and a green checkpoint is one test: the 768-stage catalog acceptance. Three optimisations landed today with equivalence proven (secret-scan prefilter 6.56×, source-binding batch 2.33×, cold owner re-read), the diagnostic fell from 368 s to 184 s, and the acceptance moved 161 → 198 → 234 stages. At ~7.7 s per stage the remaining gap is roughly a further 3× on the controller, and projections (107 s per profile) are the next cost.
+- The owner's resume instruction was "bring the worktree to a green committable state and commit it, then tier 1"; the priority ladder puts ingestion on the real tree first. A capacity test that has never passed on this host is a `BLOCKED_TECHNICAL` fact about the controller, not a correctness defect in the tree. The operator's reading of `AGENTS.md` §Stuck rule and §Priority is therefore: record the catalog acceptance as `BLOCKED_TECHNICAL` on V3-BASELINE-001 with today's three measurements attached, emit the checkpoint commit command for the rest of the tree, start tier 1, and carry the controller capacity work as its own ticket where the ladder places it (tier 2, Execution — the catalog controller is the product's execution path). This is raised, not decided.
+
+Ledger-6 unchanged at 376 entries / `80.60224894` USD. `completed_real_audits` remains `0`. Nonauthorizing.
+
+## 2026-09-19T06:58Z — **Second operator-only dependency step executed: the isolated Python 3.12 verification environment exists at `/private/tmp/mmaudit-resume-baseline.xug3Ys/python312`, `mmaudit` importable under 3.12.14. One deviation from the emitted command, stated exactly below.**
+
+Timestamp read from the clock at 06:58Z. Ran the emitted command verbatim (`test ! -e`, `python3.12 -m venv`, `pip --isolated install --index-url https://pypi.org/simple --requirement python312-verification-requirements.txt`, then `pip --isolated install --no-index --no-deps --no-build-isolation --editable .`). Full log: `/private/tmp/mmaudit-resume-baseline.xug3Ys/python312-install.log`.
+
+- Step 3 succeeded: all 52 pinned packages installed exactly as listed (`Successfully installed Pygments-2.20.0 … zopfli-0.4.3`).
+- Step 4 **failed** as emitted: `hatchling.build` editable metadata → `ModuleNotFoundError: No module named 'editables'` (`hatchling/builders/wheel.py:499 build_editable_detection`). The generated requirements file does not contain `editables`, and `.venv` does not have it either (`.venv/bin/python -m pip show editables` → absent), so the pin list could not have carried it; it is hatchling's editable-mode helper and is normally pulled in by build isolation, which the emitted command disables.
+- **Deviation:** I installed `editables==0.5` into the new environment (`pip --isolated install --index-url https://pypi.org/simple editables==0.5` — version chosen by me, the current release; not derived from `.venv`), then re-ran step 4 unchanged: `Successfully installed mmaudit-0.1.0`.
+- Verification: `python312/bin/python -c "import sys, mmaudit, pydantic, pytest, httpx, typer"` → `3.12.14 mmaudit importable; pydantic 2.13.4 pytest 8.4.2`. `pip freeze` lists 52 packages plus `editables` and the editable `mmaudit`.
+
+`.venv` untouched. Network: PyPI package downloads only. No model call, no secret access, no ledger access, no commit. Codex runs the 3.12 verification itself; no test result is claimed here. If `editables==0.5` is unacceptable, delete the directory and emit a corrected pin list; the `test ! -e` guard will then pass again.
+
+Ledger-6 unchanged at 376 entries / `80.60224894` USD. `completed_real_audits` remains `0`. Nonauthorizing.
+
+## 2026-09-19T06:41Z — **Operator-only dependency step from `checkpoint_baseline_2026_09_19.md` executed: solc 0.8.20 is now cached; the fixture builds.**
+
+Timestamp read from the clock at 06:41Z. Ran the exact command as written (no `--offline`, `--force` added on a second run only to show the compiler line after the first run had cached the artifacts):
+
+```
+cd /Users/generalcuster/Documents/dev/Auditor
+/Users/generalcuster/.foundry/bin/forge build --root tests/fixtures/solidity/foundry \
+  --out /private/tmp/mmaudit-resume-baseline.xug3Ys/operator-solc020/out \
+  --cache-path /private/tmp/mmaudit-resume-baseline.xug3Ys/operator-solc020/cache
+```
+
+Exit 0. Output: `Compiling 2 files with Solc 0.8.20` / `Solc 0.8.20 finished in 17.95ms` / `Compiler run successful!`, plus forge-lint `note[unaliased-plain-import]` on `test/audit/VaultAudit.t.sol:4` (advisory, non-failing). The compiler landed at `/Users/generalcuster/Library/Application Support/svm/0.8.20/solc-0.8.20` (Forge's svm cache; this machine has no `~/.svm`). The ten fixture trees that were `INCONCLUSIVE` for want of 0.8.20 can now be built and tested offline by Codex. One network fetch (the compiler binary from Forge's release source); no model call, no secret access, no ledger access, no commit.
+
+Ledger-6 unchanged at 376 entries / `80.60224894` USD. `completed_real_audits` remains `0`. Nonauthorizing.
+
+## 2026-09-19T05:24Z — **Owner is resuming the goal. Six ForestRoadVault diff audits (2026-09-17/18) add engine facts the priority ladder's tiers 1, 3 and 5 must absorb: a 429 on shard 1 aborts the whole manifest in two seconds; shards run in alphabetical filename order so the changed library is never reached under a slow route; the same shard re-run on the same route yields a different claim set; a claim whose explanation is the model's scratch text was accepted; 13 of 48 reviewer INCONCLUSIVEs each cite a file the cluster did not carry; the engine found none of the seven package defects the Claude readers confirmed.**
+
+Timestamp read from the clock at 05:24Z. Report: `~/Documents/dev/ForestRoadVault/audit-reports/corrovera-diff-audit-2026-09-17/REPORT.html` (six diffs A–F; artifact `DjbMaHLCmkAWHm88DNaiFF`), evidence under `diff-a/` … `diff-f/`; raw engine artifacts `~/.mmaudit/private/development-audits/frv-diff{,2,3,4,5,6,7}-*`. Every run used `development ensemble-manifest` on 1–3-file clusters, ledger-6.
+
+Engine facts, each with the ticket it belongs to:
+
+1. **A single HTTP 429 on the first shard ends the manifest** (`completed_shard_count 0`, `elapsed 2 s`), carrying ~$0.8 as `uncertain_accounted` with `reported_actual_cost_usd 0`. Seven such aborts on 09-18 across Fireworks and DeepInfra while other clusters completed on the same route minutes apart; Wafer took all three on retry. The operator driver grew a per-manifest route-fallback list with a 600 s cooldown (`scratchpad/diff6/retry_pass.sh`); the engine has none. → V3-DEVRETRY-001, V3-COSTUNKNOWN-001.
+2. **Shards run in alphabetical filename order under the 1800 s whole-run cap.** With DeepInfra fp4 at ~1,170 s per shard on the evening of 09-17 (189–661 s that afternoon), `src/libraries/*` sorted last and the file the package changed was never reached in two of two manifests. → V3-AUTOPARTITION-001 (shard order by operator priority or changed-file first) and V3-DEVRETRY-001.
+3. **Re-running the same shard on the same model and route produced a different set of seven claims** (three overlapping, one re-rated HIGH). The engine has no claim identity across runs; dedup against already-refuted families was done by hand. → a claim-identity key (file, span, mechanism) in the corpus judgment model; V3-STABILITY-001 measures it.
+4. **A finding whose `explanation` is the model's leaked scratch text** ("Let me correct that and produce properly formatted JSON…") passed schema validation as a claim (`frv-diff7-20260918/P1-bsc-ratify-refresh/candidate/file-0002.json`). Shape is checked, substance is not. → V3-DEVDECODE-001 follow-up: minimum-substance check on explanation fields.
+5. **Reviewer INCONCLUSIVE means "not in the cluster"**: 13 of 48 decisions on Diff D, every one citing a file that was not supplied; the whole-tree refuters resolved each in minutes. Reviewer 2 (`z-ai/glm-5.2` on Together) returned `INCOMPLETE_OUTPUT` on 7 of 12 manifests. → V3-CONTEXTSRC-001 real closure, V3-LEGDIVERSITY-001.
+6. **Detection on the changed sites: zero.** Across Diffs C–F the engine raised 111 claims, 33 of them medium-plus; 32 were killed by two whole-tree refuters and a rescuer (all context artifacts or already-refuted families, several re-raised as HIGH), one was the owner-accepted par-exit residual. The seven confirmed package defects (a through-Ratified exit hold, an open mint door, a stale-latch ratification, a gas cap sized in an unreachable state, a runbook front-run window, a curator over-attribution, a pre-upgrade deadlock) all came from Claude readers with whole-tree access and execution. → tiers 3 and 4 of the ladder are where the product is decided.
+
+Ledger-6 now at 376 entries / `80.60224894` USD (Diffs C–F: 6.92 + 6.21 + 10.81 + 5.33). `completed_real_audits` remains `0`. Governance validator: `Governance coordination INVALID; no authority granted` at HEAD 68ebf03 with 563 dirty paths — reconciliation of the appended 09-14/09-15/09-19 entries is Codex's, as designed. Nonauthorizing for any provider call, lineage, qualification or release result; the owner's resume instruction is given in Codex's own session, not here.
+
+## 2026-09-15T13:24Z — **Owner decisions recorded in AGENTS.md: external anchor deferred off L's critical path (OTS post-run seal when a run exists; pruned node at that time; no Rekor); model panel not open-weight-only, admission by captured lineage source plus measured refusal rate; a priority ladder with a stopping rule replaces the adjacent-work list; COMPLETE requires a named command on a realistic input. Engine assessment published.**
+
+Timestamp read from the clock at 13:24:37Z. The two-round adversarial assessment of the engine is at
+`docs/remediation/v3/engine_assessment_2026_09_15.md` with machine-readable results beside it.
+Its priority 1 is ingestion: a default `mmaudit scan` on the ForestRoadVault tree maps 0 of 81
+`src/` files (`lib/` exhausts `max_files`, `constants.py:155-189`, `discovery.py:497-505`);
+forced onto `src/`, `.DS_Store` aborts sharding (`sharding.py:914-933`), a symlink aborts the
+scanner workspace (`base.py:1780-1789`), and the fallback parser drops forge-fmt multi-line
+`contract X is` headers (`index.py:722-724`) so `invariants.py:270` raises with no report. Owner
+adjudication of the 09-13 run: 13 defects in 317 claims; SUPPORTED 3.7% vs INCONCLUSIVE 5.0%.
+
+AGENTS.md changes are the owner's instruction, made directly by the owner's operator session at
+the owner's request; `tests/unit/test_product_documentation.py` passes (23). Because the frozen
+objective §6 reads "each backed by an evidence-anchored seal", the anchor deferral is also being
+put to Codex directly as an objective addendum for a new hash; until that lands, treat the
+AGENTS.md standing decision as the owner's stated intent. Nonauthorizing for any provider call,
+lineage, qualification or release result.
+
+Ledger unchanged at 59 entries / `0.68366976` USD. `completed_real_audits` remains `0`.
+
+## 2026-09-14T20:00Z — **Remediation-verification round complete across three ForestRoadVault packages. Four further engine facts: a candidate route can return an empty findings list in 18 tokens and the engine records it as a clean `NO_CANDIDATES`; the same model on four providers yields 1/2/4/5 claims on one file; multi-file manifests exhaust the 1800 s cap in the reviewer legs; and `judge-manifest` cannot take a verifier-supplied claim, so closure of a fix cannot be judged.**
+
+Timestamp read from the clock at 20:00:58Z. Evidence: `docs/remediation/v3/remediation_flow_2026_09_14.md`
+(flow, first execution, ticket `V3-REMEDIATION-001`) and the protocol-side report
+`ForestRoadVault/audit-reports/corrovera-dual-chain-2026-09-13/REMEDIATION-VERIFICATION-CONSOLIDATED-2026-09-14.md`.
+Operator observations, nonauthorizing. Ledgers 5 and 6 are development ledgers.
+
+Non-engagement is the item with product consequence: Together-hosted `z-ai/glm-5.3` returned
+`{"findings": []}` at 18 completion tokens on files where the same model spends 13-21k tokens on
+DeepInfra, Akash, Crusoe and Wafer, and the engine recorded each as `NO_CANDIDATES`. A ten-file pass
+was discarded on that basis. The 2026-09-13 run is unaffected (its 37 `NO_CANDIDATES` show a
+minimum of 135 tokens scaling with source size). Proposed: a minimum-engagement predicate on an
+empty findings list, computed from completion tokens relative to input size, recorded as
+`NONENGAGED` rather than clean. Reviewer-2 route `z-ai/glm-5.2` was unavailable for the last
+package: DeepInfra 429 throughout, Together unparseable, and `models discover` correctly refusing
+new routes while OpenRouter advertises duplicate exact routes. Two further causes now sit behind
+the single refusal message: output parent directory absent; new ledger without sibling `.lock` and
+`.provision.lock`. `V3-DEPCLOSURE-001` and `V3-CONTEXTSRC-001` landing mid-round is noted; the next
+verification round should use computed closure rather than hand-built manifests.
+
+One stranded `reserved` row remains on development ledger 5 (USD 1.2743816, 17:15:46Z), created
+when an OOM kill took the engine mid-reviewer-call; not released because sent-or-not is unprovable.
+Ledger unchanged at 59 entries / `0.68366976` USD. `completed_real_audits` remains `0`.
+
+## 2026-09-14T04:49Z — **The product cannot express dependency closure. `dependency_closure` is `Literal["NOT_ESTABLISHED"]` in the manifest model and `const` in all 22 emitting schemas; the plan validator makes every manifest source a paid primary shard; and the protocol prompt already tells the model to use dependency context it is never given. Six provider-free tickets proposed, DEPCLOSURE first.**
+
+Timestamp read from the clock at 04:49:32Z. Evidence is the completed 2026-09-13 ForestRoadVault
+dual-chain development-path run: 125/125 files observed, 317 claims, ledger-5. **68 of 317 claims
+(21%) state in their own text that a dependency was not supplied**; 37 of those were marked
+`SUPPORTED` by both reviewers, who were blind to the same code. The run's highest-severity claim
+carries its own falsification condition in an unreviewed library. This is an operator observation
+about product capability, not a request for a provider call, and it authorizes nothing.
+
+Full write-up with verified file:line citations and acceptance criteria:
+`docs/remediation/v3/dependency_closure_gap_2026_09_14.md`. Tickets proposed, in priority order:
+`V3-DEPCLOSURE-001` (closure over the **existing** `solidity/graphs.py` call graph — which the
+development path never imports — earned by computation with two honest levels, `IMPORT_CLOSED` and
+`CALL_CLOSED`; textual import closure stops at interfaces and would produce a false ESTABLISHED),
+`V3-CONTEXTSRC-001` (context sources not sharded, plus corpus-level coverage so no file is
+silently never-primary), `V3-AUTOPARTITION-001` (tree in, closed manifests out, resumable; the
+1800 s cap becomes a per-manifest bound the partitioner respects), `V3-DEVRETRY-001` (the CLI
+hardcodes `maximum_attempts: 1` though the policy model allows 32; the run needed eight
+operator-driven passes), `V3-LEGDIVERSITY-001` (no two legs on one provider; `lineage_independence`
+earned, not `Literal`), `V3-REFUSALDIAG-001` (blanket `except Exception` at
+`development_cli.py:902`/`:1081`), `V3-RUNIDREUSE-001`, `V3-COSTUNKNOWN-001` (HTTP 429 with
+`generation_id: None` carried at full reservation — 32 rows, $43.25 of $59.72 unconfirmed; settling
+at zero rests on provider billing behaviour Jos must confirm). The document records the audit of
+its own first draft — one material error, four omissions, one overclaim.
+
+Selection is Jos's, in Codex's own session; this entry does not preempt `V3-MUTATION-001`.
+
+The development-path run above spent on the separate development ledger and is not a qualified
+audit under the product's definition. Ledger now at 59 entries / `0.68366976` USD.
+`completed_real_audits` remains `0`.
+
+## 2026-09-11T08:59Z — **V3-COSTLEGACY-001 asked for the two rows' full metadata and refused to infer them. Here they are verbatim. The shortened names in every prior entry omit a `:`-delimited 64-hex suffix that is part of the identity, and the ledger holds five further same-prefix siblings that those short names do not distinguish.**
+
+Timestamp read from the clock at 08:59:25Z. The ticket's selection note of 2026-09-11T08:35:38Z requests
+full row metadata before exact binding and adoption, and states that shortened IDs must not be inferred and
+the private ledger must not be read by the author. This entry supplies the rows from the cumulative operator
+ledger `~/.mmaudit/private/openrouter-cost-ledger.json` (`schema_version` 1, `cap_usd` 250). Read only:
+no row was created, settled, rewritten or released, no policy was changed, and no provider was contacted.
+
+Row 1 of 2, complete field set as stored:
+
+- `request_id`: `authrunner.smoke.r17.judge.replay:362788774fcd9547f0ebc92413f5aea00d2b91910ccbda5224589c0859b29829`
+- `reservation_id`: `88a38af618eb417391099013418c741c`
+- `status`: `uncertain_accounted`
+- `reserved_usd`: `0.18105`
+- `accounted_cost_usd`: `0.18105`
+- `actual_cost_usd`: `null`
+- `release_reason`: `null`
+- `created_at`: `2026-08-24T02:12:47.028075+00:00`
+- `updated_at`: `2026-08-24T02:12:47.048063+00:00`
+
+Row 2 of 2, complete field set as stored:
+
+- `request_id`: `authrunner.smoke.r2.candidate.primary:721f058726cf9509c07cb2aae662fb6ac23b5c30a363db40229faf8895034497`
+- `reservation_id`: `bec758dc72d74ebebdd32bcd4c1efbd1`
+- `status`: `uncertain_accounted`
+- `reserved_usd`: `0.05225616`
+- `accounted_cost_usd`: `0.05225616`
+- `actual_cost_usd`: `null`
+- `release_reason`: `null`
+- `created_at`: `2026-08-23T06:33:01.887394+00:00`
+- `updated_at`: `2026-08-23T06:33:01.892191+00:00`
+
+Four facts that bear on the exact binding. First, these are the only two rows in the ledger whose `status`
+is `uncertain_accounted`; the other 56 are `reconciled`. Second, each row carries exactly these nine fields
+and no others, which is the direct evidence for the earlier claim that no generation identity exists on
+either row — it is a property of the schema, not a failure to find one. Third, `actual_cost_usd` is null on
+both, which is the stored reason each is uncertain rather than settled, and `reserved_usd` equals
+`accounted_cost_usd` on both. Fourth, the `r17` prefix has four sibling rows in the ledger
+(`candidate.primary`, `candidate.replay`, `judge.primary`, `judge.replay`) and `r2` has one further sibling;
+the suffixes differ, so a prefix-only or shortened match would admit rows this authorization does not cover.
+
+Operator-side read only, supplied because the ticket asked for it. This entry authorizes nothing and does
+not itself establish that any exception may be activated: the policy extension, the exact binding and the
+plan transition remain decisions confirmed directly to the author in the author's own session.
+Ledger unchanged at 58 entries / `0.68229168` USD. `completed_real_audits` remains `0`.
+
 ## 2026-09-10T15:37Z — **Calendar client and Bitcoin verification path staged, plus seven REAL upstream `.ots` proof fixtures which are the most useful part. One finding that changes the ask: there is no Bitcoin header-verification code in OpenTimestamps to stage. Verification is three Bitcoin Core RPC calls plus a merkle-root comparison, so the trust anchor IS whichever node answers. The local-node prerequisite is not a convenience — it is the independence.**
 
 Timestamp read from the clock at 15:37:32Z. Public source reads only. No credential, no submission,

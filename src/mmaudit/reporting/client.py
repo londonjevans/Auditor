@@ -42,6 +42,7 @@ from mmaudit.reporting.markdown import (
     _capability_report_title,
     _inline,
     _neutralize_untrusted_controls,
+    _provisional_finding_lines,
     _text,
 )
 from mmaudit.reporting.status import effective_report_status
@@ -966,6 +967,7 @@ def _render_client_markdown_from_artifact(
         "",
         risk_narrative,
         "",
+        *_provisional_finding_lines(report, concise=True),
     ]
     if (
         report.maximum_assurance is not None

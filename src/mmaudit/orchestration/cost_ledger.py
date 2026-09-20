@@ -22,6 +22,8 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Final
 
+from mmaudit.models.legacy_cost_allowance import LegacyUncertainCostAllowance
+
 _LEGACY_SCHEMA_VERSION: Final = 1
 _PORTFOLIO_SCHEMA_VERSION: Final = 2
 _REQUEST_ID_PATTERN: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
@@ -73,7 +75,11 @@ class CostLedgerError(RuntimeError):
 
 
 class CostBudgetExceededError(CostLedgerError):
-    """Raised before a reservation that could exceed the configured cap."""
+    """Raised when a reservation or dispatch would violate the spending stop."""
+
+
+class CostPriorBillingUnknownError(CostBudgetExceededError):
+    """An actual-billing policy refuses work while prior billing is unknown."""
 
 
 class CostLedgerConfigurationError(CostLedgerError):
@@ -272,6 +278,51 @@ class CostLedgerSnapshot:
     held_portfolio_usd: Decimal = Decimal(0)
 
 
+def _validated_legacy_allowance(
+    allowance: LegacyUncertainCostAllowance | None, *, require_known_prior_costs: bool
+) -> LegacyUncertainCostAllowance | None:
+    """Reject unbound or mixed allowances before inspecting or changing ledger state."""
+
+    if allowance is None:
+        return None
+    if not require_known_prior_costs or type(allowance) is not LegacyUncertainCostAllowance:
+        raise CostLedgerConfigurationError("legacy allowance requires exact known-cost enforcement")
+    try:
+        return LegacyUncertainCostAllowance.model_validate_json(allowance.model_dump_json())
+    except (TypeError, ValueError):
+        raise CostLedgerConfigurationError("legacy allowance binding is invalid") from None
+
+
+def unknown_prior_billing_entries(
+    entries: tuple[CostEntry, ...],
+    *,
+    legacy_uncertain_allowance: LegacyUncertainCostAllowance | None = None,
+) -> tuple[CostEntry, ...]:
+    """Exclude only exact approved historical rows from the stop, never from accounting."""
+
+    allowance = _validated_legacy_allowance(
+        legacy_uncertain_allowance, require_known_prior_costs=True
+    )
+    allowed = {item.request_id: item for item in allowance.entries} if allowance is not None else {}
+    blocking = []
+    for entry in entries:
+        if entry.status is not CostEntryStatus.UNCERTAIN_ACCOUNTED:
+            continue
+        expected = allowed.get(entry.request_id)
+        if not (
+            expected is not None
+            and entry.reservation_id == expected.reservation_id
+            and entry.created_at.isoformat() == expected.created_at
+            and entry.updated_at.isoformat() == expected.updated_at
+            and entry.reserved_usd == Decimal(expected.reserved_usd_exact)
+            and entry.accounted_cost_usd == Decimal(expected.accounted_cost_usd_exact)
+            and entry.actual_cost_usd is None
+            and entry.release_reason is None
+        ):
+            blocking.append(entry)
+    return tuple(blocking)
+
+
 class AtomicCostLedger:
     """Durably reserve and reconcile provider costs under an exact USD cap.
 
@@ -440,7 +491,9 @@ class AtomicCostLedger:
         maximum_cost_usd: Decimal,
         *,
         require_settled_prior_costs: bool = False,
+        require_known_prior_costs: bool = False,
         allowed_uncertain_reservations: tuple[CostReservation, ...] = (),
+        legacy_uncertain_allowance: LegacyUncertainCostAllowance | None = None,
     ) -> CostReservation:
         """Atomically reserve the supplied amount; optionally require settled history.
 
@@ -448,10 +501,21 @@ class AtomicCostLedger:
         under the same lock as reservation. Exact listed unknown entries remain
         unchanged and fully accounted; allowances never settle or release them.
         This does not turn an estimate into a provider-enforced maximum.
+        The distinct known-cost mode allows unsent reservations but no committed
+        uncertain liability, except exact operator-approved historical rows. Such
+        rows retain their uncertain status and full charge; no future bill is waived.
         """
 
         if type(require_settled_prior_costs) is not bool:
             raise CostLedgerConfigurationError("settled-cost requirement must be boolean")
+        if type(require_known_prior_costs) is not bool or (
+            require_known_prior_costs
+            and (require_settled_prior_costs or allowed_uncertain_reservations)
+        ):
+            raise CostLedgerConfigurationError("known-cost requirement must be boolean and unmixed")
+        legacy_uncertain_allowance = _validated_legacy_allowance(
+            legacy_uncertain_allowance, require_known_prior_costs=require_known_prior_costs
+        )
         if (
             type(allowed_uncertain_reservations) is not tuple
             or len(allowed_uncertain_reservations) > MAX_UNCERTAIN_RESERVATION_ALLOWANCES
@@ -494,6 +558,12 @@ class AtomicCostLedger:
                     raise CostReservationStateError(
                         "uncertain reservation allowance is stale or not fully accounted"
                     )
+            if require_known_prior_costs and unknown_prior_billing_entries(
+                snapshot.entries, legacy_uncertain_allowance=legacy_uncertain_allowance
+            ):
+                raise CostPriorBillingUnknownError(
+                    "UNKNOWN_PRIOR_BILLING: unknown prior billing blocks new reservations"
+                )
             if require_settled_prior_costs and (
                 snapshot.held_portfolio_usd > 0
                 or any(
@@ -628,9 +698,17 @@ class AtomicCostLedger:
         portfolio: CostPortfolioReservation,
         request_id: str,
         exact_maximum_cost_usd: Decimal,
+        *,
+        require_known_prior_costs: bool = False,
+        legacy_uncertain_allowance: LegacyUncertainCostAllowance | None = None,
     ) -> CostReservation:
         """Atomically shrink one held slot into an exact ordinary reservation."""
 
+        if type(require_known_prior_costs) is not bool:
+            raise CostLedgerConfigurationError("known-cost requirement must be boolean")
+        legacy_uncertain_allowance = _validated_legacy_allowance(
+            legacy_uncertain_allowance, require_known_prior_costs=require_known_prior_costs
+        )
         _validate_request_id(request_id)
         exact_maximum = _validate_money(
             exact_maximum_cost_usd,
@@ -664,6 +742,12 @@ class AtomicCostLedger:
             if _snapshot(self.cap_usd, entries, portfolio_holds).has_reservation_overrun:
                 raise CostBudgetExceededError(
                     "a prior provider cost exceeded its reservation; further calls are blocked"
+                )
+            if require_known_prior_costs and unknown_prior_billing_entries(
+                tuple(entries.values()), legacy_uncertain_allowance=legacy_uncertain_allowance
+            ):
+                raise CostPriorBillingUnknownError(
+                    "UNKNOWN_PRIOR_BILLING: unknown prior billing blocks portfolio claims"
                 )
 
             now = _timestamp()
@@ -753,6 +837,64 @@ class AtomicCostLedger:
             )
             assert portfolio_holds is not None
             portfolio_holds[hold.plan_sha256] = updated
+            self._write_state(_serialize_state(self.cap_usd, entries, portfolio_holds))
+            return updated
+
+    def commit_for_transport(
+        self,
+        reservation: CostReservation,
+        *,
+        require_known_prior_costs: bool = False,
+        legacy_uncertain_allowance: LegacyUncertainCostAllowance | None = None,
+    ) -> CostEntry:
+        """Check the shared spending stop and account one attempt under the same lock.
+
+        Only a still-reserved attempt may cross this one-shot transition. The full
+        reservation becomes uncertain liability before transport, not actual billing
+        or permission to send. A previous overrun blocks even an already-held attempt;
+        reconciliation remains separately available to record every eventual bill.
+        """
+
+        if type(reservation) is not CostReservation:
+            raise CostReservationStateError("transport reservation handle type is invalid")
+        if type(require_known_prior_costs) is not bool:
+            raise CostLedgerConfigurationError("known-cost requirement must be boolean")
+        legacy_uncertain_allowance = _validated_legacy_allowance(
+            legacy_uncertain_allowance, require_known_prior_costs=require_known_prior_costs
+        )
+        with self._locked():
+            state = self._required_state()
+            _cap, entries, portfolio_holds = _validate_state(state)
+            current = _matching_entry(entries, reservation)
+            if current.status is not CostEntryStatus.RESERVED:
+                raise CostReservationStateError(
+                    f"request {reservation.request_id} is not reserved for transport"
+                )
+            snapshot = _snapshot(self.cap_usd, entries, portfolio_holds)
+            if require_known_prior_costs and unknown_prior_billing_entries(
+                snapshot.entries, legacy_uncertain_allowance=legacy_uncertain_allowance
+            ):
+                raise CostPriorBillingUnknownError(
+                    "UNKNOWN_PRIOR_BILLING: unknown prior billing blocks further transport"
+                )
+            if snapshot.has_reservation_overrun:
+                raise CostBudgetExceededError(
+                    "a prior provider cost exceeded its reservation; further calls are blocked"
+                )
+            if snapshot.over_cap or snapshot.spent_usd >= snapshot.cap_usd:
+                raise CostBudgetExceededError("cost-ledger ceiling blocks further transport")
+            updated = CostEntry(
+                request_id=current.request_id,
+                reservation_id=current.reservation_id,
+                status=CostEntryStatus.UNCERTAIN_ACCOUNTED,
+                reserved_usd=current.reserved_usd,
+                actual_cost_usd=None,
+                accounted_cost_usd=current.reserved_usd,
+                release_reason=None,
+                created_at=current.created_at,
+                updated_at=_timestamp(),
+            )
+            entries[current.request_id] = updated
             self._write_state(_serialize_state(self.cap_usd, entries, portfolio_holds))
             return updated
 
@@ -878,13 +1020,34 @@ class AtomicCostLedger:
             self._write_state(_serialize_state(self.cap_usd, entries, portfolio_holds))
             return updated
 
-    def active_reservation(self, request_id: str) -> CostReservation | None:
+    def active_reservation(
+        self,
+        request_id: str,
+        *,
+        require_known_prior_costs: bool = False,
+        legacy_uncertain_allowance: LegacyUncertainCostAllowance | None = None,
+    ) -> CostReservation | None:
         """Recover a durable active reservation after process interruption."""
 
+        if type(require_known_prior_costs) is not bool:
+            raise CostLedgerConfigurationError("known-cost requirement must be boolean")
+        legacy_uncertain_allowance = _validated_legacy_allowance(
+            legacy_uncertain_allowance, require_known_prior_costs=require_known_prior_costs
+        )
         _validate_request_id(request_id)
         with self._locked():
             state = self._required_state()
             _cap, entries, _portfolio_holds = _validate_state(state)
+            if require_known_prior_costs:
+                snapshot = _snapshot(self.cap_usd, entries, _portfolio_holds)
+                if snapshot.over_cap or snapshot.has_reservation_overrun:
+                    raise CostBudgetExceededError("excessive prior billing blocks adoption")
+                if unknown_prior_billing_entries(
+                    tuple(entries.values()), legacy_uncertain_allowance=legacy_uncertain_allowance
+                ):
+                    raise CostPriorBillingUnknownError(
+                        "UNKNOWN_PRIOR_BILLING: unknown prior billing blocks adoption"
+                    )
             entry = entries.get(request_id)
             if entry is None or entry.status is not CostEntryStatus.RESERVED:
                 return None

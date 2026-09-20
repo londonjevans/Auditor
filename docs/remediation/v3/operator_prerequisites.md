@@ -4,11 +4,126 @@ This document records external prerequisites without credentials or private sour
 
 ## Baseline
 
-No external prerequisite is required for `V3-BASELINE-001`.
+V3-BASELINE-001 is now BLOCKED_TECHNICAL, not COMPLETE or PARTIAL.
+The original catalog acceptance still fails at 234/768 stages under its unchanged
+1800-second bound after three measured repair hypotheses. The unchanged native
+replay assertions also fail with the production compiler/startup fixes: Echidna
+2.3.3 emits no usable property identity, and Medusa 1.5.1 provides no validated
+property-to-sequence join. The final-source full repository suite is still
+unverified. Scoped passes do not waive any of these requirements.
 
-## Current operator-result follow-up — reported label 2026-09-09T11:40Z
+Apply the owner's AGENTS.md stopping/rotation rule: next is V3-INGEST-001
+(QUEUED, tier 1). This rotates engineering work, not checkpoint acceptance.
+The relay's proposal to commit with catalog capacity unresolved has NOT been
+accepted; the direct owner decision remains pending. No commit/push or provider
+command is issued, no test is excluded, and no limit or authority gate changes.
+Native integrations remain INCONCLUSIVE. There are 45 unfinished tickets.
 
-Tested native source 60fcb1acd7c6d87d5e3ede3b4c1dd95800d60d93 is published and independently remote-verified; V3-CALIBRATE-001 remains PARTIAL. All 997 affected tests and overlapping 422 final records pass; receipt 1f5b143 also passes 229 overlapping checks. Operator-only commit 6b64df53b349a75ebd0f7ad324a2d043463d13b1 concurrently appends 71 report lines, now c10b8e833e453ee40f72de780cebeb1a02a06001d43927f393a1b2462d69d180 / 2026-09-09T17:45Z, without changing any tested source or prior report history. Reconcile this nonauthorizing sequencing observation before final publication. It reports no new run/spend and asks about AUTHRUNNER route admission; neither a new provider survey nor a change to the frozen cap contract is inferred. Development evidence is not live AUTHRUNNER custody; after-the-fact reconciliation is not pre-request price enforcement. Next local engineering still requires a campaign-owned custody/accounting handoff, without pretending it supplies missing admission, independent roots, external seals or full qualification. All original criteria remain; 42 unfinished, nine false authorities, real audits zero, paid work paused and private inputs uninspected. Both workflows remain manual-only; no provider call, admission-policy change or deployment.
+The following chronology records prior baseline steps, not the current selection.
+
+For the reopened September19 baseline, local Python3.13 verification is available.
+The operator has now provisioned solc0.8.20 and Codex has recorded all20 affected
+offline rechecks, including nonzero fixture outcomes. The isolated Python 3.12
+dependencies are now provisioned, with the operator's explicit editables==0.5
+addition recorded. Final Foundry repair checks pass374 affected-file cases,
+262 inventory cases and1 real local replay on each interpreter; static/schema
+checks pass. The original full suite is non-green, and final-source full-suite
+acceptance remains outstanding. Completed dependency receipts and limits are in
+`docs/remediation/v3/checkpoint_baseline_2026_09_19.md`. No paid/model command or
+commit/push command is current.
+
+## Current operator decision and retained-metadata review — 2026-09-19
+
+Owner resumed the goal directly on 2026-09-19. V3-BASELINE-001 is IN_PROGRESS:
+repair freshly reproduced default collection and current-governance failures, then
+run the full offline suite and prepare the checkpoint for operator-only commit.
+The normal pytest path now collects without duplicate-basename errors; current
+focused repairs pass, but full-suite final-source acceptance is still pending. All unrelated dirty work is preserved.
+The unchanged full catalog fails its original1800-second phase after198 mock
+responses/197 checkpointed stages. Formal supervision passes385 affected-file
+checks on each interpreter, but native Medusa/Echidna checks still fail at tool
+discovery/compilation. These blockers do not authorize a provider or commit command.
+The latest source-binding optimization passes439 affected-file checks on each
+interpreter and preserves all live original-tree/origin checks. Its2.33x paired
+binding microbenchmark is not a full catalog or final-source full-suite pass.
+Complete inventory264 checks pass each; the unchanged three-stage/resume
+diagnostic passes in183.85s versus201.66s. Full catalog then failed its original
+1800s first phase:234 mock responses/checkpointed stages, neither385 nor768.
+All234 synthetic rows reconcile; provider calls0. No green checkpoint or current
+operator execution command follows from the diagnostic improvement.
+Captured-tree replay now also uses the tested batch reader.775 distinct affected/
+inventory tests pass on each interpreter. Identical48-stage diagnostic invocation
+improves517.285s to481.664s with the same1102918 fresh reads. It still covers only
+16 primaries; the original full234-stage timeout remains. Native compilation and
+final-source full-suite acceptance remain open; no full-capacity pass is inferred.
+
+The pinned Foundry compiler handoff preserves exact declared Forge/Solc pins,
+bounded private staging, source/settings, offline/FFI-disabled execution and
+pre-dispatch revalidation. Its previous source boundary passed 1059 supporting
+identities per interpreter but only three of four native compilation cases.
+Those failures remain recorded; they are not current-source full-suite evidence.
+
+The Echidna version preflight failure is now reproduced as a typed private-memory
+limit violation, not an unsupported version. Fixed version-only GHC startup
+(`-N1 -M512m`) restricts workers/heap while retaining the independent 1 GiB monitor.
+Compiler probes and campaigns do not inherit that setting. The unchanged native
+compilation selection now passes all four cases on Python 3.12 and 3.13
+(17.26s / 17.04s). Complete affected checks pass 449 each, including 16 new
+version-scope controls; whole inventory checks pass 265 each. These 718 distinct
+identities match fresh collection on both interpreters, digest 1bba6bf9.
+Ruff checks/format (1248 files), fresh strict mypy (353 sources) and both schema
+checks pass. Only two existing inventory fingerprints changed; no input,
+classification, gate requirement or authority was removed or relaxed.
+
+This is compilation evidence, not native campaign/replay qualification or
+transitive tool attestation. The configured compiler handoff remains Foundry-only;
+unconfigured direct adapters carry no compiler provenance. Native structured
+output/replay, original catalog capacity and final-source full-suite acceptance
+remain open. Baseline IN_PROGRESS; no green checkpoint or tier 1 completion.
+After the checkpoint, follow the owner's priority ladder: tier 1 ingestion first,
+not the historical AUTOPARTITION-only ordering. The prior 2148-case result and
+unproved full256/768/385 acceptance remain historical in the September-15 handover.
+44 unfinished tickets; nine false authorities; zero completed real audits; CI stays manual-only.
+
+The owner authorizes Codex-run offline pytest, Ruff, mypy, governance/schema checks,
+and fixture Forge verification. Only the operator executes provider/credentialed
+commands, anything under ~/.mmaudit/private, pinned-fork reads, commits or pushes.
+No operator execution command is issued while the checkpoint is not green.
+The directly authorized local-seal objective addendum is recorded as pending
+hash-bound implementation; this baseline does not silently rewrite the objective.
+
+The latest engine observations are adopted as follow-ups, not completion evidence:
+tier 1 must handle realistic ingestion and preserve per-shard coverage; alphabetical
+starvation belongs to AUTOPARTITION; 429 recovery/unknown bills to DEVRETRY and
+COSTUNKNOWN; cross-run claim identity to STABILITY; scratch-text claims to a DEVDECODE
+follow-up; missing reviewer context to CONTEXTSRC/LEGDIVERSITY. The owner-adjudicated
+zero of seven package defects is a quality baseline for tiers 3/4, not a pass.
+
+Latest operator report fa01dc4796dd88482474335be690d42e79d75a497ad01f6403dfb08318f076e0 / 499777 bytes / 8054 lines, labelled 2026-09-19T15:40Z, reports the three catalog timeouts and proposes deferring capacity to tier2, preparing a checkpoint with known limitations and moving to ingestion. This is explicitly raised for owner decision, not authorized; a direct nonblocking decision question is pending. Codex independently observed234 mock responses/checkpointed stages before the original1800s deadline, but final-source full-suite acceptance remains outstanding and native engine failures are retained. Reported attribution and unavailability are not test passes. Ledger-6 remains operator-reported, NONAUTHORIZING and not independently authenticated: 376 entries / USD 80.60224894, zero completed real audits. Private ledgers remain unread; no billing, authority, queue-status or commit decision is changed.
+
+The native runner-consumption scope is a library integration boundary, not a new CLI or paid
+command. It permits bounded same-process consumption before mandatory revocation and cleanup;
+it does not carry verification across later shared-ledger changes, admit synthetic custody,
+change the current routes/cost policy, or authorize calibration, qualification or release.
+
+`UNKNOWN_PRIOR_BILLING` means the active cost policy refuses unknown historical bills, not that
+USD 250 has been exhausted. Smoke launch preflight checks all three roles before secrets or
+execution; metadata-only inspection is not launch readiness or paid authority. Every dispatch
+still requires an atomic ledger recheck. Refusals preserve all entries and liabilities; no
+estimate-as-actual settlement, carry allowance or replacement ledger is selected. The 02:38Z
+operator correction withdraws the preceding regression claim and grants no policy relaxation.
+
+Token-plan refusal diagnostics emit at most one constant-only `TOKEN_PLAN_ROUTING:<condition>`
+per usage record. They distinguish evidence projection/binding, required observed reasoning,
+token bounds, accounted-component joins and selected endpoint membership without exposing values.
+`PLAN_OR_RESERVATION_PROJECTION` intentionally groups the strict parser stage; no raw exception
+or artifact is printed. `ACTIVE_REASONING_NOT_OBSERVED` is a failed evidence requirement, not proof
+that the provider did no reasoning. `NONE` does not satisfy missing receipt custody. The historical
+index-23 generic code cannot be upgraded to an exact sub-branch after the fact. Acceptance and all
+qualification/lineage/privacy/seal/release gates remain unchanged; no automatic or paid retry is
+authorized. See docs/models/model_selection.md for the source-only diagnostic boundary.
+
+All later dated and ticket-completion accounts in this guide describe their recorded boundaries. Their then-current v1.7 plan, pending commands and counts are historical; the current bootstrap above and current_engineering_state are authoritative for engineering status, never execution permission.
 
 V3-RESUMESCORE-001 is locally COMPLETE and preserved sourcec6fd8a0bdac687148ed66971c75219f71ae83e36 plus reconciliation419c4a96f287c26c7cbc98ceca39d520b9bdcb84 are non-force pushed to origin/agent/v3-wip-checkpoint and independently remote-SHA verified. The source27path manifestc355ce3e38396c18a3345e5d2915b54ac060e47529084a2f90414f8115a3bb91 contains the26tested files unchanged and74new operator-report lines; the7record reconciliation matches manifestb27fc106ff756d14f666ec28ced633324de89ce3eeaa67d64bd31632c99c8704. All4081distinct acceptance identities, fresh reconciled205checks/16.13s, Ruff849/mypy282/canonical/governance,151previous schemas and23legacy hashes pass. Automatic and provider-free offline cumulative scoring retain original labels/first-attempt metrics, full scope and every liability. Report68b6f498/07:24Z reports successful offline scoring but remains nonauthorizing; private artifacts are uninspected, the coordinate tally is not a product score, and classification/stability requests remain separate. NextDEVTRIAL,42unfinished,nine authorities false,real audits0; CI remains manual-only. This documentation-only receipt records the direct requested publication, not a new capability, provider call, policy rewrite, release or deployment.
 

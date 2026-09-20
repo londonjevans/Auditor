@@ -1856,12 +1856,14 @@ def _promoted_bridge_truncation(
     parent_model_id: str,
     include_scheduler_test_refresh_pricing: bool,
     transform: Callable[[UsageRecord], UsageRecord],
+    retained_count: int = 0,
+    findings: tuple[Any, ...] = (),
 ) -> tuple[
     UsageRecord,
     CandidateReviewTruncatedEnvelopeEvidence,
     CandidateReviewTruncationProjection,
 ]:
-    """Turn one valid synthetic child attempt into exact zero-retained REAL custody."""
+    """Turn one synthetic child into exact truncated custody, optionally retaining frames."""
 
     base, _normalization, _batch, _requests, _artifact = _promoted_child_success_custody(
         child=child,
@@ -1871,6 +1873,7 @@ def _promoted_bridge_truncation(
         execution_evidence=ExecutionEvidenceKind.REAL,
         request_role=parent_role,
         exact_model_id=parent_model_id,
+        findings=findings,
     )
     if include_scheduler_test_refresh_pricing:
         base = _bind_promoted_child_to_parent_invariant(
@@ -1891,7 +1894,9 @@ def _promoted_bridge_truncation(
 
     records_by_id = {record.surface_id: record for record in records}
     bridge_records = tuple(records_by_id[surface_id] for surface_id in child.surface_ids)
-    projection = _promoted_truncation_projection(bridge_records, retained_count=0)
+    projection = _promoted_truncation_projection(
+        bridge_records, retained_count=retained_count, findings=findings
+    )
     assert base.openrouter_generation_id is not None
     assert base.returned_model is not None
     assert base.actual_model is not None
@@ -1987,6 +1992,7 @@ def _build_promoted_parent_surface_fixture(
     recursive: bool = False,
     direct_parent_retained_count: int = 1,
     recursive_parent_retained_count: int = 0,
+    recursive_bridge_retained_count: int = 0,
 ) -> _PromotedParentSurfaceFixture | _PromotedRecursiveParentSurfaceFixture:
     """Issue one real journal-owned retained-parent surface capability for consumers."""
 
@@ -2314,6 +2320,7 @@ def _build_promoted_parent_surface_fixture(
                 parent_model_id=parent_model_id,
                 include_scheduler_test_refresh_pricing=(include_scheduler_test_refresh_pricing),
                 transform=transform,
+                retained_count=recursive_bridge_retained_count,
             )
             bridge_result = journal.record_truncation_recovery_child_truncated(
                 child.child_task_id,
@@ -5473,6 +5480,7 @@ def _basic_promoted_recursive_surface_fixture(
     records: tuple[ModelSurfaceReviewRecord, ...],
     context: ContextPackage,
     parent_retained_count: int = 0,
+    bridge_retained_count: int = 0,
     usage_transform: Callable[[UsageRecord], UsageRecord] | None = None,
 ) -> _PromotedRecursiveParentSurfaceFixture:
     inventory = _scheduler_inventory(one_shard=True)
@@ -5492,6 +5500,7 @@ def _basic_promoted_recursive_surface_fixture(
         parent_model_id="synthetic/auditor-v1",
         parent_root_lineage="sha256:" + hashlib.sha256(b"synthetic/auditor-v1").hexdigest(),
         recursive_parent_retained_count=parent_retained_count,
+        recursive_bridge_retained_count=bridge_retained_count,
         usage_transform=usage_transform,
     )
 

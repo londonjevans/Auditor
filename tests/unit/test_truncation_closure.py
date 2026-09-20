@@ -119,9 +119,9 @@ def _source(index: int) -> tuple[str, str]:
     return path, content
 
 
-def _requests() -> tuple[ModelSurfaceReviewRequest, ...]:
+def _requests(count: int = 4) -> tuple[ModelSurfaceReviewRequest, ...]:
     values = []
-    for index in range(4):
+    for index in range(count):
         path, content = _source(index)
         values.append(
             build_source_file_review_request(
@@ -138,13 +138,14 @@ def _record(
     request: ModelSurfaceReviewRequest,
     *,
     status: ModelSurfaceReviewStatus = ModelSurfaceReviewStatus.REVIEWED_NO_ISSUE,
+    review_role: str = _ROLE,
 ) -> ModelSurfaceReviewRecord:
     citation = ModelSurfaceReviewCitation(location=request.allowed_locations[0])
     return ModelSurfaceReviewRecord(
         surface_id=request.surface_id,
         contract=request.contract,
         function_or_state_surface=request.function_or_state_surface,
-        review_role=_ROLE,
+        review_role=review_role,
         status=status,
         rationale="The exact file was reviewed for security-relevant state behavior.",
         citation=citation,
@@ -169,10 +170,12 @@ def _record(
     )
 
 
-def _context(requests: tuple[ModelSurfaceReviewRequest, ...]) -> ContextPackage:
+def _context(
+    requests: tuple[ModelSurfaceReviewRequest, ...], *, source_count: int = 4, role: str = _ROLE
+) -> ContextPackage:
     files: list[RepositoryFile] = []
     excerpts: list[ContextExcerpt] = []
-    for index in range(4):
+    for index in range(source_count):
         path, content = _source(index)
         digest = hashlib.sha256(content.encode()).hexdigest()
         lines = len(content.splitlines())
@@ -195,14 +198,14 @@ def _context(requests: tuple[ModelSurfaceReviewRequest, ...]) -> ContextPackage:
             )
         )
     package = ContextPackage(
-        role=_ROLE,
+        role=role,
         byte_budget=100_000,
         bytes_used=0,
         configured_maximum_source_tokens_per_request=100_000,
         effective_source_byte_ceiling=100_000,
         repository_map=RepositoryMap(
             root_name="synthetic",
-            languages={"Solidity": 4},
+            languages={"Solidity": source_count},
             frameworks=[],
             manifests=[],
             entry_points=[],
@@ -233,14 +236,16 @@ def _context(requests: tuple[ModelSurfaceReviewRequest, ...]) -> ContextPackage:
     return package.model_copy(update={"bytes_used": len(render_context(package).encode("utf-8"))})
 
 
-def _context_evidence(context: ContextPackage, request_id: str) -> ContextRequestEvidence:
+def _context_evidence(
+    context: ContextPackage, request_id: str, *, request_role: str = _ROLE
+) -> ContextRequestEvidence:
     rendered = render_context(context)
     requested_surface_manifest_sha256, source_location_proof_sha256s = (
         model_surface_context_source_custody(context)
     )
     return ContextRequestEvidence.build(
         request_id=request_id,
-        request_role=_ROLE,
+        request_role=request_role,
         context_role=context.role,
         byte_budget=context.byte_budget,
         declared_bytes_used=context.bytes_used,

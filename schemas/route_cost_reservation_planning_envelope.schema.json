@@ -1,0 +1,661 @@
+{
+  "$defs": {
+    "EndpointRouteTokenCapacity": {
+      "additionalProperties": false,
+      "description": "Frozen token capacities for one exact model and provider endpoint route.",
+      "properties": {
+        "context_tokens": {
+          "exclusiveMinimum": 0,
+          "maximum": 2147483647,
+          "title": "Context Tokens",
+          "type": "integer"
+        },
+        "endpoint_snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Endpoint Snapshot Sha256",
+          "type": "string"
+        },
+        "exact_model_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}/[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$",
+          "title": "Exact Model Id",
+          "type": "string"
+        },
+        "max_completion_tokens": {
+          "exclusiveMinimum": 0,
+          "maximum": 2147483647,
+          "title": "Max Completion Tokens",
+          "type": "integer"
+        },
+        "max_completion_tokens_source": {
+          "enum": [
+            "metadata",
+            "context_limit"
+          ],
+          "title": "Max Completion Tokens Source",
+          "type": "string"
+        },
+        "max_prompt_tokens": {
+          "exclusiveMinimum": 0,
+          "maximum": 2147483647,
+          "title": "Max Prompt Tokens",
+          "type": "integer"
+        },
+        "max_prompt_tokens_source": {
+          "enum": [
+            "metadata",
+            "context_limit"
+          ],
+          "title": "Max Prompt Tokens Source",
+          "type": "string"
+        },
+        "provider_endpoint": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$",
+          "title": "Provider Endpoint",
+          "type": "string"
+        },
+        "route_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Route Sha256",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "exact_model_id",
+        "provider_endpoint",
+        "endpoint_snapshot_sha256",
+        "context_tokens",
+        "max_prompt_tokens",
+        "max_prompt_tokens_source",
+        "max_completion_tokens",
+        "max_completion_tokens_source",
+        "route_sha256"
+      ],
+      "title": "EndpointRouteTokenCapacity",
+      "type": "object"
+    },
+    "ExactRoutePrice": {
+      "additionalProperties": false,
+      "properties": {
+        "component": {
+          "$ref": "#/$defs/RoutePriceComponent"
+        },
+        "unit_price": {
+          "maxLength": 49,
+          "minLength": 1,
+          "pattern": "^(?:0|[1-9][0-9]{0,11}|(?:0|[1-9][0-9]{0,11})\\.[0-9]{0,35}[1-9])$",
+          "title": "Unit Price",
+          "type": "string"
+        }
+      },
+      "required": [
+        "component",
+        "unit_price"
+      ],
+      "title": "ExactRoutePrice",
+      "type": "object"
+    },
+    "ExactRoutePriceTier": {
+      "additionalProperties": false,
+      "description": "One ordered prompt-threshold tier of exact partial price replacements.",
+      "properties": {
+        "min_prompt_tokens": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Min Prompt Tokens",
+          "type": "integer"
+        },
+        "pricing": {
+          "items": {
+            "$ref": "#/$defs/ExactRoutePrice"
+          },
+          "maxItems": 8,
+          "minItems": 1,
+          "title": "Pricing",
+          "type": "array"
+        }
+      },
+      "required": [
+        "min_prompt_tokens",
+        "pricing"
+      ],
+      "title": "ExactRoutePriceTier",
+      "type": "object"
+    },
+    "ExactRoutePricingSchedule": {
+      "additionalProperties": false,
+      "description": "Exact conditional pricing plus its conservative component-wise maximum.",
+      "properties": {
+        "base_pricing": {
+          "items": {
+            "$ref": "#/$defs/ExactRoutePrice"
+          },
+          "maxItems": 8,
+          "minItems": 2,
+          "title": "Base Pricing",
+          "type": "array"
+        },
+        "conservative_for_sub_threshold_prompts": {
+          "const": true,
+          "default": true,
+          "title": "Conservative For Sub Threshold Prompts",
+          "type": "boolean"
+        },
+        "evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evidence Sha256",
+          "type": "string"
+        },
+        "maximum_pricing": {
+          "items": {
+            "$ref": "#/$defs/ExactRoutePrice"
+          },
+          "maxItems": 8,
+          "minItems": 2,
+          "title": "Maximum Pricing",
+          "type": "array"
+        },
+        "pricing_schedule_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Pricing Schedule Sha256",
+          "type": "string"
+        },
+        "projection_method": {
+          "const": "MMAUDIT_TIERED_MAXIMUM_RATE_V1",
+          "default": "MMAUDIT_TIERED_MAXIMUM_RATE_V1",
+          "title": "Projection Method",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "tiers": {
+          "items": {
+            "$ref": "#/$defs/ExactRoutePriceTier"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Tiers",
+          "type": "array"
+        }
+      },
+      "required": [
+        "base_pricing",
+        "tiers",
+        "maximum_pricing",
+        "pricing_schedule_sha256",
+        "evidence_sha256"
+      ],
+      "title": "ExactRoutePricingSchedule",
+      "type": "object"
+    },
+    "LegacyUncertainCostAllowance": {
+      "additionalProperties": false,
+      "description": "Explicit operator relaxation for two exact rows, with no general carry mechanism.",
+      "properties": {
+        "allowance_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Allowance Sha256",
+          "type": "string"
+        },
+        "entries": {
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "$ref": "#/$defs/LegacyUncertainCostEntry"
+            },
+            {
+              "$ref": "#/$defs/LegacyUncertainCostEntry"
+            }
+          ],
+          "title": "Entries",
+          "type": "array"
+        },
+        "operator_decision_id": {
+          "const": "OP-COSTLEGACY-2026-09-11",
+          "default": "OP-COSTLEGACY-2026-09-11",
+          "title": "Operator Decision Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "entries",
+        "allowance_sha256"
+      ],
+      "title": "LegacyUncertainCostAllowance",
+      "type": "object"
+    },
+    "LegacyUncertainCostEntry": {
+      "additionalProperties": false,
+      "description": "Bind every immutable identity and retained liability field of one approved row.",
+      "properties": {
+        "accounted_cost_usd_exact": {
+          "enum": [
+            "0.18105",
+            "0.05225616"
+          ],
+          "title": "Accounted Cost Usd Exact",
+          "type": "string"
+        },
+        "actual_cost_usd": {
+          "default": null,
+          "title": "Actual Cost Usd",
+          "type": "null"
+        },
+        "created_at": {
+          "maxLength": 32,
+          "minLength": 25,
+          "title": "Created At",
+          "type": "string"
+        },
+        "release_reason": {
+          "default": null,
+          "title": "Release Reason",
+          "type": "null"
+        },
+        "request_id": {
+          "pattern": "^authrunner\\.smoke\\.(?:r17\\.judge\\.replay|r2\\.candidate\\.primary):[0-9a-f]{64}$",
+          "title": "Request Id",
+          "type": "string"
+        },
+        "reservation_id": {
+          "pattern": "^[0-9a-f]{32}$",
+          "title": "Reservation Id",
+          "type": "string"
+        },
+        "reserved_usd_exact": {
+          "enum": [
+            "0.18105",
+            "0.05225616"
+          ],
+          "title": "Reserved Usd Exact",
+          "type": "string"
+        },
+        "status": {
+          "const": "uncertain_accounted",
+          "default": "uncertain_accounted",
+          "title": "Status",
+          "type": "string"
+        },
+        "updated_at": {
+          "maxLength": 32,
+          "minLength": 25,
+          "title": "Updated At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "request_id",
+        "reservation_id",
+        "created_at",
+        "updated_at",
+        "reserved_usd_exact",
+        "accounted_cost_usd_exact"
+      ],
+      "title": "LegacyUncertainCostEntry",
+      "type": "object"
+    },
+    "ProviderMaxPriceComponent": {
+      "enum": [
+        "completion",
+        "image",
+        "prompt",
+        "request"
+      ],
+      "title": "ProviderMaxPriceComponent",
+      "type": "string"
+    },
+    "ProviderPriceCap": {
+      "additionalProperties": false,
+      "properties": {
+        "component": {
+          "$ref": "#/$defs/ProviderMaxPriceComponent"
+        },
+        "value": {
+          "minimum": 0,
+          "title": "Value",
+          "type": "number"
+        }
+      },
+      "required": [
+        "component",
+        "value"
+      ],
+      "title": "ProviderPriceCap",
+      "type": "object"
+    },
+    "ReservationRateBasis": {
+      "enum": [
+        "PROVIDER_CAPPED_RATE",
+        "OPERATOR_RESERVED_UNCAPPABLE_RATE"
+      ],
+      "title": "ReservationRateBasis",
+      "type": "string"
+    },
+    "RouteCostReservationComponent": {
+      "additionalProperties": false,
+      "properties": {
+        "component": {
+          "$ref": "#/$defs/RoutePriceComponent"
+        },
+        "maximum_observed_unit_price_usd_exact": {
+          "maxLength": 49,
+          "pattern": "^(?:0|[1-9][0-9]{0,11})(?:\\.[0-9]{0,35}[1-9])?$",
+          "title": "Maximum Observed Unit Price Usd Exact",
+          "type": "string"
+        },
+        "maximum_units": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Maximum Units",
+          "type": "integer"
+        },
+        "rate_basis": {
+          "$ref": "#/$defs/ReservationRateBasis"
+        },
+        "reserved_unit_price_usd_exact": {
+          "maxLength": 49,
+          "pattern": "^(?:0|[1-9][0-9]{0,11})(?:\\.[0-9]{0,35}[1-9])?$",
+          "title": "Reserved Unit Price Usd Exact",
+          "type": "string"
+        }
+      },
+      "required": [
+        "component",
+        "maximum_observed_unit_price_usd_exact",
+        "reserved_unit_price_usd_exact",
+        "maximum_units",
+        "rate_basis"
+      ],
+      "title": "RouteCostReservationComponent",
+      "type": "object"
+    },
+    "RouteCostReservationPolicy": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "schema_version": {
+                "const": "1.0"
+              }
+            }
+          },
+          "then": {
+            "not": {
+              "required": [
+                "legacy_uncertain_allowance"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "schema_version": {
+                "const": "1.1"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "legacy_uncertain_allowance": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "legacy_uncertain_allowance"
+            ]
+          }
+        }
+      ],
+      "description": "An explicit cost-only relaxation, never inferred from endpoint metadata.",
+      "properties": {
+        "automatic_ceiling_increase": {
+          "const": false,
+          "default": false,
+          "title": "Automatic Ceiling Increase",
+          "type": "boolean"
+        },
+        "enforcement_basis": {
+          "const": "MMAUDIT_OPERATOR_RESERVE_THEN_RECONCILE_V1",
+          "default": "MMAUDIT_OPERATOR_RESERVE_THEN_RECONCILE_V1",
+          "title": "Enforcement Basis",
+          "type": "string"
+        },
+        "ledger_ceiling_usd_exact": {
+          "default": "250",
+          "maxLength": 49,
+          "pattern": "^(?:0|[1-9][0-9]{0,11})(?:\\.[0-9]{0,35}[1-9])?$",
+          "title": "Ledger Ceiling Usd Exact",
+          "type": "string"
+        },
+        "legacy_uncertain_allowance": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LegacyUncertainCostAllowance"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "maximum_request_bytes": {
+          "default": 4000000,
+          "maximum": 64000000,
+          "minimum": 1024,
+          "title": "Maximum Request Bytes",
+          "type": "integer"
+        },
+        "operator_decision_id": {
+          "const": "OP-COST-2026-09-09",
+          "default": "OP-COST-2026-09-09",
+          "title": "Operator Decision Id",
+          "type": "string"
+        },
+        "policy_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Policy Sha256",
+          "type": "string"
+        },
+        "provider_enforced_total_ceiling": {
+          "const": false,
+          "default": false,
+          "title": "Provider Enforced Total Ceiling",
+          "type": "boolean"
+        },
+        "require_actual_billed_cost": {
+          "const": true,
+          "default": true,
+          "title": "Require Actual Billed Cost",
+          "type": "boolean"
+        },
+        "reservation_overrun_blocks_new_work": {
+          "const": true,
+          "default": true,
+          "title": "Reservation Overrun Blocks New Work",
+          "type": "boolean"
+        },
+        "schema_version": {
+          "default": "1.0",
+          "enum": [
+            "1.0",
+            "1.1"
+          ],
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "uncappable_rate_multiplier": {
+          "const": "2",
+          "default": "2",
+          "title": "Uncappable Rate Multiplier",
+          "type": "string"
+        },
+        "unknown_billing_blocks_new_work": {
+          "const": true,
+          "default": true,
+          "title": "Unknown Billing Blocks New Work",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "policy_sha256"
+      ],
+      "title": "RouteCostReservationPolicy",
+      "type": "object"
+    },
+    "RoutePriceComponent": {
+      "enum": [
+        "completion",
+        "image",
+        "input_cache_read",
+        "input_cache_write",
+        "internal_reasoning",
+        "prompt",
+        "request",
+        "web_search"
+      ],
+      "title": "RoutePriceComponent",
+      "type": "string"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/route_cost_reservation_planning_envelope.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Conservative task planning only: no invented request or dispatch authority.\n\nThe exact request must independently fit these capacities and use the same\ncomplete route-pricing basis before claiming a durable portfolio slot.",
+  "properties": {
+    "components": {
+      "items": {
+        "$ref": "#/$defs/RouteCostReservationComponent"
+      },
+      "maxItems": 8,
+      "minItems": 2,
+      "title": "Components",
+      "type": "array"
+    },
+    "exact_pricing": {
+      "items": {
+        "$ref": "#/$defs/ExactRoutePrice"
+      },
+      "maxItems": 8,
+      "minItems": 2,
+      "title": "Exact Pricing",
+      "type": "array"
+    },
+    "maximum_completion_tokens": {
+      "exclusiveMinimum": 0,
+      "maximum": 2147483647,
+      "title": "Maximum Completion Tokens",
+      "type": "integer"
+    },
+    "maximum_prompt_tokens": {
+      "exclusiveMinimum": 0,
+      "maximum": 2147483647,
+      "title": "Maximum Prompt Tokens",
+      "type": "integer"
+    },
+    "maximum_request_bytes": {
+      "exclusiveMinimum": 0,
+      "maximum": 64000000,
+      "title": "Maximum Request Bytes",
+      "type": "integer"
+    },
+    "planning_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Planning Sha256",
+      "type": "string"
+    },
+    "policy": {
+      "$ref": "#/$defs/RouteCostReservationPolicy"
+    },
+    "pricing_schedule": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ExactRoutePricingSchedule"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "provider_capped_subset": {
+      "items": {
+        "$ref": "#/$defs/ProviderPriceCap"
+      },
+      "maxItems": 4,
+      "minItems": 2,
+      "title": "Provider Capped Subset",
+      "type": "array"
+    },
+    "reserved_cost_usd_exact": {
+      "maxLength": 49,
+      "pattern": "^(?:0|[1-9][0-9]{0,11})(?:\\.[0-9]{0,35}[1-9])?$",
+      "title": "Reserved Cost Usd Exact",
+      "type": "string"
+    },
+    "route": {
+      "$ref": "#/$defs/EndpointRouteTokenCapacity"
+    },
+    "route_constraint_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Route Constraint Sha256",
+      "type": "string"
+    },
+    "route_predicate_profile_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Route Predicate Profile Sha256",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "selection_plan_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Selection Plan Sha256",
+      "type": "string"
+    },
+    "status": {
+      "const": "NONAUTHORIZING_COST_PLANNING",
+      "default": "NONAUTHORIZING_COST_PLANNING",
+      "title": "Status",
+      "type": "string"
+    }
+  },
+  "required": [
+    "policy",
+    "selection_plan_sha256",
+    "route_predicate_profile_sha256",
+    "route_constraint_sha256",
+    "route",
+    "maximum_request_bytes",
+    "maximum_prompt_tokens",
+    "maximum_completion_tokens",
+    "exact_pricing",
+    "provider_capped_subset",
+    "components",
+    "reserved_cost_usd_exact",
+    "planning_sha256"
+  ],
+  "title": "RouteCostReservationPlanningEnvelope",
+  "type": "object"
+}

@@ -24,6 +24,7 @@ from mmaudit.benchmark.development_corpus_control_measurement import (
 )
 from mmaudit.models.development_audit import development_ledger_request_id
 from mmaudit.models.development_corpus import (
+    MAX_DEVELOPMENT_CORPUS_FILES,
     MAX_DEVELOPMENT_CORPUS_RESULT_BYTES,
     DevelopmentCorpusAccountingEntry,
     DevelopmentCorpusMaterial,
@@ -100,7 +101,7 @@ def _rebuild(prepared: PreparedDevelopmentCorpusEnsemble) -> PreparedDevelopment
         or type(prepared.plan) is not DevelopmentCorpusEnsemblePlan
         or type(prepared.candidate) is not PreparedDevelopmentCorpus
         or type(prepared.candidate.shards) is not tuple
-        or not 1 <= len(prepared.candidate.shards) <= 64
+        or not 1 <= len(prepared.candidate.shards) <= MAX_DEVELOPMENT_CORPUS_FILES
         or any(type(s) is not PreparedDevelopmentCorpusShard for s in prepared.candidate.shards)
     ):
         raise DevelopmentCorpusEnsembleError("manifest ensemble requires exact prepared stages")
@@ -121,6 +122,7 @@ def _rebuild(prepared: PreparedDevelopmentCorpusEnsemble) -> PreparedDevelopment
             plan.reviewers[1].maximum_completion_tokens,
         ),
         maximum_run_seconds=plan.maximum_run_seconds,
+        source_custody=first.source_custody,
     )
     if rebuilt != prepared:
         raise DevelopmentCorpusEnsembleError("manifest ensemble source, selection or bytes changed")
@@ -506,6 +508,7 @@ async def run_development_corpus_ensemble(
                         run_id=role.run_id,
                         maximum_completion_tokens=role.maximum_completion_tokens,
                         maximum_run_seconds=remaining(),
+                        source_custody=prepared.candidate.shards[0].source_custody,
                     )
                     plans.append(review.plan)
                     bindings.append(

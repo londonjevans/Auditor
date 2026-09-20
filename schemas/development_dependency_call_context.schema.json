@@ -1,0 +1,623 @@
+{
+  "$defs": {
+    "DependencyArgumentExpression": {
+      "additionalProperties": false,
+      "properties": {
+        "byte_end": {
+          "exclusiveMinimum": 0,
+          "maximum": 262144,
+          "title": "Byte End",
+          "type": "integer"
+        },
+        "byte_start": {
+          "exclusiveMaximum": 262144,
+          "minimum": 0,
+          "title": "Byte Start",
+          "type": "integer"
+        },
+        "expression_type": {
+          "$ref": "#/$defs/DependencyExpressionType"
+        },
+        "nested_call_offsets": {
+          "items": {
+            "type": "integer"
+          },
+          "maxItems": 4096,
+          "title": "Nested Call Offsets",
+          "type": "array"
+        },
+        "shortfalls": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 64,
+          "title": "Shortfalls",
+          "type": "array"
+        },
+        "value_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 4096,
+          "title": "Value Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "byte_start",
+        "byte_end",
+        "expression_type",
+        "value_ids",
+        "nested_call_offsets",
+        "shortfalls"
+      ],
+      "title": "DependencyArgumentExpression",
+      "type": "object"
+    },
+    "DependencyBaseArgumentCall": {
+      "additionalProperties": false,
+      "properties": {
+        "call_byte_start": {
+          "exclusiveMaximum": 262144,
+          "minimum": 0,
+          "title": "Call Byte Start",
+          "type": "integer"
+        },
+        "owner_type_id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Owner Type Id",
+          "type": "string"
+        },
+        "source": {
+          "maxLength": 512,
+          "pattern": "^(?:[A-Za-z0-9][A-Za-z0-9._-]*/)*[A-Za-z0-9][A-Za-z0-9._-]*\\.sol$",
+          "title": "Source",
+          "type": "string"
+        },
+        "target_id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Target Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "call_byte_start",
+        "owner_type_id",
+        "target_id"
+      ],
+      "title": "DependencyBaseArgumentCall",
+      "type": "object"
+    },
+    "DependencyConstructorBinding": {
+      "additionalProperties": false,
+      "description": "Nominal constructor source dependencies, not initialization order or deployability.",
+      "properties": {
+        "base_argument_calls": {
+          "items": {
+            "$ref": "#/$defs/DependencyBaseArgumentCall"
+          },
+          "maxItems": 4096,
+          "title": "Base Argument Calls",
+          "type": "array"
+        },
+        "constructor_member_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 4096,
+          "title": "Constructor Member Ids",
+          "type": "array"
+        },
+        "implicit_type_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 4096,
+          "title": "Implicit Type Ids",
+          "type": "array"
+        },
+        "required_type_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 4096,
+          "minItems": 1,
+          "title": "Required Type Ids",
+          "type": "array"
+        },
+        "target_id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Target Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "target_id",
+        "required_type_ids",
+        "constructor_member_ids",
+        "implicit_type_ids",
+        "base_argument_calls"
+      ],
+      "title": "DependencyConstructorBinding",
+      "type": "object"
+    },
+    "DependencyExpressionType": {
+      "additionalProperties": false,
+      "properties": {
+        "integer_value": {
+          "anyOf": [
+            {
+              "maxLength": 79,
+              "pattern": "^-?(?:0|[1-9][0-9]*)$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Integer Value"
+        },
+        "kind": {
+          "enum": [
+            "BUILTIN",
+            "NOMINAL",
+            "INTEGER_LITERAL",
+            "STRING_LITERAL",
+            "UNKNOWN"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "shortfall": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Shortfall"
+        },
+        "spelling": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Spelling",
+          "type": "string"
+        },
+        "target_id": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Id"
+        }
+      },
+      "required": [
+        "kind",
+        "spelling"
+      ],
+      "title": "DependencyExpressionType",
+      "type": "object"
+    },
+    "DependencyTargetGap": {
+      "additionalProperties": false,
+      "properties": {
+        "byte_start": {
+          "exclusiveMaximum": 262144,
+          "minimum": 0,
+          "title": "Byte Start",
+          "type": "integer"
+        },
+        "reason": {
+          "maxLength": 128,
+          "pattern": "^[A-Z_]+$",
+          "title": "Reason",
+          "type": "string"
+        },
+        "source": {
+          "maxLength": 512,
+          "pattern": "^(?:[A-Za-z0-9][A-Za-z0-9._-]*/)*[A-Za-z0-9][A-Za-z0-9._-]*\\.sol$",
+          "title": "Source",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "byte_start",
+        "reason"
+      ],
+      "title": "DependencyTargetGap",
+      "type": "object"
+    },
+    "DependencyTypedCall": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "dispatch": {
+                "enum": [
+                  "CREATION",
+                  "BASE_CONSTRUCTOR"
+                ]
+              },
+              "resolution": {
+                "const": "STATIC_DECLARATIONS_BOUND"
+              }
+            },
+            "required": [
+              "dispatch",
+              "resolution"
+            ]
+          },
+          "then": {
+            "properties": {
+              "constructor_binding": {
+                "$ref": "#/$defs/DependencyConstructorBinding"
+              }
+            },
+            "required": [
+              "constructor_binding"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "dispatch": {
+                "not": {
+                  "enum": [
+                    "CREATION",
+                    "BASE_CONSTRUCTOR"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "dispatch"
+            ]
+          },
+          "then": {
+            "properties": {
+              "constructor_binding": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ],
+      "properties": {
+        "arguments": {
+          "items": {
+            "$ref": "#/$defs/DependencyArgumentExpression"
+          },
+          "maxItems": 64,
+          "title": "Arguments",
+          "type": "array"
+        },
+        "byte_end": {
+          "exclusiveMinimum": 0,
+          "maximum": 262144,
+          "title": "Byte End",
+          "type": "integer"
+        },
+        "byte_start": {
+          "exclusiveMaximum": 262144,
+          "minimum": 0,
+          "title": "Byte Start",
+          "type": "integer"
+        },
+        "call_byte_start": {
+          "exclusiveMaximum": 262144,
+          "minimum": 0,
+          "title": "Call Byte Start",
+          "type": "integer"
+        },
+        "callee": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Callee",
+          "type": "string"
+        },
+        "candidate_member_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 4096,
+          "title": "Candidate Member Ids",
+          "type": "array"
+        },
+        "constructor_binding": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DependencyConstructorBinding"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "dispatch": {
+          "enum": [
+            "MEMBER",
+            "LIBRARY",
+            "INTERNAL",
+            "CONVERSION",
+            "INTRINSIC",
+            "UNRESOLVED",
+            "MODIFIER",
+            "IMPLICIT_MODIFIER",
+            "CREATION",
+            "BASE_CONSTRUCTOR"
+          ],
+          "title": "Dispatch",
+          "type": "string"
+        },
+        "implementation_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 4096,
+          "title": "Implementation Ids",
+          "type": "array"
+        },
+        "implementation_member_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 4096,
+          "title": "Implementation Member Ids",
+          "type": "array"
+        },
+        "member_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 4096,
+          "title": "Member Ids",
+          "type": "array"
+        },
+        "receiver": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DependencyArgumentExpression"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resolution": {
+          "enum": [
+            "STATIC_DECLARATIONS_BOUND",
+            "NOT_ESTABLISHED"
+          ],
+          "title": "Resolution",
+          "type": "string"
+        },
+        "result_types": {
+          "items": {
+            "$ref": "#/$defs/DependencyExpressionType"
+          },
+          "maxItems": 64,
+          "title": "Result Types",
+          "type": "array"
+        },
+        "scope_id": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Scope Id"
+        },
+        "shortfalls": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 64,
+          "title": "Shortfalls",
+          "type": "array"
+        },
+        "source": {
+          "maxLength": 512,
+          "pattern": "^(?:[A-Za-z0-9][A-Za-z0-9._-]*/)*[A-Za-z0-9][A-Za-z0-9._-]*\\.sol$",
+          "title": "Source",
+          "type": "string"
+        },
+        "source_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "source_sha256",
+        "byte_start",
+        "byte_end",
+        "call_byte_start",
+        "scope_id",
+        "callee",
+        "dispatch",
+        "receiver",
+        "arguments",
+        "result_types",
+        "candidate_member_ids",
+        "member_ids",
+        "implementation_ids",
+        "implementation_member_ids",
+        "shortfalls",
+        "resolution"
+      ],
+      "title": "DependencyTypedCall",
+      "type": "object"
+    },
+    "DependencyTypedMembers": {
+      "additionalProperties": false,
+      "properties": {
+        "gap_indices": {
+          "items": {
+            "type": "integer"
+          },
+          "maxItems": 4096,
+          "title": "Gap Indices",
+          "type": "array"
+        },
+        "members": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 256,
+          "minItems": 1,
+          "title": "Members",
+          "type": "array"
+        },
+        "primary": {
+          "maxLength": 512,
+          "pattern": "^(?:[A-Za-z0-9][A-Za-z0-9._-]*/)*[A-Za-z0-9][A-Za-z0-9._-]*\\.sol$",
+          "title": "Primary",
+          "type": "string"
+        },
+        "unresolved_call_indices": {
+          "items": {
+            "type": "integer"
+          },
+          "maxItems": 4096,
+          "title": "Unresolved Call Indices",
+          "type": "array"
+        }
+      },
+      "required": [
+        "primary",
+        "members",
+        "unresolved_call_indices",
+        "gap_indices"
+      ],
+      "title": "DependencyTypedMembers",
+      "type": "object"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/development_dependency_call_context.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "else": {
+        "properties": {
+          "calls": {
+            "items": {
+              "properties": {
+                "constructor_binding": {
+                  "type": "null"
+                },
+                "dispatch": {
+                  "not": {
+                    "enum": [
+                      "CREATION",
+                      "BASE_CONSTRUCTOR"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "if": {
+        "properties": {
+          "policy": {
+            "const": "SOURCE_CALL_MODIFIER_AND_CONSTRUCTOR_RESOLUTION_V3"
+          }
+        },
+        "required": [
+          "policy"
+        ]
+      }
+    }
+  ],
+  "properties": {
+    "calls": {
+      "items": {
+        "$ref": "#/$defs/DependencyTypedCall"
+      },
+      "maxItems": 4096,
+      "title": "Calls",
+      "type": "array"
+    },
+    "complete_static_resolution": {
+      "const": false,
+      "default": false,
+      "title": "Complete Static Resolution",
+      "type": "boolean"
+    },
+    "gaps": {
+      "items": {
+        "$ref": "#/$defs/DependencyTargetGap"
+      },
+      "maxItems": 4096,
+      "title": "Gaps",
+      "type": "array"
+    },
+    "policy": {
+      "default": "SOURCE_ARGUMENT_RETURN_CALL_RESOLUTION_V1",
+      "enum": [
+        "SOURCE_ARGUMENT_RETURN_CALL_RESOLUTION_V1",
+        "SOURCE_CALL_AND_MODIFIER_RESOLUTION_V2",
+        "SOURCE_CALL_MODIFIER_AND_CONSTRUCTOR_RESOLUTION_V3"
+      ],
+      "title": "Policy",
+      "type": "string"
+    },
+    "primaries": {
+      "items": {
+        "$ref": "#/$defs/DependencyTypedMembers"
+      },
+      "maxItems": 256,
+      "minItems": 1,
+      "title": "Primaries",
+      "type": "array"
+    },
+    "scope": {
+      "const": "LEXICAL_CALL_CANDIDATES_NOT_COMPLETE_SOLIDITY_OR_DEPLOYED_DISPATCH",
+      "default": "LEXICAL_CALL_CANDIDATES_NOT_COMPLETE_SOLIDITY_OR_DEPLOYED_DISPATCH",
+      "title": "Scope",
+      "type": "string"
+    },
+    "scoped_context_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Scoped Context Sha256",
+      "type": "string"
+    },
+    "source_inventory_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Source Inventory Sha256",
+      "type": "string"
+    }
+  },
+  "required": [
+    "source_inventory_sha256",
+    "scoped_context_sha256",
+    "calls",
+    "gaps",
+    "primaries"
+  ],
+  "title": "DependencyCallContext",
+  "type": "object"
+}

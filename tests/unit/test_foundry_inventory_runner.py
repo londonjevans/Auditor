@@ -4,7 +4,7 @@ import hashlib
 import json
 import os
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
@@ -320,6 +320,8 @@ def _run(
     *,
     timeout_seconds: float = 5,
     limits: FoundryInventoryRunLimits | None = None,
+    absolute_deadline: float | None = None,
+    verify_execution_inputs: Callable[[], None] | None = None,
 ) -> FoundryInventoryRunResult:
     monkeypatch.setattr(
         runner_module,
@@ -348,6 +350,8 @@ def _run(
         backend=backend,
         timeout_seconds=timeout_seconds,
         limits=limits,
+        absolute_deadline=absolute_deadline,
+        verify_execution_inputs=verify_execution_inputs,
     )
 
 
@@ -909,6 +913,10 @@ def test_inventory_runner_executes_sorted_projects_and_seals_evidence(
         "packages/alpha",
         "packages/zeta",
     )
+    assert tuple(item.project_root for item in result.compiler_inputs) == (
+        "packages/alpha",
+        "packages/zeta",
+    )
     assert tuple(item.project_root for item in result.evidence.projects) == (
         "packages/alpha",
         "packages/zeta",
@@ -954,6 +962,12 @@ def test_inventory_runner_executes_sorted_projects_and_seals_evidence(
         assert artifact.sha256 == _sha256(raw_artifact)
         assert artifact.normalized_sha256
         assert artifact.normalized_sha256 != artifact.sha256
+        snapshot = result.compiler_inputs[index]
+        assert tuple(_sha256(raw) for raw in snapshot.build_info_jsons) == (
+            artifact.normalized_sha256,
+        )
+        assert _sha256(snapshot.forge_list_json) == project.stdout_sha256
+        assert snapshot.sources[0].content == _SOURCE.encode()
         assert project.records[0].build_info_sha256 == (artifact.normalized_sha256)
         assert project.records[0].execution_signature == "testInventory()"
 
@@ -1079,3 +1093,131 @@ def test_inventory_runner_rejects_workspace_mutation(
         match="workspace changed",
     ):
         _run(harness, backend, monkeypatch)
+
+
+@pytest.mark.parametrize("boundary", ["admission", "wrap", "launch", "wait", "cleanup"])
+def test_retained_input_guard_refuses_each_dispatch_boundary_and_cleans_up(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, boundary: str
+) -> None:
+    harness = _harness(tmp_path, mode="success")
+    backend = _MockIsolationBackend()
+    launches: list[list[str]] = []
+    completed = []
+
+    class Process:
+        def poll(self) -> int:
+            return 0
+
+        def wait(self, timeout: float) -> int:
+            completed.append(True)
+            return 0
+
+    def launch(command: list[str], **kwargs: object) -> Process:
+        launches.append(command)
+        return Process()
+
+    def guard() -> None:
+        refused = {
+            "admission": True,
+            "wrap": bool(backend.commands),
+            "launch": bool(launches),
+            "wait": bool(completed),
+            "cleanup": bool(backend.cleanup_calls),
+        }[boundary]
+        if refused:
+            raise ValueError("synthetic retained selection drift")
+
+    monkeypatch.setattr(runner_module.subprocess, "Popen", launch)
+    with pytest.raises(FoundryInventoryInvalidError, match="retained execution inputs changed"):
+        _run(harness, backend, monkeypatch, verify_execution_inputs=guard)
+    assert len(launches) == (0 if boundary in {"admission", "wrap"} else 1)
+    assert backend.cleanup_calls == (0 if boundary == "admission" else 1)
+
+
+@pytest.mark.parametrize("boundary", ["admission", "wrap", "launch", "wait", "cleanup"])
+def test_shared_inventory_deadline_cannot_restart_after_preparation_or_launch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, boundary: str
+) -> None:
+    harness = _harness(tmp_path, mode="success")
+    now = [10.0]
+    launches = []
+    monkeypatch.setattr(runner_module.time, "monotonic", lambda: now[0])
+
+    class Backend(_MockIsolationBackend):
+        def wrap(self, command: list[str], **kwargs: object) -> list[str]:
+            self.commands.append(command.copy())
+            if boundary == "wrap":
+                now[0] = 20.0
+            return command
+
+        def cleanup(self, private_dir: Path) -> None:
+            super().cleanup(private_dir)
+            if boundary == "cleanup":
+                now[0] = 20.0
+
+    class Process:
+        def poll(self) -> int:
+            return 0
+
+        def wait(self, timeout: float) -> int:
+            if boundary == "wait":
+                now[0] = 20.0
+            return 0
+
+    def launch(command: list[str], **kwargs: object) -> Process:
+        launches.append(command)
+        if boundary == "launch":
+            now[0] = 20.0
+        return Process()
+
+    backend = Backend()
+    monkeypatch.setattr(runner_module.subprocess, "Popen", launch)
+    with pytest.raises(FoundryInventoryTimeoutError, match="deadline"):
+        _run(
+            harness,
+            backend,
+            monkeypatch,
+            timeout_seconds=30,
+            absolute_deadline=9.0 if boundary == "admission" else 20.0,
+        )
+    assert len(launches) == (0 if boundary in {"admission", "wrap"} else 1)
+    assert backend.cleanup_calls == (0 if boundary == "admission" else 1)
+
+
+@pytest.mark.parametrize("deadline", [True, float("inf"), float("-inf"), float("nan")])
+def test_inventory_refuses_invalid_shared_deadline_before_isolation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, deadline: float
+) -> None:
+    harness = _harness(tmp_path, mode="success")
+    backend = _MockIsolationBackend()
+    with pytest.raises(FoundryInventoryInvalidError, match="finite"):
+        _run(harness, backend, monkeypatch, absolute_deadline=deadline)
+    assert backend.commands == [] and backend.cleanup_calls == 0
+
+
+@pytest.mark.parametrize("failure", ["wrap", "invalid-command", "cleanup"])
+def test_failed_inventory_wrapper_still_attempts_bounded_isolation_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    harness = _harness(tmp_path, mode="success")
+
+    class Backend(_MockIsolationBackend):
+        def wrap(self, command: list[str], **kwargs: object) -> list[str]:
+            self.commands.append(command.copy())
+            if failure == "invalid-command":
+                return []
+            raise ValueError("synthetic failed isolation setup")
+
+        def cleanup(self, private_dir: Path) -> None:
+            super().cleanup(private_dir)
+            if failure == "cleanup":
+                raise ValueError("synthetic cleanup failure")
+
+    def forbidden(*args: object, **kwargs: object) -> None:
+        pytest.fail("failed wrapper must never reach a process")
+
+    monkeypatch.setattr(runner_module.subprocess, "Popen", forbidden)
+    backend = Backend()
+    with pytest.raises(FoundryInventoryInvalidError, match="isolation setup"):
+        _run(harness, backend, monkeypatch)
+    assert len(backend.commands) == 1 and backend.cleanup_calls == 1

@@ -30,6 +30,7 @@ from mmaudit.models.development_corpus import (
     MAX_DEVELOPMENT_CORPUS_RESULT_BYTES,
     DevelopmentCorpusMaterial,
     DevelopmentCorpusObservation,
+    DevelopmentCorpusScope,
     prepare_development_corpus,
 )
 from mmaudit.models.development_corpus_ensemble import prepare_development_corpus_ensemble
@@ -62,6 +63,9 @@ from mmaudit.orchestration.development_corpus import run_development_corpus
 from mmaudit.orchestration.development_corpus_control_measurement import (
     measure_development_corpus_score_file,
 )
+from mmaudit.orchestration.development_corpus_coverage import (
+    measure_development_corpus_coverage_files,
+)
 from mmaudit.orchestration.development_corpus_ensemble import run_development_corpus_ensemble
 from mmaudit.orchestration.development_corpus_judgment import run_development_corpus_judgment
 from mmaudit.orchestration.development_corpus_repeats import (
@@ -85,6 +89,7 @@ from mmaudit.orchestration.development_corpus_stability import (
 )
 from mmaudit.orchestration.development_ensemble import run_development_ensemble
 from mmaudit.orchestration.development_judgment import run_development_judgment
+from mmaudit.orchestration.development_tree import run_development_tree_plan
 from mmaudit.release_io import (
     read_file_evidence,
     read_json_evidence,
@@ -95,8 +100,228 @@ from mmaudit.repository.development_corpus import (
     load_development_corpus,
     revalidate_loaded_development_corpus,
 )
+from mmaudit.repository.development_corpus_tree import freeze_development_corpus_tree
+from mmaudit.repository.development_tree_plan import (
+    load_development_tree_plan,
+    write_development_tree_plan,
+)
 
 development_app = typer.Typer(help="Explicitly non-qualifying development utilities.")
+
+
+@development_app.command("plan-tree")
+def plan_development_tree_command(
+    corpus_root: Annotated[Path, typer.Option("--corpus-root")],
+    remappings_file: Annotated[Path, typer.Option("--remappings-file")],
+    policy_file: Annotated[Path, typer.Option("--policy-file")],
+    corpus_id: Annotated[str, typer.Option("--corpus-id")],
+    source_scope: Annotated[str, typer.Option("--source-scope")],
+    output_dir: Annotated[Path, typer.Option("--output-dir")],
+) -> None:
+    """Plan every supplied source and all three role envelopes offline; no provider or ledger."""
+
+    try:
+        scope: DevelopmentCorpusScope = TypeAdapter(DevelopmentCorpusScope).validate_python(
+            source_scope, strict=True
+        )
+        loaded = write_development_tree_plan(
+            corpus_root=corpus_root,
+            remappings_file=remappings_file,
+            policy_file=policy_file,
+            corpus_id=corpus_id,
+            source_scope=scope,
+            output_dir=output_dir,
+        )
+    except Exception:
+        typer.echo(
+            "Development tree planning refused: invalid or changed local inputs/output.", err=True
+        )
+        raise typer.Exit(ExitCode.CONFIGURATION) from None
+    typer.echo(
+        f"Development tree plan {loaded.plan.status}: {loaded.plan.plan_sha256}; "
+        f"{len(loaded.plan.primaries)} primary slots; "
+        + (", ".join(loaded.plan.shortfalls) or "conditional resource envelopes fit")
+        + "; retained plan.json contains per-primary and per-role details; no audit authority."
+    )
+    if loaded.plan.status != "READY":
+        raise typer.Exit(ExitCode.INCOMPLETE)
+
+
+@development_app.command("run-tree-plan")
+def run_development_tree_plan_command(
+    plan_file: Annotated[Path, typer.Option("--plan-file")],
+    corpus_root: Annotated[Path, typer.Option("--corpus-root")],
+    remappings_file: Annotated[Path, typer.Option("--remappings-file")],
+    policy_file: Annotated[Path, typer.Option("--policy-file")],
+    cost_ledger: Annotated[Path, typer.Option("--cost-ledger")],
+    secrets_env_file: Annotated[Path, typer.Option("--secrets-env-file")],
+    output_dir: Annotated[Path, typer.Option("--output-dir")],
+    accept_estimate_risk: Annotated[bool, typer.Option("--accept-estimate-risk")] = False,
+    allow_code_egress: Annotated[bool, typer.Option("--allow-code-egress")] = False,
+    resume: Annotated[bool, typer.Option("--resume")] = False,
+    maximum_stages_per_invocation: Annotated[
+        int, typer.Option("--maximum-stages-per-invocation", min=1, max=768)
+    ] = 768,
+) -> None:
+    """Execute pending fixed-plan stages; reopen closed stage receipts without replay or retries."""
+
+    if not accept_estimate_risk or not allow_code_egress:
+        typer.echo(
+            "Development tree execution requires --accept-estimate-risk and --allow-code-egress; "
+            "estimated budgets can be exceeded.",
+            err=True,
+        )
+        raise typer.Exit(ExitCode.CONFIGURATION)
+    try:
+        inputs = (
+            plan_file,
+            corpus_root,
+            remappings_file,
+            policy_file,
+            cost_ledger,
+            secrets_env_file,
+        )
+        paths = (*inputs, output_dir)
+        if any(not p.is_absolute() or ".." in p.parts for p in paths) or len(set(paths)) != len(
+            paths
+        ):
+            raise ValueError("automatic tree paths must be absolute, distinct and normalized")
+        if any(p.is_relative_to(output_dir) or output_dir.is_relative_to(p) for p in inputs):
+            raise ValueError("automatic tree output overlaps selected controls")
+        loaded = load_development_tree_plan(
+            plan_file=plan_file,
+            corpus_root=corpus_root,
+            remappings_file=remappings_file,
+            policy_file=policy_file,
+        )
+        if loaded.plan.status != "READY":
+            raise ValueError("automatic tree preflight is refused")
+        ledger = AtomicCostLedger.open_existing(
+            cost_ledger, cap_usd=loaded.plan.policy.cost_policy.total_budget_usd
+        )
+        with load_operator_secrets(secrets_env_file, environ={}, required=True) as secrets:
+            progress = asyncio.run(
+                run_development_tree_plan(
+                    loaded=loaded,
+                    ledger=ledger,
+                    operator_secrets=secrets,
+                    output_dir=output_dir,
+                    allow_code_egress=allow_code_egress,
+                    resume=resume,
+                    maximum_stages_per_invocation=maximum_stages_per_invocation,
+                )
+            )
+    except Exception:
+        typer.echo(
+            "Development tree execution refused: inspect retained plan and stage receipts; "
+            "changed inputs, accounting, unclosed attempts or exhausted envelopes cannot be bypassed.",
+            err=True,
+        )
+        raise typer.Exit(ExitCode.CONFIGURATION) from None
+    typer.echo(progress.model_dump_json(indent=2))
+    if progress.status == "INCOMPLETE":
+        raise typer.Exit(ExitCode.INCOMPLETE)
+
+
+@development_app.command("freeze-tree")
+def freeze_development_tree_command(
+    corpus_root: Annotated[Path, typer.Option("--corpus-root")],
+    remappings_file: Annotated[Path, typer.Option("--remappings-file")],
+    corpus_id: Annotated[str, typer.Option("--corpus-id")],
+    source_scope: Annotated[str, typer.Option("--source-scope")],
+    output_dir: Annotated[Path, typer.Option("--output-dir")],
+    scoped_targets: Annotated[bool, typer.Option("--scoped-targets")] = False,
+    typed_calls: Annotated[bool, typer.Option("--typed-calls")] = False,
+    syntax_context: Annotated[bool, typer.Option("--syntax-context")] = False,
+    modifier_context: Annotated[bool, typer.Option("--modifier-context")] = False,
+    constructor_context: Annotated[bool, typer.Option("--constructor-context")] = False,
+    call_closure: Annotated[bool, typer.Option("--call-closure")] = False,
+    primary_source: Annotated[list[str] | None, typer.Option("--primary-source")] = None,
+) -> None:
+    """Freeze all bounded local Solidity source and dependency context without provider access."""
+
+    try:
+        call_closure = call_closure or primary_source is not None
+        scope: DevelopmentCorpusScope = TypeAdapter(DevelopmentCorpusScope).validate_python(
+            source_scope, strict=True
+        )
+        manifest = freeze_development_corpus_tree(
+            corpus_root=corpus_root,
+            remappings_file=remappings_file,
+            corpus_id=corpus_id,
+            source_scope=scope,
+            output_dir=output_dir,
+            dependency_scoped_context=scoped_targets
+            or typed_calls
+            or syntax_context
+            or modifier_context
+            or constructor_context
+            or call_closure,
+            dependency_call_context=typed_calls
+            or syntax_context
+            or modifier_context
+            or constructor_context
+            or call_closure,
+            dependency_syntax_context=syntax_context
+            or modifier_context
+            or constructor_context
+            or call_closure,
+            dependency_modifier_context=modifier_context or constructor_context or call_closure,
+            dependency_constructor_context=constructor_context or call_closure,
+            dependency_static_closure=call_closure,
+            primary_filenames=tuple(sorted(primary_source)) if primary_source is not None else None,
+        )
+    except Exception:
+        typer.echo(
+            "Development tree freeze refused: incomplete, changed, unsafe or oversized local "
+            "scope, invalid remappings or output. No provider call was selected.",
+            err=True,
+        )
+        raise typer.Exit(ExitCode.CONFIGURATION) from None
+    typer.echo(
+        "Development tree frozen: "
+        + manifest.manifest_sha256
+        + "; all selected-root Solidity files; root replay required; "
+        + (
+            f"{len(manifest.primary_sources)} primary and {len(manifest.context_sources)} context-only files; "
+            f"computed dependency closure {manifest.dependency_closure}; qualified audit completion remains unproved."
+            if manifest.source_partition is not None
+            else "static call closure and qualified audit completion remain unproved."
+        )
+    )
+
+
+@development_app.command("corpus-coverage")
+def development_corpus_coverage_command(
+    manifest_file: Annotated[Path, typer.Option("--manifest-file")],
+    corpus_root: Annotated[Path, typer.Option("--corpus-root")],
+    output_dir: Annotated[Path, typer.Option("--output-dir")],
+    record_file: Annotated[list[Path] | None, typer.Option("--record-file")] = None,
+    partition_file: Annotated[list[Path] | None, typer.Option("--partition-file")] = None,
+) -> None:
+    """Account for every frozen-tree primary using retained originals/histories, without providers."""
+
+    try:
+        result = measure_development_corpus_coverage_files(
+            manifest_file=manifest_file,
+            corpus_root=corpus_root,
+            record_files=tuple(record_file or ()),
+            output_dir=output_dir,
+            partition_files=tuple(partition_file or ()),
+        )
+    except Exception:
+        typer.echo(
+            "Corpus coverage refused: invalid, changed, overlapping or oversized retained records, "
+            "source root or output. No provider call was selected.",
+            err=True,
+        )
+        raise typer.Exit(ExitCode.CONFIGURATION) from None
+    typer.echo(
+        "Corpus coverage: "
+        + result.summary.status
+        + f"; {len(result.summary.successful_primary_paths)}/{len(result.reference.manifest.sources)} "
+        "source-bound primary responses; context presence is not primary review or validated audit coverage."
+    )
 
 
 @development_app.command("measure-stability")
@@ -190,6 +415,8 @@ def resume_development_manifest_command(
     source_material_file: Annotated[Path | None, typer.Option("--source-material-file")] = None,
     original_score_file: Annotated[Path | None, typer.Option("--original-score-file")] = None,
     history_file: Annotated[Path | None, typer.Option("--history-file")] = None,
+    source_manifest: Annotated[Path | None, typer.Option("--source-manifest")] = None,
+    corpus_root: Annotated[Path | None, typer.Option("--corpus-root")] = None,
     accept_estimate_risk: Annotated[bool, typer.Option("--accept-estimate-risk")] = False,
     allow_code_egress: Annotated[bool, typer.Option("--allow-code-egress")] = False,
 ) -> None:
@@ -197,6 +424,7 @@ def resume_development_manifest_command(
 
     Supply the original candidate/material and optional original score, or a prior continuation
     history. Route, full source context, budget/carry policy, tokens and deadlines stay unchanged.
+    Tree-backed history also requires --source-manifest and --corpus-root for actual root replay.
     """
 
     if not accept_estimate_risk or not allow_code_egress:
@@ -227,6 +455,8 @@ def resume_development_manifest_command(
                 original_score_file,
                 history_file,
                 endpoint_snapshot,
+                source_manifest,
+                corpus_root,
             )
             if p is not None
         )
@@ -243,6 +473,15 @@ def resume_development_manifest_command(
             raise DevelopmentCostError(
                 "continuation paths must be absolute, distinct and non-overlapping"
             )
+        if (source_manifest is None) != (corpus_root is None):
+            raise DevelopmentCostError(
+                "continuation source manifest and root must be supplied together"
+            )
+        loaded = (
+            load_development_corpus(manifest_file=source_manifest, corpus_root=corpus_root)
+            if source_manifest is not None and corpus_root is not None
+            else None
+        )
         inputs = read_development_corpus_resume_inputs(
             history_file=history_file,
             candidate_file=candidate_audit_file,
@@ -255,6 +494,7 @@ def resume_development_manifest_command(
             history=inputs.history,
             endpoint_snapshot=inputs.metadata,
             run_id=run_id,
+            source_custody=loaded,
         )
         require_development_corpus_resume_inputs(inputs)
         ledger = AtomicCostLedger.open_existing(
@@ -314,11 +554,14 @@ def judge_development_manifest_command(
     accept_estimate_risk: Annotated[bool, typer.Option("--accept-estimate-risk")] = False,
     allow_code_egress: Annotated[bool, typer.Option("--allow-code-egress")] = False,
     carry_uncertain_estimates: Annotated[bool, typer.Option("--carry-uncertain-estimates")] = False,
+    source_manifest: Annotated[Path | None, typer.Option("--source-manifest")] = None,
+    corpus_root: Annotated[Path | None, typer.Option("--corpus-root")] = None,
 ) -> None:
     """Review observed manifest claims against the retained sources.json snapshot.
 
     Incomplete candidates stay incomplete even when every available claim receives an opinion.
     No source discovery, truth scoring, automatic retry or lineage qualification is performed.
+    Tree-backed candidates also require --source-manifest and --corpus-root for actual root replay.
     """
 
     if not accept_estimate_risk or not allow_code_egress:
@@ -335,6 +578,7 @@ def judge_development_manifest_command(
             endpoint_snapshot,
             cost_ledger,
             secrets_env_file,
+            *(p for p in (source_manifest, corpus_root) if p is not None),
         )
         paths = (*inputs, output_dir)
         if any(not p.is_absolute() or ".." in p.parts for p in paths) or len(set(paths)) != len(
@@ -345,6 +589,18 @@ def judge_development_manifest_command(
             )
         if any(p.is_relative_to(output_dir) for p in inputs):
             raise DevelopmentCostError("manifest judgment output overlaps an input or control")
+        if (source_manifest is None) != (corpus_root is None):
+            raise DevelopmentCostError("manifest judgment source manifest and root must be paired")
+        if corpus_root is not None and any(
+            p != corpus_root and (p.is_relative_to(corpus_root) or corpus_root.is_relative_to(p))
+            for p in paths
+        ):
+            raise DevelopmentCostError("manifest judgment source root overlaps an input or output")
+        loaded = (
+            load_development_corpus(manifest_file=source_manifest, corpus_root=corpus_root)
+            if source_manifest is not None and corpus_root is not None
+            else None
+        )
         candidate_input = read_json_evidence(
             evidence_root=candidate_audit_file.parent,
             relative_path=candidate_audit_file.name,
@@ -394,6 +650,7 @@ def judge_development_manifest_command(
             run_id=run_id,
             maximum_completion_tokens=maximum_completion_tokens,
             maximum_run_seconds=float(maximum_run_seconds),
+            source_custody=loaded,
         )
         for path, evidence, bound in (
             (candidate_audit_file, candidate_input, MAX_DEVELOPMENT_CORPUS_RESULT_BYTES),
@@ -615,7 +872,7 @@ def audit_development_manifest_command(
 ) -> None:
     """Review only a frozen local source manifest; no discovery or qualified audit completion.
 
-    The supplied synthetic/public declaration does not authenticate provenance or complete
+    The supplied synthetic/public/protocol declaration does not authenticate provenance or complete
     dependency scope. This paid-capable command requires separate explicit source/cost consent.
     """
 
@@ -689,6 +946,9 @@ def audit_development_manifest_command(
             run_id=run_id,
             maximum_completion_tokens=maximum_completion_tokens,
             maximum_run_seconds=float(maximum_run_seconds),
+            source_custody=loaded
+            if loaded.material.manifest.source_tree_evidence is not None
+            else None,
         )
         benchmark_binding = None
         if truth_input is not None:
@@ -867,6 +1127,9 @@ def ensemble_development_manifest_command(
                 second_reviewer_maximum_completion_tokens,
             ),
             maximum_run_seconds=float(maximum_run_seconds),
+            source_custody=loaded
+            if loaded.material.manifest.source_tree_evidence is not None
+            else None,
         )
         benchmark_binding = None
         if truth_input is not None:

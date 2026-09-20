@@ -1,0 +1,7 @@
+{
+  "scope": "SYNTHETIC_OBSERVATIONS_NOT_EXECUTED_PIPELINE_RESULTS",
+  "observations": [
+    {"owner_id": "synthetic-owner-a", "latency_ms": 99, "original_file_bytes": 1234},
+    {"owner_id": "synthetic-owner-b-longer", "latency_ms": 100, "original_file_bytes": 1236}
+  ]
+}

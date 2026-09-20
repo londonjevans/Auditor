@@ -71,6 +71,7 @@ from mmaudit.reporting.json_report import stable_json
 from tests.unit import test_candidate_benchmark as fixtures
 
 ROOT = Path(__file__).parents[2]
+UNAVAILABLE_PLAN_PATH = ROOT / "tests/fixtures/model_selection/unavailable-plan-v1.7.json"
 RUNNER = CliRunner()
 MODEL_ID = "alpha/atlas-secure"
 PROVIDER_ENDPOINT = "provider-alpha"
@@ -393,7 +394,7 @@ def test_emit_selection_plan_successor_is_provider_free_deterministic_and_fresh(
     assert external_access == []
 
 
-def test_emit_selection_plan_successor_refuses_unavailable_active_plan(
+def test_emit_selection_plan_successor_refuses_unavailable_predecessor(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -405,6 +406,11 @@ def test_emit_selection_plan_successor_refuses_unavailable_active_plan(
 
     monkeypatch.setattr(cli_module, "load_operator_secrets", forbidden_external_access)
     monkeypatch.setattr(cli_module, "OpenRouterClient", forbidden_external_access)
+    predecessor_path = UNAVAILABLE_PLAN_PATH
+    predecessor_bytes = predecessor_path.read_bytes()
+    predecessor = load_candidate_selection_plan(predecessor_path)
+    assert predecessor.authenticated_runner_unavailability is not None
+    assert predecessor.authenticated_runner_selection is None
     output = tmp_path / "private" / "successor.json"
 
     result = RUNNER.invoke(
@@ -413,7 +419,7 @@ def test_emit_selection_plan_successor_refuses_unavailable_active_plan(
             "models",
             "emit-selection-plan-successor",
             "--predecessor-plan",
-            str(ROOT / "config" / "models.selection-plan.json"),
+            str(predecessor_path),
             "--candidate",
             f"{MODEL_ID}={PROVIDER_ENDPOINT}",
             "--output",
@@ -425,6 +431,7 @@ def test_emit_selection_plan_successor_refuses_unavailable_active_plan(
     assert result.exit_code == ExitCode.CONFIGURATION
     assert "separately authenticated ancestry transition" in " ".join(result.output.split())
     assert not output.exists()
+    assert predecessor_path.read_bytes() == predecessor_bytes
     assert external_access == []
 
 
@@ -774,7 +781,7 @@ def test_discover_rejects_tombstoned_alias_before_any_downstream_access(
     assert not registry_output.exists()
 
 
-def test_discover_unrevoked_route_rejects_unavailable_active_plan_before_any_io(
+def test_discover_unrevoked_route_rejects_unavailable_plan_before_any_io(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -782,7 +789,7 @@ def test_discover_unrevoked_route_rejects_unavailable_active_plan_before_any_io(
 
     def forbidden_access(*_args: object, **_kwargs: object) -> None:
         downstream_access.append("accessed")
-        raise AssertionError("unavailable active plan must reject before downstream access")
+        raise AssertionError("unavailable plan must reject before downstream access")
 
     for name in (
         "read_candidate_selection_source",
@@ -796,6 +803,7 @@ def test_discover_unrevoked_route_rejects_unavailable_active_plan_before_any_io(
 
     discovery_output = tmp_path / "discovery"
     registry_output = tmp_path / "registry.json"
+    assert load_candidate_selection_plan(UNAVAILABLE_PLAN_PATH).authenticated_runner_unavailability
     result = RUNNER.invoke(
         cli_module.app,
         [
@@ -804,7 +812,7 @@ def test_discover_unrevoked_route_rejects_unavailable_active_plan_before_any_io(
             "--candidate",
             "moonshotai/kimi-k3=modal/mxfp4",
             "--candidate-selection-plan",
-            str(ROOT / "config" / "models.selection-plan.json"),
+            str(UNAVAILABLE_PLAN_PATH),
             "--candidate-selection-ranking-source",
             str(tmp_path / "model-ranking.py"),
             "--candidate-selection-lineage-review-source",

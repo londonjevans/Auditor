@@ -1,42 +1,42 @@
 {
   "artifact_kind": "OPERATOR_STAGED_MODEL_SELECTION",
-  "authenticated_runner_selection": null,
-  "authenticated_runner_unavailability": {
-    "candidate_selection_authorized": false,
-    "disposition": "NO_ACTIVE_CANDIDATE_AFTER_REVOCATION",
-    "judge_route_constraints": [
+  "authenticated_runner_selection": {
+    "candidate_model_id": "deepseek/deepseek-v4-pro-0813",
+    "distinct_root_lineages_verified": false,
+    "primary_judge_model_id": "z-ai/glm-5.2",
+    "replay_judge_model_id": "moonshotai/kimi-k3",
+    "required_completion_limit_source": "metadata",
+    "required_output_mode": "NATIVE_JSON_SCHEMA",
+    "required_reasoning_effort": "high",
+    "required_supported_parameters": [
+      "structured_outputs"
+    ],
+    "role_assignment_sha256": "46103a126360f3edf20df314cb80a4c96b19a980b8d9c0f81493331ab052d587",
+    "route_constraints": [
       {
-        "constraint_sha256": "f0177706981e7cc78994b8fc6d1ed34e170b6ee637e88ad12d1d94976d0ed6ad",
+        "constraint_sha256": "72d328e10852e118ba188c6d1a4f82f02ae311bd9a2d173de505de01b8b45477",
+        "exact_model_id": "deepseek/deepseek-v4-pro-0813",
+        "profile_sha256": "279f5050a7cd0dd3ce04f724d4987c239b740b7bfced1325e605e94537938a08",
+        "provider_endpoint": "together",
+        "role": "candidate",
+        "schema_version": "1.0"
+      },
+      {
+        "constraint_sha256": "7a3dd278c32f44c84aaf0d1c514de344c7a292d1ed00df3a0786ee45c8261e97",
         "exact_model_id": "z-ai/glm-5.2",
-        "profile_sha256": "00b33f3eff0ee7ac7710253c34786ce0a041ffe881baa4015dce0ed4f4b7ce82",
-        "provider_endpoint": "sail-research/fp8",
+        "profile_sha256": "279f5050a7cd0dd3ce04f724d4987c239b740b7bfced1325e605e94537938a08",
+        "provider_endpoint": "deepinfra/fp4",
         "role": "primary_judge",
         "schema_version": "1.0"
       },
       {
-        "constraint_sha256": "ffc54dc13eea0d92c06a1c6f29e0ae679eac5328d05ae8899e8cd7899b1eb199",
+        "constraint_sha256": "e60b8b9e9e1cfd1e95b14916b677c54fb75907921a83bdfef565b23fd980442a",
         "exact_model_id": "moonshotai/kimi-k3",
-        "profile_sha256": "00b33f3eff0ee7ac7710253c34786ce0a041ffe881baa4015dce0ed4f4b7ce82",
-        "provider_endpoint": "modal/mxfp4",
-        "role": "replay_judge",
-        "schema_version": "1.0"
-      },
-      {
-        "constraint_sha256": "2a820c3b85936bc24cc1b0d007415d39e8e8bfd3b4eacb072a321e904e8a5912",
-        "exact_model_id": "moonshotai/kimi-k3",
-        "profile_sha256": "00b33f3eff0ee7ac7710253c34786ce0a041ffe881baa4015dce0ed4f4b7ce82",
-        "provider_endpoint": "phala",
+        "profile_sha256": "279f5050a7cd0dd3ce04f724d4987c239b740b7bfced1325e605e94537938a08",
+        "provider_endpoint": "together",
         "role": "replay_judge",
         "schema_version": "1.0"
       }
-    ],
-    "matched_revocation_set_sha256": "7c0118f5c170d46e6d2478bf92cbd83d1be6b426bda36dd57a6fc93e2ffd18c5",
-    "predecessor_role_assignment_sha256": "7d67d43f98484890bf9f184a5bb89fbba25d0408dee65a7174eef5fdf1a75b14",
-    "price_cap_profile_decision": "PRESERVE_PREDECESSOR_V1_NO_V2_ADOPTION",
-    "primary_judge_model_id": "z-ai/glm-5.2",
-    "replay_judge_model_id": "moonshotai/kimi-k3",
-    "revocation_entry_sha256s": [
-      "67eb2be8bb4d51d8223c2893736c0adeea60bd73d7671ee22f39cc6f4dee6ec4"
     ],
     "route_predicate_profile": {
       "accepted_operational_status": "0",
@@ -51,6 +51,49 @@
       "minimum_context_tokens": 73728,
       "minimum_prompt_tokens": 65536,
       "native_capability_marker": "structured_outputs",
+      "operator_reservation_policy": {
+        "automatic_ceiling_increase": false,
+        "enforcement_basis": "MMAUDIT_OPERATOR_RESERVE_THEN_RECONCILE_V1",
+        "ledger_ceiling_usd_exact": "250",
+        "legacy_uncertain_allowance": {
+          "allowance_sha256": "9ddd9264c92d1b9908b6be7f7f70350e0b952852018ea3db7c084e411af3f29d",
+          "entries": [
+            {
+              "accounted_cost_usd_exact": "0.18105",
+              "actual_cost_usd": null,
+              "created_at": "2026-08-24T02:12:47.028075+00:00",
+              "release_reason": null,
+              "request_id": "authrunner.smoke.r17.judge.replay:362788774fcd9547f0ebc92413f5aea00d2b91910ccbda5224589c0859b29829",
+              "reservation_id": "88a38af618eb417391099013418c741c",
+              "reserved_usd_exact": "0.18105",
+              "status": "uncertain_accounted",
+              "updated_at": "2026-08-24T02:12:47.048063+00:00"
+            },
+            {
+              "accounted_cost_usd_exact": "0.05225616",
+              "actual_cost_usd": null,
+              "created_at": "2026-08-23T06:33:01.887394+00:00",
+              "release_reason": null,
+              "request_id": "authrunner.smoke.r2.candidate.primary:721f058726cf9509c07cb2aae662fb6ac23b5c30a363db40229faf8895034497",
+              "reservation_id": "bec758dc72d74ebebdd32bcd4c1efbd1",
+              "reserved_usd_exact": "0.05225616",
+              "status": "uncertain_accounted",
+              "updated_at": "2026-08-23T06:33:01.892191+00:00"
+            }
+          ],
+          "operator_decision_id": "OP-COSTLEGACY-2026-09-11",
+          "schema_version": "1.0"
+        },
+        "maximum_request_bytes": 4000000,
+        "operator_decision_id": "OP-COST-2026-09-09",
+        "policy_sha256": "0342c19f12f4535af2f0cef4e936954ffd6f3576f547aa229ace0bd840da1d36",
+        "provider_enforced_total_ceiling": false,
+        "require_actual_billed_cost": true,
+        "reservation_overrun_blocks_new_work": true,
+        "schema_version": "1.1",
+        "uncappable_rate_multiplier": "2",
+        "unknown_billing_blocks_new_work": true
+      },
       "predicate_ids": [
         "EXACT_MODEL_IDENTITY",
         "EXACT_PROVIDER_ENDPOINT",
@@ -74,8 +117,8 @@
         "OUTPUT_CAPACITY_ENVELOPE",
         "CONTEXT_CAPACITY_ENVELOPE",
         "METADATA_COMPLETION_CAPACITY",
-        "PRICE_CAP_EXPRESSIBILITY",
-        "PRICE_CAP_NO_WEAKER",
+        "RESERVATION_PRICING_AVAILABLE",
+        "PROVIDER_CAPPED_SUBSET_BOUND",
         "FROZEN_LIVE_EQUIVALENCE",
         "REGISTRY_SELECTION_HASH_CUSTODY",
         "REGISTRY_CONSTRAINT_HASH_CUSTODY",
@@ -83,7 +126,7 @@
         "TOKEN_DETAIL_REPORTING_CONVENTION"
       ],
       "price_cap_algorithm": "MMAUDIT_OPENROUTER_MAX_PRICE_CEILING_V1",
-      "profile_sha256": "00b33f3eff0ee7ac7710253c34786ce0a041ffe881baa4015dce0ed4f4b7ce82",
+      "profile_sha256": "279f5050a7cd0dd3ce04f724d4987c239b740b7bfced1325e605e94537938a08",
       "reasoning_control_profile_sha256": "fb13e6ce2ae85e3868ff3fbb50c565dc19f6cb13bfa629b20d315d2c9f1078df",
       "reasoning_effort": "high",
       "reasoning_exclude": false,
@@ -99,14 +142,9 @@
       "required_output_mode": "NATIVE_JSON_SCHEMA",
       "required_output_tokens": 4096,
       "reserved_reasoning_tokens": 4096,
-      "schema_version": "1.0",
+      "schema_version": "1.3",
       "token_detail_convention_disposition": "UNAVAILABLE"
-    },
-    "schema_version": "1.0",
-    "state_sha256": "98941c3253ffe0f1aa88890b1c8b7fafb7d6575ee28ca31cb7724f14e784ceae",
-    "withdrawn_candidate_constraint_sha256s": [
-      "126a1553cb4fbc96c642d803edacadd4879f41dbfbd69e53b0e4d19d4674763a"
-    ]
+    }
   },
   "benchmark_authorized": false,
   "cached_ranking_payload_present": false,
@@ -130,13 +168,13 @@
     {
       "advisory_lineage_group": "DeepSeek",
       "allowed_provider_endpoints": [
-        "parasail/fp8"
+        "together"
       ],
       "approved_roles": [],
       "availability": "UNVERIFIED",
       "documentary_lineage": "UNCONFIRMED",
       "entry_authority": false,
-      "entry_sha256": "da576e8d1835b41be94ea4dab6cd6329ae8c1483b830214d9e05acef44e8617b",
+      "entry_sha256": "222d0304fc99532b6807df79673c25b7b4c7f5bfb149017ce3a41521c8223126",
       "exact_model_id": "deepseek/deepseek-v4-pro-0813",
       "lineage_group_seed_sha256": "0a736ab443477cef4d0ee92b36ef4a18aadb36e8c54bab3b5654d03cc0fc2483",
       "priority_rank": 5
@@ -206,14 +244,13 @@
     {
       "advisory_lineage_group": "Moonshot-Kimi",
       "allowed_provider_endpoints": [
-        "modal/mxfp4",
-        "phala"
+        "together"
       ],
       "approved_roles": [],
       "availability": "UNVERIFIED",
       "documentary_lineage": "UNCONFIRMED",
       "entry_authority": false,
-      "entry_sha256": "77217b6dca94bc292a13cc5a5ce84c48c68a6bb2e055462db51048013abd3f11",
+      "entry_sha256": "4fe037c9c3c81829e0386036ae0460905cbcbcc4c7bf27076ac1a520ae0d2609",
       "exact_model_id": "moonshotai/kimi-k3",
       "lineage_group_seed_sha256": "f46cb1c7d55406b73aebebce2386b927039759f3d24aa6930422f0d125551c34",
       "priority_rank": 7
@@ -283,21 +320,88 @@
     {
       "advisory_lineage_group": "Zhipu-GLM",
       "allowed_provider_endpoints": [
-        "sail-research/fp8"
+        "deepinfra/fp4"
       ],
       "approved_roles": [],
       "availability": "UNVERIFIED",
       "documentary_lineage": "UNCONFIRMED",
       "entry_authority": false,
-      "entry_sha256": "45f0a3f416a806932e2596ca4f6381e12bbc4901d15c301b22fd5d607a7f55ef",
+      "entry_sha256": "b5d69b2b32fc1427a3b0e3b90b233eafe7060753bf6dadbea3d19599d008fe40",
       "exact_model_id": "z-ai/glm-5.2",
       "lineage_group_seed_sha256": "cef0b2d24fdb86b06b77f7280355447f05fc4318502b97d660ab400c52e3e59a",
       "priority_rank": 11
     }
   ],
   "objective_sha256": "e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15",
-  "plan_sha256": "14566de1f7da5e4a769502bdd6a7e1ec6c0f193ed126c8fc85236f0851586fd3",
-  "predecessor_plan_sha256": "bb3d60c3ff75ed2062b1ee68fe7b2011cf37ce860461b7d37eb10cd5faf7650f",
+  "operator_cost_transition_binding": {
+    "ancestry_evidence_sha256": "3a95e84f6744f0a8fc5b49316f41cf3b18443a7cf384161d99ad578d6f2f9a06",
+    "artifact_kind": "REPOSITORY_PINNED_OPERATOR_COST_TRANSITION",
+    "binding_sha256": "4109455773d8d91f3e8e22f76afc6aa9983580bc4c38bfcc111f7fbf80d578ca",
+    "operator_decision_id": "OP-COSTLEGACY-2026-09-11",
+    "predecessor_constraints": [
+      {
+        "constraint_sha256": "b744a0324db7470cc61a8382bb54ca6c95eb389c36749b789c9c028b97e9c1e7",
+        "exact_model_id": "deepseek/deepseek-v4-pro-0813",
+        "profile_sha256": "563f49d50bc263e30c03fedd5a3dd67c57d227fee8ce08c07cda039c279848ff",
+        "provider_endpoint": "together",
+        "role": "candidate",
+        "schema_version": "1.0"
+      },
+      {
+        "constraint_sha256": "49c5a1b1832b8269cef1d15078797b499250d952c33b2080c1352bdc8dbeae9c",
+        "exact_model_id": "z-ai/glm-5.2",
+        "profile_sha256": "563f49d50bc263e30c03fedd5a3dd67c57d227fee8ce08c07cda039c279848ff",
+        "provider_endpoint": "deepinfra/fp4",
+        "role": "primary_judge",
+        "schema_version": "1.0"
+      },
+      {
+        "constraint_sha256": "1bc9ac5a03c8e676df51c5757d57f4d357c14558857574438524ddfba187a43f",
+        "exact_model_id": "moonshotai/kimi-k3",
+        "profile_sha256": "563f49d50bc263e30c03fedd5a3dd67c57d227fee8ce08c07cda039c279848ff",
+        "provider_endpoint": "together",
+        "role": "replay_judge",
+        "schema_version": "1.0"
+      }
+    ],
+    "predecessor_plan_sha256": "55c79770ac0255e711d89f07fdbe02dd9a5e8bec770a8df6d070678dd96a1d44",
+    "predecessor_profile_sha256": "563f49d50bc263e30c03fedd5a3dd67c57d227fee8ce08c07cda039c279848ff",
+    "predecessor_raw_sha256": "95b136f0f2254c84ada3391eead1aeee9a52bd88f60ce78d4cd88bd42ed7be59",
+    "provider_call_authorized": false,
+    "replacement_constraints": [
+      {
+        "constraint_sha256": "72d328e10852e118ba188c6d1a4f82f02ae311bd9a2d173de505de01b8b45477",
+        "exact_model_id": "deepseek/deepseek-v4-pro-0813",
+        "profile_sha256": "279f5050a7cd0dd3ce04f724d4987c239b740b7bfced1325e605e94537938a08",
+        "provider_endpoint": "together",
+        "role": "candidate",
+        "schema_version": "1.0"
+      },
+      {
+        "constraint_sha256": "7a3dd278c32f44c84aaf0d1c514de344c7a292d1ed00df3a0786ee45c8261e97",
+        "exact_model_id": "z-ai/glm-5.2",
+        "profile_sha256": "279f5050a7cd0dd3ce04f724d4987c239b740b7bfced1325e605e94537938a08",
+        "provider_endpoint": "deepinfra/fp4",
+        "role": "primary_judge",
+        "schema_version": "1.0"
+      },
+      {
+        "constraint_sha256": "e60b8b9e9e1cfd1e95b14916b677c54fb75907921a83bdfef565b23fd980442a",
+        "exact_model_id": "moonshotai/kimi-k3",
+        "profile_sha256": "279f5050a7cd0dd3ce04f724d4987c239b740b7bfced1325e605e94537938a08",
+        "provider_endpoint": "together",
+        "role": "replay_judge",
+        "schema_version": "1.0"
+      }
+    ],
+    "replacement_profile_sha256": "279f5050a7cd0dd3ce04f724d4987c239b740b7bfced1325e605e94537938a08",
+    "reservation_policy_sha256": "0342c19f12f4535af2f0cef4e936954ffd6f3576f547aa229ace0bd840da1d36",
+    "schema_version": "1.1",
+    "security_requirements_relaxed": false,
+    "serialized_authority": false
+  },
+  "plan_sha256": "a868db571f4ced1cba9db7aa53d9a6b56b05c99bb465618d445ca940cd73313c",
+  "predecessor_plan_sha256": "55c79770ac0255e711d89f07fdbe02dd9a5e8bec770a8df6d070678dd96a1d44",
   "production_selection_authorized": false,
   "provider_call_authorized": false,
   "provider_metadata_present": false,
@@ -305,7 +409,7 @@
   "ranking_executed": false,
   "release_authorized": false,
   "runner_authority_authorized": false,
-  "schema_version": "1.7",
+  "schema_version": "1.11",
   "seal_publication_authorized": false,
   "serialized_authority": false,
   "source_bindings": [
@@ -337,7 +441,6 @@
     "Frontier retention-consent routes remain unusable unless exact ZDR eligibility is freshly proven.",
     "Meta Muse and Nemotron 3.5 ancestry remain unconfirmed.",
     "Mistral is excluded because the staged review supplies no exact current model ID.",
-    "No active candidate remains after exact revocation reconciliation; a separately authorized non-revoked successor is required.",
     "Operator results SHA-256 00de61717cb6d61c003682abca12ae2c7e59613db03ef99558133b972c123516 records Gemma effort=high rejection and an unverified Z.AI GLM-5.2/sail-research-fp8 proposal; fresh documentary lineage capture and exact discovery are required.",
     "Operator results SHA-256 14ece147138fb5bf6f32d2737ca6b174817a923c5ca50269bc14337c60a3453c records the historical unverified Gemma rank-12/deepinfra-fp8 proposal; later reasoning evidence supersedes it.",
     "Operator results SHA-256 5faa33fe1bd5b332e8dffa0b29ed5718886d0c8b22c65cb1dc67b306eba8d00f records the metadata-only r7/r8/r7 completion-capacity rejection and the nonauthorizing DeepSeek/parasail-fp8 and Kimi/Wafer successor routes; fresh exact discovery remains required.",

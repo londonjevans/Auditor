@@ -255,15 +255,18 @@ def test_backend_subclass_cannot_override_cleanup_controls(selected):
     assert cidfile.exists()
 
 
-def test_runtime_file_observation_rejects_repository_private_or_alias_paths(tmp_path):
+def test_runtime_file_observation_rejects_repository_private_or_alias_paths(tmp_path, monkeypatch):
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    monkeypatch.chdir(repository)
     private = tmp_path / "private"
     private.mkdir()
-    for executable in (private / "podman", Path.cwd() / "podman"):
-        with pytest.raises(cleanup.ContainerCleanupError):
+    for executable in (private / "podman", repository / "podman"):
+        with pytest.raises(cleanup.ContainerCleanupError, match="repository/private executable"):
             cleanup._runtime_identity(executable, private)
     alias = tmp_path / "podman-alias"
     alias.symlink_to(Path(sys.executable).resolve(strict=True))
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="no longer canonical"):
         cleanup._runtime_identity(alias, private)
 
 

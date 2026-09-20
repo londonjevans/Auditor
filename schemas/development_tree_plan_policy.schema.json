@@ -1,0 +1,3647 @@
+{
+  "$defs": {
+    "DataCollectionDenyEvidenceSource": {
+      "description": "Evidence source for exact-route request-policy or endpoint eligibility.",
+      "enum": [
+        "ZDR_ENDPOINT_SNAPSHOT",
+        "CONSENT_BOUND_ROUTER_REQUEST_POLICY",
+        "UNVERIFIED"
+      ],
+      "title": "DataCollectionDenyEvidenceSource",
+      "type": "string"
+    },
+    "DevelopmentCostPolicy": {
+      "additionalProperties": false,
+      "description": "Explicit target budgets, not hard guarantees; defaults keep retries off.",
+      "properties": {
+        "maximum_attempts": {
+          "default": 1,
+          "maximum": 32,
+          "minimum": 1,
+          "title": "Maximum Attempts",
+          "type": "integer"
+        },
+        "overspend_risk_accepted": {
+          "const": true,
+          "title": "Overspend Risk Accepted",
+          "type": "boolean"
+        },
+        "per_attempt_budget_usd": {
+          "pattern": "^(?:0|[1-9][0-9]{0,3})(?:\\.[0-9]{1,18})?$",
+          "title": "Per Attempt Budget Usd",
+          "type": "string"
+        },
+        "purpose": {
+          "const": "DEVELOPMENT_ONLY_ESTIMATED",
+          "default": "DEVELOPMENT_ONLY_ESTIMATED",
+          "title": "Purpose",
+          "type": "string"
+        },
+        "request_timeout_seconds": {
+          "anyOf": [
+            {
+              "maximum": 1800,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Request Timeout Seconds"
+        },
+        "safety_multiplier": {
+          "default": "2",
+          "pattern": "^(?:0|[1-9][0-9]{0,3})(?:\\.[0-9]{1,18})?$",
+          "title": "Safety Multiplier",
+          "type": "string"
+        },
+        "total_budget_usd": {
+          "pattern": "^(?:0|[1-9][0-9]{0,3})(?:\\.[0-9]{1,18})?$",
+          "title": "Total Budget Usd",
+          "type": "string"
+        },
+        "uncertain_cost_policy": {
+          "default": "STOP",
+          "enum": [
+            "STOP",
+            "CARRY_RESERVED_ESTIMATE"
+          ],
+          "title": "Uncertain Cost Policy",
+          "type": "string"
+        }
+      },
+      "required": [
+        "overspend_risk_accepted",
+        "total_budget_usd",
+        "per_attempt_budget_usd"
+      ],
+      "title": "DevelopmentCostPolicy",
+      "type": "object"
+    },
+    "DevelopmentReviewMetadata": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/OpenRouterEndpointSnapshotEvidence"
+        },
+        {
+          "$ref": "#/$defs/OpenRouterModelDiscoveryPayload"
+        },
+        {
+          "$ref": "#/$defs/OpenRouterModelDiscoveryEvidence"
+        }
+      ]
+    },
+    "DiscoveryCandidateRoute": {
+      "additionalProperties": false,
+      "description": "One exact requested model/provider route in a discovery run.",
+      "properties": {
+        "approved_provider_endpoint": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$",
+          "title": "Approved Provider Endpoint",
+          "type": "string"
+        },
+        "exact_model_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+          "title": "Exact Model Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "exact_model_id",
+        "approved_provider_endpoint"
+      ],
+      "title": "DiscoveryCandidateRoute",
+      "type": "object"
+    },
+    "DiscoveryEndpointMetadataBinding": {
+      "additionalProperties": false,
+      "description": "Hash binding for one exact per-model endpoint metadata response.",
+      "properties": {
+        "api_query": {
+          "pattern": "^/models/[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:%-]{0,767}/endpoints$",
+          "title": "Api Query",
+          "type": "string"
+        },
+        "exact_model_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+          "title": "Exact Model Id",
+          "type": "string"
+        },
+        "response_snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Response Snapshot Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "exact_model_id",
+        "api_query",
+        "response_snapshot_sha256"
+      ],
+      "title": "DiscoveryEndpointMetadataBinding",
+      "type": "object"
+    },
+    "DiscoveryModelMetadataBinding": {
+      "additionalProperties": false,
+      "description": "Hash binding for an exact-ID lookup and its canonical metadata response.",
+      "properties": {
+        "api_query": {
+          "pattern": "^/model/[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:%-]{0,767}$",
+          "title": "Api Query",
+          "type": "string"
+        },
+        "canonical_slug": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+          "title": "Canonical Slug",
+          "type": "string"
+        },
+        "exact_model_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+          "title": "Exact Model Id",
+          "type": "string"
+        },
+        "model_metadata_snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Model Metadata Snapshot Sha256",
+          "type": "string"
+        },
+        "response_snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Response Snapshot Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "exact_model_id",
+        "canonical_slug",
+        "api_query",
+        "response_snapshot_sha256",
+        "model_metadata_snapshot_sha256"
+      ],
+      "title": "DiscoveryModelMetadataBinding",
+      "type": "object"
+    },
+    "ExactRouteConstraint": {
+      "additionalProperties": false,
+      "properties": {
+        "constraint_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Constraint Sha256",
+          "type": "string"
+        },
+        "exact_model_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+          "title": "Exact Model Id",
+          "type": "string"
+        },
+        "profile_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Profile Sha256",
+          "type": "string"
+        },
+        "provider_endpoint": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$",
+          "title": "Provider Endpoint",
+          "type": "string"
+        },
+        "role": {
+          "$ref": "#/$defs/ExactRouteRole"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "role",
+        "exact_model_id",
+        "provider_endpoint",
+        "profile_sha256",
+        "constraint_sha256"
+      ],
+      "title": "ExactRouteConstraint",
+      "type": "object"
+    },
+    "ExactRoutePrice": {
+      "additionalProperties": false,
+      "properties": {
+        "component": {
+          "$ref": "#/$defs/RoutePriceComponent"
+        },
+        "unit_price": {
+          "maxLength": 49,
+          "minLength": 1,
+          "pattern": "^(?:0|[1-9][0-9]{0,11}|(?:0|[1-9][0-9]{0,11})\\.[0-9]{0,35}[1-9])$",
+          "title": "Unit Price",
+          "type": "string"
+        }
+      },
+      "required": [
+        "component",
+        "unit_price"
+      ],
+      "title": "ExactRoutePrice",
+      "type": "object"
+    },
+    "ExactRoutePriceTier": {
+      "additionalProperties": false,
+      "description": "One ordered prompt-threshold tier of exact partial price replacements.",
+      "properties": {
+        "min_prompt_tokens": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Min Prompt Tokens",
+          "type": "integer"
+        },
+        "pricing": {
+          "items": {
+            "$ref": "#/$defs/ExactRoutePrice"
+          },
+          "maxItems": 8,
+          "minItems": 1,
+          "title": "Pricing",
+          "type": "array"
+        }
+      },
+      "required": [
+        "min_prompt_tokens",
+        "pricing"
+      ],
+      "title": "ExactRoutePriceTier",
+      "type": "object"
+    },
+    "ExactRoutePricingSchedule": {
+      "additionalProperties": false,
+      "description": "Exact conditional pricing plus its conservative component-wise maximum.",
+      "properties": {
+        "base_pricing": {
+          "items": {
+            "$ref": "#/$defs/ExactRoutePrice"
+          },
+          "maxItems": 8,
+          "minItems": 2,
+          "title": "Base Pricing",
+          "type": "array"
+        },
+        "conservative_for_sub_threshold_prompts": {
+          "const": true,
+          "default": true,
+          "title": "Conservative For Sub Threshold Prompts",
+          "type": "boolean"
+        },
+        "evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evidence Sha256",
+          "type": "string"
+        },
+        "maximum_pricing": {
+          "items": {
+            "$ref": "#/$defs/ExactRoutePrice"
+          },
+          "maxItems": 8,
+          "minItems": 2,
+          "title": "Maximum Pricing",
+          "type": "array"
+        },
+        "pricing_schedule_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Pricing Schedule Sha256",
+          "type": "string"
+        },
+        "projection_method": {
+          "const": "MMAUDIT_TIERED_MAXIMUM_RATE_V1",
+          "default": "MMAUDIT_TIERED_MAXIMUM_RATE_V1",
+          "title": "Projection Method",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "tiers": {
+          "items": {
+            "$ref": "#/$defs/ExactRoutePriceTier"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Tiers",
+          "type": "array"
+        }
+      },
+      "required": [
+        "base_pricing",
+        "tiers",
+        "maximum_pricing",
+        "pricing_schedule_sha256",
+        "evidence_sha256"
+      ],
+      "title": "ExactRoutePricingSchedule",
+      "type": "object"
+    },
+    "ExactRouteRole": {
+      "enum": [
+        "candidate",
+        "primary_judge",
+        "replay_judge"
+      ],
+      "title": "ExactRouteRole",
+      "type": "string"
+    },
+    "LegacyUncertainCostAllowance": {
+      "additionalProperties": false,
+      "description": "Explicit operator relaxation for two exact rows, with no general carry mechanism.",
+      "properties": {
+        "allowance_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Allowance Sha256",
+          "type": "string"
+        },
+        "entries": {
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "$ref": "#/$defs/LegacyUncertainCostEntry"
+            },
+            {
+              "$ref": "#/$defs/LegacyUncertainCostEntry"
+            }
+          ],
+          "title": "Entries",
+          "type": "array"
+        },
+        "operator_decision_id": {
+          "const": "OP-COSTLEGACY-2026-09-11",
+          "default": "OP-COSTLEGACY-2026-09-11",
+          "title": "Operator Decision Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "entries",
+        "allowance_sha256"
+      ],
+      "title": "LegacyUncertainCostAllowance",
+      "type": "object"
+    },
+    "LegacyUncertainCostEntry": {
+      "additionalProperties": false,
+      "description": "Bind every immutable identity and retained liability field of one approved row.",
+      "properties": {
+        "accounted_cost_usd_exact": {
+          "enum": [
+            "0.18105",
+            "0.05225616"
+          ],
+          "title": "Accounted Cost Usd Exact",
+          "type": "string"
+        },
+        "actual_cost_usd": {
+          "default": null,
+          "title": "Actual Cost Usd",
+          "type": "null"
+        },
+        "created_at": {
+          "maxLength": 32,
+          "minLength": 25,
+          "title": "Created At",
+          "type": "string"
+        },
+        "release_reason": {
+          "default": null,
+          "title": "Release Reason",
+          "type": "null"
+        },
+        "request_id": {
+          "pattern": "^authrunner\\.smoke\\.(?:r17\\.judge\\.replay|r2\\.candidate\\.primary):[0-9a-f]{64}$",
+          "title": "Request Id",
+          "type": "string"
+        },
+        "reservation_id": {
+          "pattern": "^[0-9a-f]{32}$",
+          "title": "Reservation Id",
+          "type": "string"
+        },
+        "reserved_usd_exact": {
+          "enum": [
+            "0.18105",
+            "0.05225616"
+          ],
+          "title": "Reserved Usd Exact",
+          "type": "string"
+        },
+        "status": {
+          "const": "uncertain_accounted",
+          "default": "uncertain_accounted",
+          "title": "Status",
+          "type": "string"
+        },
+        "updated_at": {
+          "maxLength": 32,
+          "minLength": 25,
+          "title": "Updated At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "request_id",
+        "reservation_id",
+        "created_at",
+        "updated_at",
+        "reserved_usd_exact",
+        "accounted_cost_usd_exact"
+      ],
+      "title": "LegacyUncertainCostEntry",
+      "type": "object"
+    },
+    "NormalizedRouteFacts": {
+      "additionalProperties": false,
+      "description": "Canonical provider-free facts consumed by every route predicate.",
+      "properties": {
+        "automatic_fallbacks_allowed": {
+          "title": "Automatic Fallbacks Allowed",
+          "type": "boolean"
+        },
+        "configured_provider_endpoints": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "minItems": 1,
+          "title": "Configured Provider Endpoints",
+          "type": "array"
+        },
+        "configured_provider_max_price": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/ProviderPriceCap"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Configured Provider Max Price"
+        },
+        "context_tokens": {
+          "exclusiveMinimum": 0,
+          "maximum": 2147483647,
+          "title": "Context Tokens",
+          "type": "integer"
+        },
+        "emitted_request_parameters": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 32,
+          "title": "Emitted Request Parameters",
+          "type": "array"
+        },
+        "endpoint_supported_parameters": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 256,
+          "title": "Endpoint Supported Parameters",
+          "type": "array"
+        },
+        "endpoint_supported_reasoning_efforts": {
+          "anyOf": [
+            {
+              "items": {
+                "enum": [
+                  "none",
+                  "minimal",
+                  "low",
+                  "medium",
+                  "high",
+                  "xhigh",
+                  "max"
+                ],
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Endpoint Supported Reasoning Efforts"
+        },
+        "exact_pricing": {
+          "items": {
+            "$ref": "#/$defs/ExactRoutePrice"
+          },
+          "maxItems": 8,
+          "minItems": 2,
+          "title": "Exact Pricing",
+          "type": "array"
+        },
+        "expected_selection_plan_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Expected Selection Plan Sha256",
+          "type": "string"
+        },
+        "facts_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Facts Sha256",
+          "type": "string"
+        },
+        "frozen_live_equivalent": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Frozen Live Equivalent"
+        },
+        "max_completion_tokens": {
+          "exclusiveMinimum": 0,
+          "maximum": 2147483647,
+          "title": "Max Completion Tokens",
+          "type": "integer"
+        },
+        "max_completion_tokens_source": {
+          "enum": [
+            "metadata",
+            "context_limit"
+          ],
+          "title": "Max Completion Tokens Source",
+          "type": "string"
+        },
+        "max_prompt_tokens": {
+          "exclusiveMinimum": 0,
+          "maximum": 2147483647,
+          "title": "Max Prompt Tokens",
+          "type": "integer"
+        },
+        "model_supported_parameters": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 256,
+          "title": "Model Supported Parameters",
+          "type": "array"
+        },
+        "model_supported_reasoning_efforts": {
+          "anyOf": [
+            {
+              "items": {
+                "enum": [
+                  "none",
+                  "minimal",
+                  "low",
+                  "medium",
+                  "high",
+                  "xhigh",
+                  "max"
+                ],
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Model Supported Reasoning Efforts"
+        },
+        "observed_model_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+          "title": "Observed Model Id",
+          "type": "string"
+        },
+        "observed_provider_endpoint": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Observed Provider Endpoint"
+        },
+        "operational_status": {
+          "maxLength": 32,
+          "minLength": 1,
+          "title": "Operational Status",
+          "type": "string"
+        },
+        "pricing_schedule": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExactRoutePricingSchedule"
+            },
+            {
+              "const": "unavailable",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pricing Schedule"
+        },
+        "provider_display_names": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 2048,
+          "minItems": 1,
+          "title": "Provider Display Names",
+          "type": "array"
+        },
+        "provider_identity_inventory_complete": {
+          "title": "Provider Identity Inventory Complete",
+          "type": "boolean"
+        },
+        "provider_policy_mode": {
+          "enum": [
+            "only",
+            "order"
+          ],
+          "title": "Provider Policy Mode",
+          "type": "string"
+        },
+        "reasoning_control_profile_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Reasoning Control Profile Sha256",
+          "type": "string"
+        },
+        "reasoning_effort": {
+          "anyOf": [
+            {
+              "enum": [
+                "none",
+                "minimal",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Reasoning Effort"
+        },
+        "reasoning_exclude": {
+          "title": "Reasoning Exclude",
+          "type": "boolean"
+        },
+        "reasoning_max_tokens": {
+          "anyOf": [
+            {
+              "maximum": 65536,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reasoning Max Tokens"
+        },
+        "reasoning_mode": {
+          "enum": [
+            "disabled",
+            "default",
+            "effort",
+            "max_tokens"
+          ],
+          "title": "Reasoning Mode",
+          "type": "string"
+        },
+        "reasoning_policy_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Reasoning Policy Sha256",
+          "type": "string"
+        },
+        "reasoning_role_binding_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Reasoning Role Binding Sha256",
+          "type": "string"
+        },
+        "reasoning_role_profile_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Reasoning Role Profile Sha256",
+          "type": "string"
+        },
+        "registry_constraint_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Registry Constraint Sha256"
+        },
+        "registry_profile_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Registry Profile Sha256"
+        },
+        "registry_selection_plan_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Registry Selection Plan Sha256"
+        },
+        "reserved_reasoning_tokens": {
+          "maximum": 65536,
+          "minimum": 0,
+          "title": "Reserved Reasoning Tokens",
+          "type": "integer"
+        },
+        "runtime_required_output_tokens": {
+          "anyOf": [
+            {
+              "maximum": 65536,
+              "minimum": 256,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Runtime Required Output Tokens"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "selected_provider_display_name": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Selected Provider Display Name",
+          "type": "string"
+        },
+        "structured_output_mode": {
+          "$ref": "#/$defs/StructuredOutputMode"
+        },
+        "zdr_eligible": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Zdr Eligible"
+        }
+      },
+      "required": [
+        "observed_model_id",
+        "selected_provider_display_name",
+        "provider_display_names",
+        "provider_identity_inventory_complete",
+        "operational_status",
+        "zdr_eligible",
+        "emitted_request_parameters",
+        "model_supported_parameters",
+        "endpoint_supported_parameters",
+        "structured_output_mode",
+        "configured_provider_endpoints",
+        "provider_policy_mode",
+        "automatic_fallbacks_allowed",
+        "reasoning_policy_sha256",
+        "reasoning_role_profile_sha256",
+        "reasoning_role_binding_sha256",
+        "reasoning_control_profile_sha256",
+        "reasoning_mode",
+        "reasoning_effort",
+        "reasoning_exclude",
+        "reserved_reasoning_tokens",
+        "endpoint_supported_reasoning_efforts",
+        "model_supported_reasoning_efforts",
+        "max_prompt_tokens",
+        "max_completion_tokens",
+        "max_completion_tokens_source",
+        "context_tokens",
+        "exact_pricing",
+        "configured_provider_max_price",
+        "frozen_live_equivalent",
+        "expected_selection_plan_sha256",
+        "facts_sha256"
+      ],
+      "title": "NormalizedRouteFacts",
+      "type": "object"
+    },
+    "OpenRouterDiscoveryRunProvenance": {
+      "additionalProperties": false,
+      "description": "Trusted, self-hashed provenance shared by one atomic discovery run.",
+      "properties": {
+        "authenticated_metadata": {
+          "const": true,
+          "title": "Authenticated Metadata",
+          "type": "boolean"
+        },
+        "candidate_routes": {
+          "items": {
+            "$ref": "#/$defs/DiscoveryCandidateRoute"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Candidate Routes",
+          "type": "array"
+        },
+        "candidate_set_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Candidate Set Sha256",
+          "type": "string"
+        },
+        "catalog_api_query": {
+          "const": "/models",
+          "title": "Catalog Api Query",
+          "type": "string"
+        },
+        "catalog_snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Catalog Snapshot Sha256",
+          "type": "string"
+        },
+        "client_fingerprint_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Client Fingerprint Sha256",
+          "type": "string"
+        },
+        "endpoint_metadata_bindings": {
+          "items": {
+            "$ref": "#/$defs/DiscoveryEndpointMetadataBinding"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Endpoint Metadata Bindings",
+          "type": "array"
+        },
+        "execution_evidence": {
+          "const": "real",
+          "title": "Execution Evidence",
+          "type": "string"
+        },
+        "model_metadata_bindings": {
+          "items": {
+            "$ref": "#/$defs/DiscoveryModelMetadataBinding"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Model Metadata Bindings",
+          "type": "array"
+        },
+        "provenance_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Provenance Sha256",
+          "type": "string"
+        },
+        "provider_fingerprint_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Provider Fingerprint Sha256",
+          "type": "string"
+        },
+        "retrieved_at": {
+          "format": "date-time",
+          "title": "Retrieved At",
+          "type": "string"
+        },
+        "run_id": {
+          "pattern": "^[0-9a-f]{32}$",
+          "title": "Run Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "source_api_identity": {
+          "const": "https://openrouter.ai/api/v1",
+          "title": "Source Api Identity",
+          "type": "string"
+        },
+        "zdr_api_query": {
+          "const": "/endpoints/zdr",
+          "title": "Zdr Api Query",
+          "type": "string"
+        },
+        "zdr_snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Zdr Snapshot Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "run_id",
+        "retrieved_at",
+        "execution_evidence",
+        "authenticated_metadata",
+        "source_api_identity",
+        "catalog_api_query",
+        "zdr_api_query",
+        "client_fingerprint_sha256",
+        "provider_fingerprint_sha256",
+        "catalog_snapshot_sha256",
+        "zdr_snapshot_sha256",
+        "candidate_routes",
+        "candidate_set_sha256",
+        "model_metadata_bindings",
+        "endpoint_metadata_bindings",
+        "provenance_sha256"
+      ],
+      "title": "OpenRouterDiscoveryRunProvenance",
+      "type": "object"
+    },
+    "OpenRouterEndpointEvidence": {
+      "additionalProperties": false,
+      "description": "Canonical evidence for one exact configured model endpoint.",
+      "properties": {
+        "context_length": {
+          "exclusiveMinimum": 0,
+          "title": "Context Length",
+          "type": "integer"
+        },
+        "endpoint_slug": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Endpoint Slug"
+        },
+        "endpoint_snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Endpoint Snapshot Sha256",
+          "type": "string"
+        },
+        "endpoint_tag": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Endpoint Tag"
+        },
+        "exact_model_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}/[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$",
+          "title": "Exact Model Id",
+          "type": "string"
+        },
+        "max_completion_tokens": {
+          "exclusiveMinimum": 0,
+          "title": "Max Completion Tokens",
+          "type": "integer"
+        },
+        "max_completion_tokens_source": {
+          "enum": [
+            "metadata",
+            "context_limit"
+          ],
+          "title": "Max Completion Tokens Source",
+          "type": "string"
+        },
+        "max_prompt_tokens": {
+          "exclusiveMinimum": 0,
+          "title": "Max Prompt Tokens",
+          "type": "integer"
+        },
+        "max_prompt_tokens_source": {
+          "enum": [
+            "metadata",
+            "context_limit"
+          ],
+          "title": "Max Prompt Tokens Source",
+          "type": "string"
+        },
+        "operational": {
+          "title": "Operational",
+          "type": "boolean"
+        },
+        "operational_status": {
+          "maxLength": 32,
+          "minLength": 1,
+          "title": "Operational Status",
+          "type": "string"
+        },
+        "output_capability_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Output Capability Sha256",
+          "type": "string"
+        },
+        "pricing": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "maxProperties": 64,
+          "minProperties": 2,
+          "title": "Pricing",
+          "type": "object"
+        },
+        "pricing_overrides": {
+          "items": {
+            "$ref": "#/$defs/OpenRouterPricingOverrideTier"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Pricing Overrides",
+          "type": "array"
+        },
+        "pricing_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Pricing Sha256",
+          "type": "string"
+        },
+        "provider_endpoint": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$",
+          "title": "Provider Endpoint",
+          "type": "string"
+        },
+        "provider_name": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Provider Name",
+          "type": "string"
+        },
+        "required_request_parameters": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 32,
+          "minItems": 2,
+          "title": "Required Request Parameters",
+          "type": "array"
+        },
+        "structured_output_mode": {
+          "$ref": "#/$defs/StructuredOutputMode"
+        },
+        "structured_output_parameters": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 3,
+          "title": "Structured Output Parameters",
+          "type": "array"
+        },
+        "supported_output_modes": {
+          "items": {
+            "$ref": "#/$defs/StructuredOutputMode"
+          },
+          "maxItems": 3,
+          "minItems": 1,
+          "title": "Supported Output Modes",
+          "type": "array"
+        },
+        "supported_parameters": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 256,
+          "title": "Supported Parameters",
+          "type": "array"
+        },
+        "supported_reasoning_efforts": {
+          "anyOf": [
+            {
+              "items": {
+                "enum": [
+                  "none",
+                  "minimal",
+                  "low",
+                  "medium",
+                  "high",
+                  "xhigh",
+                  "max"
+                ],
+                "type": "string"
+              },
+              "maxItems": 7,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Supported Reasoning Efforts"
+        },
+        "tiered_pricing_cost_projection": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExactRoutePricingSchedule"
+            },
+            {
+              "const": "unavailable",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tiered Pricing Cost Projection"
+        },
+        "zdr_eligible": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Zdr Eligible"
+        },
+        "zdr_endpoint_snapshot_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Zdr Endpoint Snapshot Sha256"
+        }
+      },
+      "required": [
+        "exact_model_id",
+        "provider_endpoint",
+        "provider_name",
+        "operational",
+        "operational_status",
+        "zdr_eligible",
+        "supported_parameters",
+        "required_request_parameters",
+        "structured_output_parameters",
+        "supported_output_modes",
+        "structured_output_mode",
+        "output_capability_sha256",
+        "context_length",
+        "max_prompt_tokens",
+        "max_prompt_tokens_source",
+        "max_completion_tokens",
+        "max_completion_tokens_source",
+        "pricing",
+        "pricing_sha256",
+        "endpoint_snapshot_sha256"
+      ],
+      "title": "OpenRouterEndpointEvidence",
+      "type": "object"
+    },
+    "OpenRouterEndpointSnapshotEvidence": {
+      "additionalProperties": false,
+      "description": "Canonical, self-hashed evidence for an exact endpoint routing policy.",
+      "properties": {
+        "configured_provider_endpoints": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "minItems": 1,
+          "title": "Configured Provider Endpoints",
+          "type": "array"
+        },
+        "endpoint_metadata_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Endpoint Metadata Sha256",
+          "type": "string"
+        },
+        "endpoints": {
+          "items": {
+            "$ref": "#/$defs/OpenRouterEndpointEvidence"
+          },
+          "maxItems": 100,
+          "minItems": 1,
+          "title": "Endpoints",
+          "type": "array"
+        },
+        "exact_model_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}/[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$",
+          "title": "Exact Model Id",
+          "type": "string"
+        },
+        "exact_route_constraint": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExactRouteConstraint"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "normalized_route_facts": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NormalizedRouteFacts"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "output_capability_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Output Capability Sha256",
+          "type": "string"
+        },
+        "provider_policy_mode": {
+          "enum": [
+            "only",
+            "order"
+          ],
+          "title": "Provider Policy Mode",
+          "type": "string"
+        },
+        "require_zdr": {
+          "title": "Require Zdr",
+          "type": "boolean"
+        },
+        "route_predicate_profile": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RoutePredicateProfile"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "route_predicate_report": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RoutePredicateReport"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "schema_version": {
+          "const": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Snapshot Sha256",
+          "type": "string"
+        },
+        "structured_output_mode": {
+          "$ref": "#/$defs/StructuredOutputMode"
+        },
+        "supported_output_modes": {
+          "items": {
+            "$ref": "#/$defs/StructuredOutputMode"
+          },
+          "maxItems": 3,
+          "minItems": 1,
+          "title": "Supported Output Modes",
+          "type": "array"
+        },
+        "zdr_metadata_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Zdr Metadata Sha256"
+        }
+      },
+      "required": [
+        "schema_version",
+        "exact_model_id",
+        "provider_policy_mode",
+        "configured_provider_endpoints",
+        "require_zdr",
+        "endpoints",
+        "supported_output_modes",
+        "structured_output_mode",
+        "output_capability_sha256",
+        "endpoint_metadata_sha256",
+        "snapshot_sha256"
+      ],
+      "title": "OpenRouterEndpointSnapshotEvidence",
+      "type": "object"
+    },
+    "OpenRouterModelDiscoveryEvidence": {
+      "additionalProperties": false,
+      "description": "REAL, provenance-bound discovery evidence for one exact model endpoint.",
+      "properties": {
+        "approved_provider_endpoint": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Approved Provider Endpoint",
+          "type": "string"
+        },
+        "canonical_slug": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+          "title": "Canonical Slug",
+          "type": "string"
+        },
+        "catalog_context_size": {
+          "exclusiveMinimum": 0,
+          "maximum": 2147483647,
+          "title": "Catalog Context Size",
+          "type": "integer"
+        },
+        "catalog_identity_binding_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Catalog Identity Binding Sha256",
+          "type": "string"
+        },
+        "catalog_output_limit": {
+          "exclusiveMinimum": 0,
+          "maximum": 2147483647,
+          "title": "Catalog Output Limit",
+          "type": "integer"
+        },
+        "catalog_output_limit_source": {
+          "enum": [
+            "metadata",
+            "provider_context"
+          ],
+          "title": "Catalog Output Limit Source",
+          "type": "string"
+        },
+        "catalog_provider_context_size": {
+          "exclusiveMinimum": 0,
+          "maximum": 2147483647,
+          "title": "Catalog Provider Context Size",
+          "type": "integer"
+        },
+        "catalog_provider_context_size_source": {
+          "enum": [
+            "metadata",
+            "catalog_context"
+          ],
+          "title": "Catalog Provider Context Size Source",
+          "type": "string"
+        },
+        "context_size": {
+          "exclusiveMinimum": 0,
+          "maximum": 2147483647,
+          "title": "Context Size",
+          "type": "integer"
+        },
+        "data_collection_deny_eligible": {
+          "title": "Data Collection Deny Eligible",
+          "type": "boolean"
+        },
+        "data_collection_deny_evidence_expires_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Data Collection Deny Evidence Expires At"
+        },
+        "data_collection_deny_evidence_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Data Collection Deny Evidence Sha256"
+        },
+        "data_collection_deny_evidence_source": {
+          "$ref": "#/$defs/DataCollectionDenyEvidenceSource"
+        },
+        "data_collection_deny_request_policy_enforced": {
+          "title": "Data Collection Deny Request Policy Enforced",
+          "type": "boolean"
+        },
+        "discovery_evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Discovery Evidence Sha256",
+          "type": "string"
+        },
+        "endpoint_record_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Endpoint Record Sha256",
+          "type": "string"
+        },
+        "endpoint_slug": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Endpoint Slug"
+        },
+        "endpoint_snapshot": {
+          "$ref": "#/$defs/OpenRouterEndpointSnapshotEvidence"
+        },
+        "endpoint_snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Endpoint Snapshot Sha256",
+          "type": "string"
+        },
+        "endpoint_tag": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Endpoint Tag"
+        },
+        "exact_model_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+          "title": "Exact Model Id",
+          "type": "string"
+        },
+        "model_metadata_snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Model Metadata Snapshot Sha256",
+          "type": "string"
+        },
+        "model_supported_parameters": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 256,
+          "title": "Model Supported Parameters",
+          "type": "array"
+        },
+        "model_supported_reasoning_efforts": {
+          "anyOf": [
+            {
+              "items": {
+                "enum": [
+                  "none",
+                  "minimal",
+                  "low",
+                  "medium",
+                  "high",
+                  "xhigh",
+                  "max"
+                ],
+                "type": "string"
+              },
+              "maxItems": 7,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model Supported Reasoning Efforts"
+        },
+        "operational": {
+          "const": true,
+          "title": "Operational",
+          "type": "boolean"
+        },
+        "operational_status": {
+          "maxLength": 32,
+          "minLength": 1,
+          "title": "Operational Status",
+          "type": "string"
+        },
+        "output_capability_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Output Capability Sha256",
+          "type": "string"
+        },
+        "output_limit": {
+          "exclusiveMinimum": 0,
+          "maximum": 2147483647,
+          "title": "Output Limit",
+          "type": "integer"
+        },
+        "pricing_snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Pricing Snapshot Sha256",
+          "type": "string"
+        },
+        "provenance": {
+          "$ref": "#/$defs/OpenRouterDiscoveryRunProvenance"
+        },
+        "provider_name": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Provider Name",
+          "type": "string"
+        },
+        "reasoning_capability": {
+          "$ref": "#/$defs/OpenRouterReasoningCapabilityEvidence"
+        },
+        "reasoning_parameters": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 3,
+          "title": "Reasoning Parameters",
+          "type": "array"
+        },
+        "reasoning_supported": {
+          "title": "Reasoning Supported",
+          "type": "boolean"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "structured_output_mode": {
+          "$ref": "#/$defs/StructuredOutputMode"
+        },
+        "structured_output_parameters": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 3,
+          "title": "Structured Output Parameters",
+          "type": "array"
+        },
+        "structured_output_supported": {
+          "title": "Structured Output Supported",
+          "type": "boolean"
+        },
+        "supported_output_modes": {
+          "items": {
+            "$ref": "#/$defs/StructuredOutputMode"
+          },
+          "maxItems": 3,
+          "minItems": 1,
+          "title": "Supported Output Modes",
+          "type": "array"
+        },
+        "zdr_eligible": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Zdr Eligible"
+        }
+      },
+      "required": [
+        "schema_version",
+        "exact_model_id",
+        "canonical_slug",
+        "catalog_identity_binding_sha256",
+        "model_metadata_snapshot_sha256",
+        "catalog_context_size",
+        "catalog_provider_context_size",
+        "catalog_provider_context_size_source",
+        "catalog_output_limit",
+        "catalog_output_limit_source",
+        "model_supported_parameters",
+        "structured_output_parameters",
+        "supported_output_modes",
+        "structured_output_mode",
+        "reasoning_parameters",
+        "structured_output_supported",
+        "reasoning_supported",
+        "approved_provider_endpoint",
+        "provider_name",
+        "endpoint_tag",
+        "endpoint_slug",
+        "operational",
+        "operational_status",
+        "zdr_eligible",
+        "data_collection_deny_eligible",
+        "data_collection_deny_request_policy_enforced",
+        "data_collection_deny_evidence_source",
+        "context_size",
+        "output_limit",
+        "output_capability_sha256",
+        "endpoint_record_sha256",
+        "endpoint_snapshot_sha256",
+        "pricing_snapshot_sha256",
+        "endpoint_snapshot",
+        "reasoning_capability",
+        "provenance",
+        "discovery_evidence_sha256"
+      ],
+      "title": "OpenRouterModelDiscoveryEvidence",
+      "type": "object"
+    },
+    "OpenRouterModelDiscoveryPayload": {
+      "additionalProperties": false,
+      "description": "Canonical allowlisted model and endpoint discovery facts.",
+      "properties": {
+        "approved_provider_endpoint": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Approved Provider Endpoint",
+          "type": "string"
+        },
+        "canonical_slug": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+          "title": "Canonical Slug",
+          "type": "string"
+        },
+        "catalog_context_size": {
+          "exclusiveMinimum": 0,
+          "maximum": 2147483647,
+          "title": "Catalog Context Size",
+          "type": "integer"
+        },
+        "catalog_identity_binding_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Catalog Identity Binding Sha256",
+          "type": "string"
+        },
+        "catalog_output_limit": {
+          "exclusiveMinimum": 0,
+          "maximum": 2147483647,
+          "title": "Catalog Output Limit",
+          "type": "integer"
+        },
+        "catalog_output_limit_source": {
+          "enum": [
+            "metadata",
+            "provider_context"
+          ],
+          "title": "Catalog Output Limit Source",
+          "type": "string"
+        },
+        "catalog_provider_context_size": {
+          "exclusiveMinimum": 0,
+          "maximum": 2147483647,
+          "title": "Catalog Provider Context Size",
+          "type": "integer"
+        },
+        "catalog_provider_context_size_source": {
+          "enum": [
+            "metadata",
+            "catalog_context"
+          ],
+          "title": "Catalog Provider Context Size Source",
+          "type": "string"
+        },
+        "context_size": {
+          "exclusiveMinimum": 0,
+          "maximum": 2147483647,
+          "title": "Context Size",
+          "type": "integer"
+        },
+        "data_collection_deny_eligible": {
+          "title": "Data Collection Deny Eligible",
+          "type": "boolean"
+        },
+        "data_collection_deny_evidence_expires_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Data Collection Deny Evidence Expires At"
+        },
+        "data_collection_deny_evidence_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Data Collection Deny Evidence Sha256"
+        },
+        "data_collection_deny_evidence_source": {
+          "$ref": "#/$defs/DataCollectionDenyEvidenceSource"
+        },
+        "data_collection_deny_request_policy_enforced": {
+          "title": "Data Collection Deny Request Policy Enforced",
+          "type": "boolean"
+        },
+        "endpoint_record_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Endpoint Record Sha256",
+          "type": "string"
+        },
+        "endpoint_slug": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Endpoint Slug"
+        },
+        "endpoint_snapshot": {
+          "$ref": "#/$defs/OpenRouterEndpointSnapshotEvidence"
+        },
+        "endpoint_snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Endpoint Snapshot Sha256",
+          "type": "string"
+        },
+        "endpoint_tag": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Endpoint Tag"
+        },
+        "exact_model_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+          "title": "Exact Model Id",
+          "type": "string"
+        },
+        "model_metadata_snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Model Metadata Snapshot Sha256",
+          "type": "string"
+        },
+        "model_supported_parameters": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 256,
+          "title": "Model Supported Parameters",
+          "type": "array"
+        },
+        "model_supported_reasoning_efforts": {
+          "anyOf": [
+            {
+              "items": {
+                "enum": [
+                  "none",
+                  "minimal",
+                  "low",
+                  "medium",
+                  "high",
+                  "xhigh",
+                  "max"
+                ],
+                "type": "string"
+              },
+              "maxItems": 7,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model Supported Reasoning Efforts"
+        },
+        "operational": {
+          "const": true,
+          "title": "Operational",
+          "type": "boolean"
+        },
+        "operational_status": {
+          "maxLength": 32,
+          "minLength": 1,
+          "title": "Operational Status",
+          "type": "string"
+        },
+        "output_capability_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Output Capability Sha256",
+          "type": "string"
+        },
+        "output_limit": {
+          "exclusiveMinimum": 0,
+          "maximum": 2147483647,
+          "title": "Output Limit",
+          "type": "integer"
+        },
+        "pricing_snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Pricing Snapshot Sha256",
+          "type": "string"
+        },
+        "provider_name": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Provider Name",
+          "type": "string"
+        },
+        "reasoning_capability": {
+          "$ref": "#/$defs/OpenRouterReasoningCapabilityEvidence"
+        },
+        "reasoning_parameters": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 3,
+          "title": "Reasoning Parameters",
+          "type": "array"
+        },
+        "reasoning_supported": {
+          "title": "Reasoning Supported",
+          "type": "boolean"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "structured_output_mode": {
+          "$ref": "#/$defs/StructuredOutputMode"
+        },
+        "structured_output_parameters": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 3,
+          "title": "Structured Output Parameters",
+          "type": "array"
+        },
+        "structured_output_supported": {
+          "title": "Structured Output Supported",
+          "type": "boolean"
+        },
+        "supported_output_modes": {
+          "items": {
+            "$ref": "#/$defs/StructuredOutputMode"
+          },
+          "maxItems": 3,
+          "minItems": 1,
+          "title": "Supported Output Modes",
+          "type": "array"
+        },
+        "zdr_eligible": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Zdr Eligible"
+        }
+      },
+      "required": [
+        "schema_version",
+        "exact_model_id",
+        "canonical_slug",
+        "catalog_identity_binding_sha256",
+        "model_metadata_snapshot_sha256",
+        "catalog_context_size",
+        "catalog_provider_context_size",
+        "catalog_provider_context_size_source",
+        "catalog_output_limit",
+        "catalog_output_limit_source",
+        "model_supported_parameters",
+        "structured_output_parameters",
+        "supported_output_modes",
+        "structured_output_mode",
+        "reasoning_parameters",
+        "structured_output_supported",
+        "reasoning_supported",
+        "approved_provider_endpoint",
+        "provider_name",
+        "endpoint_tag",
+        "endpoint_slug",
+        "operational",
+        "operational_status",
+        "zdr_eligible",
+        "data_collection_deny_eligible",
+        "data_collection_deny_request_policy_enforced",
+        "data_collection_deny_evidence_source",
+        "context_size",
+        "output_limit",
+        "output_capability_sha256",
+        "endpoint_record_sha256",
+        "endpoint_snapshot_sha256",
+        "pricing_snapshot_sha256",
+        "endpoint_snapshot",
+        "reasoning_capability"
+      ],
+      "title": "OpenRouterModelDiscoveryPayload",
+      "type": "object"
+    },
+    "OpenRouterPricingOverrideTier": {
+      "additionalProperties": false,
+      "description": "One ordered, threshold-conditional partial endpoint price replacement.",
+      "properties": {
+        "min_prompt_tokens": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Min Prompt Tokens",
+          "type": "integer"
+        },
+        "prices": {
+          "additionalProperties": {
+            "maxLength": 49,
+            "minLength": 1,
+            "pattern": "^(?:0|[1-9][0-9]{0,11}|(?:0|[1-9][0-9]{0,11})\\.[0-9]{0,35}[1-9])$",
+            "type": "string"
+          },
+          "maxProperties": 64,
+          "minProperties": 1,
+          "propertyNames": {
+            "enum": [
+              "audio",
+              "completion",
+              "input_audio_cache",
+              "input_cache_read",
+              "input_cache_write",
+              "input_cache_write_1h",
+              "prompt"
+            ]
+          },
+          "title": "Prices",
+          "type": "object"
+        }
+      },
+      "required": [
+        "min_prompt_tokens",
+        "prices"
+      ],
+      "title": "OpenRouterPricingOverrideTier",
+      "type": "object"
+    },
+    "OpenRouterReasoningCapabilityEvidence": {
+      "additionalProperties": false,
+      "description": "Frozen endpoint reasoning capability without qualification authority.\n\nThe evidence records only explicit normalized provider metadata. ``None`` and\n``unknown`` values remain first-class states and are never promoted to\nsupported behavior.",
+      "properties": {
+        "capability_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Capability Sha256",
+          "type": "string"
+        },
+        "endpoint_metadata_snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Endpoint Metadata Snapshot Sha256",
+          "type": "string"
+        },
+        "endpoint_slug": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Endpoint Slug"
+        },
+        "endpoint_tag": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Endpoint Tag"
+        },
+        "exact_model_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}/[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$",
+          "title": "Exact Model Id",
+          "type": "string"
+        },
+        "max_output_tokens": {
+          "exclusiveMinimum": 0,
+          "maximum": 2147483647,
+          "title": "Max Output Tokens",
+          "type": "integer"
+        },
+        "max_reasoning_tokens": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "maximum": 65536,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Reasoning Tokens"
+        },
+        "model_metadata_snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Model Metadata Snapshot Sha256",
+          "type": "string"
+        },
+        "provider_endpoint": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$",
+          "title": "Provider Endpoint",
+          "type": "string"
+        },
+        "provider_name": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Provider Name",
+          "type": "string"
+        },
+        "reasoning_default_enabled": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Reasoning Default Enabled"
+        },
+        "reasoning_mandatory": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Reasoning Mandatory"
+        },
+        "reasoning_metadata_available": {
+          "title": "Reasoning Metadata Available",
+          "type": "boolean"
+        },
+        "reasoning_parameter_support": {
+          "enum": [
+            "supported",
+            "unsupported",
+            "unknown"
+          ],
+          "title": "Reasoning Parameter Support",
+          "type": "string"
+        },
+        "reasoning_supports_max_tokens": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Reasoning Supports Max Tokens"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "supported_reasoning_efforts": {
+          "anyOf": [
+            {
+              "items": {
+                "enum": [
+                  "none",
+                  "minimal",
+                  "low",
+                  "medium",
+                  "high",
+                  "xhigh",
+                  "max"
+                ],
+                "type": "string"
+              },
+              "maxItems": 7,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Supported Reasoning Efforts"
+        }
+      },
+      "required": [
+        "exact_model_id",
+        "provider_endpoint",
+        "provider_name",
+        "endpoint_metadata_snapshot_sha256",
+        "model_metadata_snapshot_sha256",
+        "reasoning_parameter_support",
+        "reasoning_metadata_available",
+        "reasoning_mandatory",
+        "reasoning_default_enabled",
+        "reasoning_supports_max_tokens",
+        "max_output_tokens",
+        "capability_sha256"
+      ],
+      "title": "OpenRouterReasoningCapabilityEvidence",
+      "type": "object"
+    },
+    "ProviderMaxPriceComponent": {
+      "enum": [
+        "completion",
+        "image",
+        "prompt",
+        "request"
+      ],
+      "title": "ProviderMaxPriceComponent",
+      "type": "string"
+    },
+    "ProviderPriceCap": {
+      "additionalProperties": false,
+      "properties": {
+        "component": {
+          "$ref": "#/$defs/ProviderMaxPriceComponent"
+        },
+        "value": {
+          "minimum": 0,
+          "title": "Value",
+          "type": "number"
+        }
+      },
+      "required": [
+        "component",
+        "value"
+      ],
+      "title": "ProviderPriceCap",
+      "type": "object"
+    },
+    "ProviderPriceCapAlgorithm": {
+      "enum": [
+        "MMAUDIT_OPENROUTER_MAX_PRICE_CEILING_V1",
+        "MMAUDIT_OPENROUTER_MAX_PRICE_REQUEST_UNITS_V2",
+        "MMAUDIT_OPENROUTER_MAX_PRICE_PROMPT_DOMINATED_CACHE_WRITE_V3"
+      ],
+      "title": "ProviderPriceCapAlgorithm",
+      "type": "string"
+    },
+    "RouteCostReservationPolicy": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "schema_version": {
+                "const": "1.0"
+              }
+            }
+          },
+          "then": {
+            "not": {
+              "required": [
+                "legacy_uncertain_allowance"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "schema_version": {
+                "const": "1.1"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "legacy_uncertain_allowance": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "legacy_uncertain_allowance"
+            ]
+          }
+        }
+      ],
+      "description": "An explicit cost-only relaxation, never inferred from endpoint metadata.",
+      "properties": {
+        "automatic_ceiling_increase": {
+          "const": false,
+          "default": false,
+          "title": "Automatic Ceiling Increase",
+          "type": "boolean"
+        },
+        "enforcement_basis": {
+          "const": "MMAUDIT_OPERATOR_RESERVE_THEN_RECONCILE_V1",
+          "default": "MMAUDIT_OPERATOR_RESERVE_THEN_RECONCILE_V1",
+          "title": "Enforcement Basis",
+          "type": "string"
+        },
+        "ledger_ceiling_usd_exact": {
+          "default": "250",
+          "maxLength": 49,
+          "pattern": "^(?:0|[1-9][0-9]{0,11})(?:\\.[0-9]{0,35}[1-9])?$",
+          "title": "Ledger Ceiling Usd Exact",
+          "type": "string"
+        },
+        "legacy_uncertain_allowance": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LegacyUncertainCostAllowance"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "maximum_request_bytes": {
+          "default": 4000000,
+          "maximum": 64000000,
+          "minimum": 1024,
+          "title": "Maximum Request Bytes",
+          "type": "integer"
+        },
+        "operator_decision_id": {
+          "const": "OP-COST-2026-09-09",
+          "default": "OP-COST-2026-09-09",
+          "title": "Operator Decision Id",
+          "type": "string"
+        },
+        "policy_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Policy Sha256",
+          "type": "string"
+        },
+        "provider_enforced_total_ceiling": {
+          "const": false,
+          "default": false,
+          "title": "Provider Enforced Total Ceiling",
+          "type": "boolean"
+        },
+        "require_actual_billed_cost": {
+          "const": true,
+          "default": true,
+          "title": "Require Actual Billed Cost",
+          "type": "boolean"
+        },
+        "reservation_overrun_blocks_new_work": {
+          "const": true,
+          "default": true,
+          "title": "Reservation Overrun Blocks New Work",
+          "type": "boolean"
+        },
+        "schema_version": {
+          "default": "1.0",
+          "enum": [
+            "1.0",
+            "1.1"
+          ],
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "uncappable_rate_multiplier": {
+          "const": "2",
+          "default": "2",
+          "title": "Uncappable Rate Multiplier",
+          "type": "string"
+        },
+        "unknown_billing_blocks_new_work": {
+          "const": true,
+          "default": true,
+          "title": "Unknown Billing Blocks New Work",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "policy_sha256"
+      ],
+      "title": "RouteCostReservationPolicy",
+      "type": "object"
+    },
+    "RoutePredicateDisposition": {
+      "enum": [
+        "SATISFIED",
+        "REJECTED",
+        "UNAVAILABLE"
+      ],
+      "title": "RoutePredicateDisposition",
+      "type": "string"
+    },
+    "RoutePredicateId": {
+      "description": "The complete, ordered route-admission predicate inventory.",
+      "enum": [
+        "EXACT_MODEL_IDENTITY",
+        "EXACT_PROVIDER_ENDPOINT",
+        "PROVIDER_DISPLAY_NAME_INJECTIVITY",
+        "OPERATIONAL_STATUS",
+        "ZDR_ELIGIBILITY",
+        "EMITS_MAX_TOKENS",
+        "EMITS_TEMPERATURE",
+        "EMITS_RESPONSE_FORMAT",
+        "EMITS_REASONING",
+        "MODEL_STRUCTURED_OUTPUT_MARKER",
+        "ENDPOINT_STRUCTURED_OUTPUT_MARKER",
+        "NATIVE_STRUCTURED_OUTPUT_MODE",
+        "SINGLETON_EXACT_ROUTE",
+        "AUTOMATIC_FALLBACK_DISABLED",
+        "REASONING_POLICY_BINDING",
+        "REASONING_CONTROL_BINDING",
+        "REASONING_CONTROL_VALUES",
+        "REASONING_EFFORT_SUPPORT",
+        "PROMPT_CAPACITY_ENVELOPE",
+        "OUTPUT_CAPACITY_ENVELOPE",
+        "CONTEXT_CAPACITY_ENVELOPE",
+        "METADATA_COMPLETION_CAPACITY",
+        "PRICE_CAP_EXPRESSIBILITY",
+        "PRICE_CAP_NO_WEAKER",
+        "FROZEN_LIVE_EQUIVALENCE",
+        "REGISTRY_SELECTION_HASH_CUSTODY",
+        "REGISTRY_CONSTRAINT_HASH_CUSTODY",
+        "EMPIRICAL_SCHEMA_CONFORMANCE",
+        "TOKEN_DETAIL_REPORTING_CONVENTION",
+        "RESERVATION_PRICING_AVAILABLE",
+        "PROVIDER_CAPPED_SUBSET_BOUND"
+      ],
+      "title": "RoutePredicateId",
+      "type": "string"
+    },
+    "RoutePredicateProfile": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "else": {
+            "not": {
+              "required": [
+                "operator_reservation_policy"
+              ]
+            },
+            "properties": {
+              "predicate_ids": {
+                "prefixItems": [
+                  {
+                    "const": "EXACT_MODEL_IDENTITY"
+                  },
+                  {
+                    "const": "EXACT_PROVIDER_ENDPOINT"
+                  },
+                  {
+                    "const": "PROVIDER_DISPLAY_NAME_INJECTIVITY"
+                  },
+                  {
+                    "const": "OPERATIONAL_STATUS"
+                  },
+                  {
+                    "const": "ZDR_ELIGIBILITY"
+                  },
+                  {
+                    "const": "EMITS_MAX_TOKENS"
+                  },
+                  {
+                    "const": "EMITS_TEMPERATURE"
+                  },
+                  {
+                    "const": "EMITS_RESPONSE_FORMAT"
+                  },
+                  {
+                    "const": "EMITS_REASONING"
+                  },
+                  {
+                    "const": "MODEL_STRUCTURED_OUTPUT_MARKER"
+                  },
+                  {
+                    "const": "ENDPOINT_STRUCTURED_OUTPUT_MARKER"
+                  },
+                  {
+                    "const": "NATIVE_STRUCTURED_OUTPUT_MODE"
+                  },
+                  {
+                    "const": "SINGLETON_EXACT_ROUTE"
+                  },
+                  {
+                    "const": "AUTOMATIC_FALLBACK_DISABLED"
+                  },
+                  {
+                    "const": "REASONING_POLICY_BINDING"
+                  },
+                  {
+                    "const": "REASONING_CONTROL_BINDING"
+                  },
+                  {
+                    "const": "REASONING_CONTROL_VALUES"
+                  },
+                  {
+                    "const": "REASONING_EFFORT_SUPPORT"
+                  },
+                  {
+                    "const": "PROMPT_CAPACITY_ENVELOPE"
+                  },
+                  {
+                    "const": "OUTPUT_CAPACITY_ENVELOPE"
+                  },
+                  {
+                    "const": "CONTEXT_CAPACITY_ENVELOPE"
+                  },
+                  {
+                    "const": "METADATA_COMPLETION_CAPACITY"
+                  },
+                  {
+                    "const": "PRICE_CAP_EXPRESSIBILITY"
+                  },
+                  {
+                    "const": "PRICE_CAP_NO_WEAKER"
+                  },
+                  {
+                    "const": "FROZEN_LIVE_EQUIVALENCE"
+                  },
+                  {
+                    "const": "REGISTRY_SELECTION_HASH_CUSTODY"
+                  },
+                  {
+                    "const": "REGISTRY_CONSTRAINT_HASH_CUSTODY"
+                  },
+                  {
+                    "const": "EMPIRICAL_SCHEMA_CONFORMANCE"
+                  },
+                  {
+                    "const": "TOKEN_DETAIL_REPORTING_CONVENTION"
+                  }
+                ]
+              }
+            }
+          },
+          "if": {
+            "properties": {
+              "schema_version": {
+                "const": "1.3"
+              }
+            },
+            "required": [
+              "schema_version"
+            ]
+          },
+          "then": {
+            "not": {
+              "required": [
+                "price_component_unit_envelopes"
+              ]
+            },
+            "properties": {
+              "operator_reservation_policy": {
+                "type": "object"
+              },
+              "predicate_ids": {
+                "prefixItems": [
+                  {
+                    "const": "EXACT_MODEL_IDENTITY"
+                  },
+                  {
+                    "const": "EXACT_PROVIDER_ENDPOINT"
+                  },
+                  {
+                    "const": "PROVIDER_DISPLAY_NAME_INJECTIVITY"
+                  },
+                  {
+                    "const": "OPERATIONAL_STATUS"
+                  },
+                  {
+                    "const": "ZDR_ELIGIBILITY"
+                  },
+                  {
+                    "const": "EMITS_MAX_TOKENS"
+                  },
+                  {
+                    "const": "EMITS_TEMPERATURE"
+                  },
+                  {
+                    "const": "EMITS_RESPONSE_FORMAT"
+                  },
+                  {
+                    "const": "EMITS_REASONING"
+                  },
+                  {
+                    "const": "MODEL_STRUCTURED_OUTPUT_MARKER"
+                  },
+                  {
+                    "const": "ENDPOINT_STRUCTURED_OUTPUT_MARKER"
+                  },
+                  {
+                    "const": "NATIVE_STRUCTURED_OUTPUT_MODE"
+                  },
+                  {
+                    "const": "SINGLETON_EXACT_ROUTE"
+                  },
+                  {
+                    "const": "AUTOMATIC_FALLBACK_DISABLED"
+                  },
+                  {
+                    "const": "REASONING_POLICY_BINDING"
+                  },
+                  {
+                    "const": "REASONING_CONTROL_BINDING"
+                  },
+                  {
+                    "const": "REASONING_CONTROL_VALUES"
+                  },
+                  {
+                    "const": "REASONING_EFFORT_SUPPORT"
+                  },
+                  {
+                    "const": "PROMPT_CAPACITY_ENVELOPE"
+                  },
+                  {
+                    "const": "OUTPUT_CAPACITY_ENVELOPE"
+                  },
+                  {
+                    "const": "CONTEXT_CAPACITY_ENVELOPE"
+                  },
+                  {
+                    "const": "METADATA_COMPLETION_CAPACITY"
+                  },
+                  {
+                    "const": "RESERVATION_PRICING_AVAILABLE"
+                  },
+                  {
+                    "const": "PROVIDER_CAPPED_SUBSET_BOUND"
+                  },
+                  {
+                    "const": "FROZEN_LIVE_EQUIVALENCE"
+                  },
+                  {
+                    "const": "REGISTRY_SELECTION_HASH_CUSTODY"
+                  },
+                  {
+                    "const": "REGISTRY_CONSTRAINT_HASH_CUSTODY"
+                  },
+                  {
+                    "const": "EMPIRICAL_SCHEMA_CONFORMANCE"
+                  },
+                  {
+                    "const": "TOKEN_DETAIL_REPORTING_CONVENTION"
+                  }
+                ]
+              },
+              "price_cap_algorithm": {
+                "const": "MMAUDIT_OPENROUTER_MAX_PRICE_CEILING_V1"
+              }
+            },
+            "required": [
+              "operator_reservation_policy"
+            ]
+          }
+        }
+      ],
+      "description": "Shared requirements for every exact AUTHRUNNER route.",
+      "properties": {
+        "accepted_operational_status": {
+          "const": "0",
+          "title": "Accepted Operational Status",
+          "type": "string"
+        },
+        "allow_automatic_fallbacks": {
+          "const": false,
+          "title": "Allow Automatic Fallbacks",
+          "type": "boolean"
+        },
+        "emitted_request_parameters": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 4,
+          "minItems": 4,
+          "title": "Emitted Request Parameters",
+          "type": "array"
+        },
+        "empirical_schema_conformance_disposition": {
+          "$ref": "#/$defs/RoutePredicateDisposition"
+        },
+        "minimum_context_tokens": {
+          "exclusiveMinimum": 0,
+          "maximum": 2147483647,
+          "title": "Minimum Context Tokens",
+          "type": "integer"
+        },
+        "minimum_prompt_tokens": {
+          "exclusiveMinimum": 0,
+          "maximum": 2147483647,
+          "title": "Minimum Prompt Tokens",
+          "type": "integer"
+        },
+        "native_capability_marker": {
+          "const": "structured_outputs",
+          "title": "Native Capability Marker",
+          "type": "string"
+        },
+        "operator_reservation_policy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RouteCostReservationPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "predicate_ids": {
+          "items": {
+            "$ref": "#/$defs/RoutePredicateId"
+          },
+          "maxItems": 29,
+          "minItems": 29,
+          "title": "Predicate Ids",
+          "type": "array"
+        },
+        "price_cap_algorithm": {
+          "$ref": "#/$defs/ProviderPriceCapAlgorithm"
+        },
+        "price_component_unit_envelopes": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/RoutePriceComponentUnitEnvelope"
+              },
+              "maxItems": 8,
+              "minItems": 1,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Price Component Unit Envelopes"
+        },
+        "profile_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Profile Sha256",
+          "type": "string"
+        },
+        "reasoning_control_profile_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Reasoning Control Profile Sha256",
+          "type": "string"
+        },
+        "reasoning_effort": {
+          "anyOf": [
+            {
+              "enum": [
+                "none",
+                "minimal",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Reasoning Effort"
+        },
+        "reasoning_exclude": {
+          "title": "Reasoning Exclude",
+          "type": "boolean"
+        },
+        "reasoning_max_tokens": {
+          "anyOf": [
+            {
+              "maximum": 65536,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reasoning Max Tokens"
+        },
+        "reasoning_mode": {
+          "enum": [
+            "disabled",
+            "default",
+            "effort",
+            "max_tokens"
+          ],
+          "title": "Reasoning Mode",
+          "type": "string"
+        },
+        "reasoning_policy_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Reasoning Policy Sha256",
+          "type": "string"
+        },
+        "reasoning_role_binding_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Reasoning Role Binding Sha256",
+          "type": "string"
+        },
+        "reasoning_role_profile_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Reasoning Role Profile Sha256",
+          "type": "string"
+        },
+        "require_singleton_route": {
+          "const": true,
+          "title": "Require Singleton Route",
+          "type": "boolean"
+        },
+        "require_zdr": {
+          "const": true,
+          "title": "Require Zdr",
+          "type": "boolean"
+        },
+        "required_completion_limit_source": {
+          "const": "metadata",
+          "title": "Required Completion Limit Source",
+          "type": "string"
+        },
+        "required_completion_tokens": {
+          "exclusiveMinimum": 0,
+          "maximum": 131072,
+          "title": "Required Completion Tokens",
+          "type": "integer"
+        },
+        "required_output_mode": {
+          "const": "NATIVE_JSON_SCHEMA",
+          "title": "Required Output Mode",
+          "type": "string"
+        },
+        "required_output_tokens": {
+          "exclusiveMinimum": 0,
+          "maximum": 65536,
+          "title": "Required Output Tokens",
+          "type": "integer"
+        },
+        "reserved_reasoning_tokens": {
+          "exclusiveMinimum": 0,
+          "maximum": 65536,
+          "title": "Reserved Reasoning Tokens",
+          "type": "integer"
+        },
+        "schema_version": {
+          "default": "1.0",
+          "enum": [
+            "1.0",
+            "1.1",
+            "1.2",
+            "1.3"
+          ],
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "token_detail_convention_disposition": {
+          "$ref": "#/$defs/RoutePredicateDisposition"
+        }
+      },
+      "required": [
+        "predicate_ids",
+        "emitted_request_parameters",
+        "native_capability_marker",
+        "required_output_mode",
+        "accepted_operational_status",
+        "require_zdr",
+        "require_singleton_route",
+        "allow_automatic_fallbacks",
+        "reasoning_policy_sha256",
+        "reasoning_role_profile_sha256",
+        "reasoning_role_binding_sha256",
+        "reasoning_control_profile_sha256",
+        "reasoning_mode",
+        "reasoning_effort",
+        "reasoning_exclude",
+        "reserved_reasoning_tokens",
+        "minimum_prompt_tokens",
+        "required_output_tokens",
+        "required_completion_tokens",
+        "minimum_context_tokens",
+        "required_completion_limit_source",
+        "price_cap_algorithm",
+        "empirical_schema_conformance_disposition",
+        "token_detail_convention_disposition",
+        "profile_sha256"
+      ],
+      "title": "RoutePredicateProfile",
+      "type": "object"
+    },
+    "RoutePredicateReason": {
+      "description": "Closed, value-free diagnostics; provider-controlled values are never copied.",
+      "enum": [
+        "SATISFIED",
+        "MODEL_IDENTITY_MISMATCH",
+        "PROVIDER_ENDPOINT_MISMATCH",
+        "DISPLAY_INVENTORY_INCOMPLETE",
+        "DISPLAY_NAME_NOT_INJECTIVE",
+        "OPERATIONAL_STATUS_NOT_ACCEPTED",
+        "ZDR_NOT_ELIGIBLE",
+        "MAX_TOKENS_NOT_EMITTED",
+        "TEMPERATURE_NOT_EMITTED",
+        "RESPONSE_FORMAT_NOT_EMITTED",
+        "REASONING_NOT_EMITTED",
+        "EMITTED_PARAMETER_INVENTORY_MISMATCH",
+        "EMITTED_PARAMETER_SUPPORT_MISMATCH",
+        "MODEL_NATIVE_MARKER_MISSING",
+        "ENDPOINT_NATIVE_MARKER_MISSING",
+        "NATIVE_OUTPUT_MODE_MISSING",
+        "ROUTE_NOT_SINGLETON",
+        "AUTOMATIC_FALLBACK_ENABLED",
+        "REASONING_POLICY_HASH_MISMATCH",
+        "REASONING_CONTROL_HASH_MISMATCH",
+        "REASONING_CONTROL_MISMATCH",
+        "REASONING_EFFORT_INVENTORY_UNAVAILABLE",
+        "REASONING_EFFORT_INVENTORY_EMPTY",
+        "REASONING_EFFORT_INVENTORY_CONTRADICTORY",
+        "REASONING_EFFORT_UNSUPPORTED",
+        "PROMPT_CAPACITY_INSUFFICIENT",
+        "OUTPUT_CAPACITY_INSUFFICIENT",
+        "RUNTIME_OUTPUT_TOKENS_MISMATCH",
+        "CONTEXT_CAPACITY_INSUFFICIENT",
+        "COMPLETION_CAPACITY_NOT_METADATA",
+        "PRICE_CAP_NOT_EXPRESSIBLE",
+        "PRICE_CAP_PROOF_UNAVAILABLE",
+        "PRICE_CAP_MISSING",
+        "PRICE_CAP_WEAKER_THAN_ROUTE",
+        "RESERVATION_PRICING_UNAVAILABLE",
+        "PROVIDER_CAPPED_SUBSET_MISSING",
+        "PROVIDER_CAPPED_SUBSET_MISMATCH",
+        "LIVE_EQUIVALENCE_UNAVAILABLE",
+        "LIVE_EQUIVALENCE_MISMATCH",
+        "REGISTRY_SELECTION_CUSTODY_UNAVAILABLE",
+        "REGISTRY_SELECTION_CUSTODY_MISMATCH",
+        "REGISTRY_CONSTRAINT_CUSTODY_UNAVAILABLE",
+        "REGISTRY_CONSTRAINT_CUSTODY_MISMATCH",
+        "EMPIRICAL_SCHEMA_EVIDENCE_UNAVAILABLE",
+        "TOKEN_DETAIL_CONVENTION_UNAVAILABLE",
+        "RUNTIME_EVIDENCE_INVALID",
+        "RUNTIME_EVIDENCE_BINDING_MISMATCH",
+        "RUNTIME_EVIDENCE_STALE"
+      ],
+      "title": "RoutePredicateReason",
+      "type": "string"
+    },
+    "RoutePredicateReport": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "else": {
+            "properties": {
+              "results": {
+                "prefixItems": [
+                  {
+                    "properties": {
+                      "predicate_id": {
+                        "const": "EXACT_MODEL_IDENTITY"
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "predicate_id": {
+                        "const": "EXACT_PROVIDER_ENDPOINT"
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "predicate_id": {
+                        "const": "PROVIDER_DISPLAY_NAME_INJECTIVITY"
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "predicate_id": {
+                        "const": "OPERATIONAL_STATUS"
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "predicate_id": {
+                        "const": "ZDR_ELIGIBILITY"
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "predicate_id": {
+                        "const": "EMITS_MAX_TOKENS"
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "predicate_id": {
+                        "const": "EMITS_TEMPERATURE"
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "predicate_id": {
+                        "const": "EMITS_RESPONSE_FORMAT"
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "predicate_id": {
+                        "const": "EMITS_REASONING"
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "predicate_id": {
+                        "const": "MODEL_STRUCTURED_OUTPUT_MARKER"
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "predicate_id": {
+                        "const": "ENDPOINT_STRUCTURED_OUTPUT_MARKER"
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "predicate_id": {
+                        "const": "NATIVE_STRUCTURED_OUTPUT_MODE"
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "predicate_id": {
+                        "const": "SINGLETON_EXACT_ROUTE"
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "predicate_id": {
+                        "const": "AUTOMATIC_FALLBACK_DISABLED"
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "predicate_id": {
+                        "const": "REASONING_POLICY_BINDING"
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "predicate_id": {
+                        "const": "REASONING_CONTROL_BINDING"
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "predicate_id": {
+                        "const": "REASONING_CONTROL_VALUES"
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "predicate_id": {
+                        "const": "REASONING_EFFORT_SUPPORT"
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "predicate_id": {
+                        "const": "PROMPT_CAPACITY_ENVELOPE"
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "predicate_id": {
+                        "const": "OUTPUT_CAPACITY_ENVELOPE"
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "predicate_id": {
+                        "const": "CONTEXT_CAPACITY_ENVELOPE"
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "predicate_id": {
+                        "const": "METADATA_COMPLETION_CAPACITY"
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "predicate_id": {
+                        "const": "RESERVATION_PRICING_AVAILABLE"
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "predicate_id": {
+                        "const": "PROVIDER_CAPPED_SUBSET_BOUND"
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "predicate_id": {
+                        "const": "FROZEN_LIVE_EQUIVALENCE"
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "predicate_id": {
+                        "const": "REGISTRY_SELECTION_HASH_CUSTODY"
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "predicate_id": {
+                        "const": "REGISTRY_CONSTRAINT_HASH_CUSTODY"
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "predicate_id": {
+                        "const": "EMPIRICAL_SCHEMA_CONFORMANCE"
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "predicate_id": {
+                        "const": "TOKEN_DETAIL_REPORTING_CONVENTION"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "if": {
+            "properties": {
+              "schema_version": {
+                "const": "1.0"
+              }
+            },
+            "required": [
+              "schema_version"
+            ]
+          },
+          "then": {
+            "properties": {
+              "results": {
+                "prefixItems": [
+                  {
+                    "properties": {
+                      "predicate_id": {
+                        "const": "EXACT_MODEL_IDENTITY"
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "predicate_id": {
+                        "const": "EXACT_PROVIDER_ENDPOINT"
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "predicate_id": {
+                        "const": "PROVIDER_DISPLAY_NAME_INJECTIVITY"
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "predicate_id": {
+                        "const": "OPERATIONAL_STATUS"
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "predicate_id": {
+                        "const": "ZDR_ELIGIBILITY"
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "predicate_id": {
+                        "const": "EMITS_MAX_TOKENS"
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "predicate_id": {
+                        "const": "EMITS_TEMPERATURE"
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "predicate_id": {
+                        "const": "EMITS_RESPONSE_FORMAT"
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "predicate_id": {
+                        "const": "EMITS_REASONING"
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "predicate_id": {
+                        "const": "MODEL_STRUCTURED_OUTPUT_MARKER"
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "predicate_id": {
+                        "const": "ENDPOINT_STRUCTURED_OUTPUT_MARKER"
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "predicate_id": {
+                        "const": "NATIVE_STRUCTURED_OUTPUT_MODE"
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "predicate_id": {
+                        "const": "SINGLETON_EXACT_ROUTE"
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "predicate_id": {
+                        "const": "AUTOMATIC_FALLBACK_DISABLED"
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "predicate_id": {
+                        "const": "REASONING_POLICY_BINDING"
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "predicate_id": {
+                        "const": "REASONING_CONTROL_BINDING"
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "predicate_id": {
+                        "const": "REASONING_CONTROL_VALUES"
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "predicate_id": {
+                        "const": "REASONING_EFFORT_SUPPORT"
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "predicate_id": {
+                        "const": "PROMPT_CAPACITY_ENVELOPE"
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "predicate_id": {
+                        "const": "OUTPUT_CAPACITY_ENVELOPE"
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "predicate_id": {
+                        "const": "CONTEXT_CAPACITY_ENVELOPE"
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "predicate_id": {
+                        "const": "METADATA_COMPLETION_CAPACITY"
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "predicate_id": {
+                        "const": "PRICE_CAP_EXPRESSIBILITY"
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "predicate_id": {
+                        "const": "PRICE_CAP_NO_WEAKER"
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "predicate_id": {
+                        "const": "FROZEN_LIVE_EQUIVALENCE"
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "predicate_id": {
+                        "const": "REGISTRY_SELECTION_HASH_CUSTODY"
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "predicate_id": {
+                        "const": "REGISTRY_CONSTRAINT_HASH_CUSTODY"
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "predicate_id": {
+                        "const": "EMPIRICAL_SCHEMA_CONFORMANCE"
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "predicate_id": {
+                        "const": "TOKEN_DETAIL_REPORTING_CONVENTION"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      ],
+      "properties": {
+        "constraint_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Constraint Sha256",
+          "type": "string"
+        },
+        "facts_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Facts Sha256",
+          "type": "string"
+        },
+        "profile_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Profile Sha256",
+          "type": "string"
+        },
+        "report_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Report Sha256",
+          "type": "string"
+        },
+        "results": {
+          "items": {
+            "$ref": "#/$defs/RoutePredicateResult"
+          },
+          "maxItems": 29,
+          "minItems": 29,
+          "title": "Results",
+          "type": "array"
+        },
+        "schema_version": {
+          "default": "1.0",
+          "enum": [
+            "1.0",
+            "1.1"
+          ],
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "profile_sha256",
+        "constraint_sha256",
+        "facts_sha256",
+        "results",
+        "report_sha256"
+      ],
+      "title": "RoutePredicateReport",
+      "type": "object"
+    },
+    "RoutePredicateResult": {
+      "additionalProperties": false,
+      "properties": {
+        "disposition": {
+          "$ref": "#/$defs/RoutePredicateDisposition"
+        },
+        "predicate_id": {
+          "$ref": "#/$defs/RoutePredicateId"
+        },
+        "reason": {
+          "$ref": "#/$defs/RoutePredicateReason"
+        }
+      },
+      "required": [
+        "predicate_id",
+        "disposition",
+        "reason"
+      ],
+      "title": "RoutePredicateResult",
+      "type": "object"
+    },
+    "RoutePriceComponent": {
+      "enum": [
+        "completion",
+        "image",
+        "input_cache_read",
+        "input_cache_write",
+        "internal_reasoning",
+        "prompt",
+        "request",
+        "web_search"
+      ],
+      "title": "RoutePriceComponent",
+      "type": "string"
+    },
+    "RoutePriceComponentUnitEnvelope": {
+      "additionalProperties": false,
+      "description": "Self-hashed proof that one unsupported price component has zero reachable units.",
+      "properties": {
+        "component": {
+          "const": "web_search",
+          "title": "Component",
+          "type": "string"
+        },
+        "emitted_request_parameters": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 4,
+          "minItems": 4,
+          "title": "Emitted Request Parameters",
+          "type": "array"
+        },
+        "enforcement_method": {
+          "const": "MMAUDIT_EXACT_REQUEST_FIELD_ABSENCE_V1",
+          "title": "Enforcement Method",
+          "type": "string"
+        },
+        "envelope_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Envelope Sha256",
+          "type": "string"
+        },
+        "maximum_cost_usd_exact": {
+          "const": "0",
+          "title": "Maximum Cost Usd Exact",
+          "type": "string"
+        },
+        "maximum_units": {
+          "const": 0,
+          "title": "Maximum Units",
+          "type": "integer"
+        },
+        "prohibited_request_fields": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 5,
+          "minItems": 5,
+          "title": "Prohibited Request Fields",
+          "type": "array"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "component",
+        "maximum_units",
+        "maximum_cost_usd_exact",
+        "enforcement_method",
+        "emitted_request_parameters",
+        "prohibited_request_fields",
+        "envelope_sha256"
+      ],
+      "title": "RoutePriceComponentUnitEnvelope",
+      "type": "object"
+    },
+    "StructuredOutputMode": {
+      "description": "One exact request/validation protocol for model output.",
+      "enum": [
+        "NATIVE_JSON_SCHEMA",
+        "JSON_OBJECT",
+        "VALIDATED_TEXT_JSON"
+      ],
+      "title": "StructuredOutputMode",
+      "type": "string"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/development_tree_plan_policy.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Scheduling inputs; the embedded cost and route policies retain their existing meaning.",
+  "properties": {
+    "cost_policy": {
+      "$ref": "#/$defs/DevelopmentCostPolicy"
+    },
+    "local_processing_allowance_seconds": {
+      "default": 30,
+      "maximum": 1800,
+      "minimum": 1,
+      "title": "Local Processing Allowance Seconds",
+      "type": "integer"
+    },
+    "maximum_completion_tokens": {
+      "default": [
+        4096,
+        4096,
+        4096
+      ],
+      "maxItems": 3,
+      "minItems": 3,
+      "prefixItems": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "integer"
+        },
+        {
+          "type": "integer"
+        }
+      ],
+      "title": "Maximum Completion Tokens",
+      "type": "array"
+    },
+    "maximum_manifest_seconds": {
+      "default": 600,
+      "maximum": 1800,
+      "minimum": 1,
+      "title": "Maximum Manifest Seconds",
+      "type": "integer"
+    },
+    "maximum_requests": {
+      "default": 768,
+      "maximum": 768,
+      "minimum": 1,
+      "title": "Maximum Requests",
+      "type": "integer"
+    },
+    "maximum_total_seconds": {
+      "maximum": 460800,
+      "minimum": 1,
+      "title": "Maximum Total Seconds",
+      "type": "integer"
+    },
+    "role_metadata": {
+      "items": {
+        "$ref": "#/$defs/DevelopmentReviewMetadata"
+      },
+      "maxItems": 3,
+      "minItems": 3,
+      "title": "Role Metadata",
+      "type": "array"
+    },
+    "run_id": {
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$",
+      "title": "Run Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "run_id",
+    "cost_policy",
+    "role_metadata",
+    "maximum_total_seconds"
+  ],
+  "title": "DevelopmentTreePlanPolicy",
+  "type": "object"
+}

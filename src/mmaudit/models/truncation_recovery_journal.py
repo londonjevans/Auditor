@@ -46,6 +46,7 @@ from mmaudit.models.truncation_recovery import (
     TRUNCATION_RECOVERY_MAX_CHILD_COMPLETION_TOKENS,
     TRUNCATION_RECOVERY_MAX_CHILD_PROVIDER_ATTEMPTS,
     TRUNCATION_RECOVERY_MAX_CHILD_REQUESTS,
+    TRUNCATION_RECOVERY_MAX_DEPTH,
     TruncationRecoveryChannel,
     TruncationRecoveryChannelBinding,
     TruncationRecoveryChannelState,
@@ -701,7 +702,7 @@ class _SchedulerTruncationRecoveryEntry(_NonAuthorizingRecoveryJournalModel):
 class SchedulerTruncationRecoveryFamilyRoot(_SchedulerTruncationRecoveryEntry):
     """One frozen root or nested recovery plan kept outside pass task inventory."""
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.0", "1.1"] = "1.0"
     entry_kind: Literal[SchedulerTruncationRecoveryEntryKind.FAMILY_ROOT] = (
         SchedulerTruncationRecoveryEntryKind.FAMILY_ROOT
     )
@@ -751,6 +752,7 @@ class SchedulerTruncationRecoveryFamilyRoot(_SchedulerTruncationRecoveryEntry):
         request_limit_count_before_family: int,
         entry_index: int,
         previous_entry_sha256: str | None,
+        schema_version: Literal["1.0", "1.1"] = "1.0",
     ) -> SchedulerTruncationRecoveryFamilyRoot:
         binding = SchedulerTruncationRecoveryRequestLimitBinding.model_validate(
             request_limit_binding.model_dump(mode="python"),
@@ -782,6 +784,7 @@ class SchedulerTruncationRecoveryFamilyRoot(_SchedulerTruncationRecoveryEntry):
                 entry_index=entry_index,
                 previous_entry_sha256=previous_entry_sha256,
             ),
+            "schema_version": schema_version,
             "request_limit_binding": binding,
             "family_index": family_index,
             "parent_kind": parent_kind,
@@ -798,7 +801,11 @@ class SchedulerTruncationRecoveryFamilyRoot(_SchedulerTruncationRecoveryEntry):
         }
         family_id = "scheduler-recovery-family-" + _canonical_sha256(
             {
-                "domain": "mmaudit.scheduler.truncation-recovery-family.v1",
+                "domain": (
+                    "mmaudit.scheduler.truncation-recovery-coverage-family.v1"
+                    if schema_version == "1.1"
+                    else "mmaudit.scheduler.truncation-recovery-family.v1"
+                ),
                 "campaign_id": plan.parent.campaign_id,
                 "request_limit_binding_sha256": binding.binding_sha256,
                 "parent_task_id": plan.parent.parent_task_id,
@@ -814,13 +821,28 @@ class SchedulerTruncationRecoveryFamilyRoot(_SchedulerTruncationRecoveryEntry):
 
     @model_validator(mode="after")
     def family_root_is_projection_bound_and_exact(self) -> Self:
+        if self.schema_version == "1.1" and (
+            self.parent_kind is not SchedulerTruncationRecoveryParentKind.RECOVERY_CHILD
+            or self.truncation_projection.findings_state
+            not in {CandidateReviewChannelState.OPEN, CandidateReviewChannelState.INVALID}
+            or self.recovery_plan.irreducible_channels != (TruncationRecoveryChannel.FINDINGS,)
+            or any(
+                child.channel is not TruncationRecoveryChannel.COVERAGE
+                for child in self.recovery_plan.children
+            )
+        ):
+            raise ValueError("v1.1 nested coverage requires exact unresolved findings liabilities")
         rebuilt_parent = rebuild_truncation_recovery_parent_from_projection(
             claimed_parent=self.recovery_plan.parent,
             projection=self.truncation_projection,
         )
         expected_family_id = "scheduler-recovery-family-" + _canonical_sha256(
             {
-                "domain": "mmaudit.scheduler.truncation-recovery-family.v1",
+                "domain": (
+                    "mmaudit.scheduler.truncation-recovery-coverage-family.v1"
+                    if self.schema_version == "1.1"
+                    else "mmaudit.scheduler.truncation-recovery-family.v1"
+                ),
                 "campaign_id": self.recovery_plan.parent.campaign_id,
                 "request_limit_binding_sha256": (self.request_limit_binding.binding_sha256),
                 "parent_task_id": self.recovery_plan.parent.parent_task_id,
@@ -2742,7 +2764,7 @@ class SchedulerTruncationRecoveryChildResult(_SchedulerTruncationRecoveryEntry):
 class SchedulerTruncationRecoveryFamilyClosure(_SchedulerTruncationRecoveryEntry):
     """Recursive structural closure that deliberately grants no completion authority."""
 
-    schema_version: Literal["1.0", "1.1", "1.2"] = "1.0"
+    schema_version: Literal["1.0", "1.1", "1.2", "1.3"] = "1.0"
     entry_kind: Literal[SchedulerTruncationRecoveryEntryKind.FAMILY_CLOSED] = (
         SchedulerTruncationRecoveryEntryKind.FAMILY_CLOSED
     )
@@ -2770,6 +2792,7 @@ class SchedulerTruncationRecoveryFamilyClosure(_SchedulerTruncationRecoveryEntry
         covered_unfinished_surface_ids: Iterable[str],
         entry_index: int,
         previous_entry_sha256: str | None,
+        recursive_schema_version: Literal["1.2", "1.3"] = "1.2",
     ) -> SchedulerTruncationRecoveryFamilyClosure:
         result_hashes = _bounded_tuple(
             child_result_sha256s,
@@ -2785,8 +2808,8 @@ class SchedulerTruncationRecoveryFamilyClosure(_SchedulerTruncationRecoveryEntry
             covered_unfinished_surface_ids,
             label="closure surfaces",
         )
-        schema_version: Literal["1.0", "1.1", "1.2"] = (
-            "1.2"
+        schema_version: Literal["1.0", "1.1", "1.2", "1.3"] = (
+            recursive_schema_version
             if closure_status
             is SchedulerTruncationRecoveryClosureStatus.RECURSIVE_STRUCTURALLY_CLOSED_NONAUTHORIZING
             else "1.1"
@@ -2815,7 +2838,9 @@ class SchedulerTruncationRecoveryFamilyClosure(_SchedulerTruncationRecoveryEntry
         closure_id = "scheduler-recovery-closure-" + _canonical_sha256(
             {
                 "domain": (
-                    "mmaudit.scheduler.truncation-recovery-closure.v2"
+                    "mmaudit.scheduler.truncation-recovery-closure.v3"
+                    if schema_version == "1.3"
+                    else "mmaudit.scheduler.truncation-recovery-closure.v2"
                     if schema_version == "1.2"
                     else "mmaudit.scheduler.truncation-recovery-closure.v1"
                 ),
@@ -2852,6 +2877,14 @@ class SchedulerTruncationRecoveryFamilyClosure(_SchedulerTruncationRecoveryEntry
             or not self.covered_unfinished_surface_ids
         ):
             raise ValueError("v1.2 recovery closure requires one exact nested typed closure")
+        if self.schema_version == "1.3" and (
+            self.closure_status
+            is not SchedulerTruncationRecoveryClosureStatus.RECURSIVE_STRUCTURALLY_CLOSED_NONAUTHORIZING
+            or len(self.child_result_sha256s) != 2
+            or not 1 <= len(self.nested_family_closure_sha256s) <= 2
+            or not self.covered_unfinished_surface_ids
+        ):
+            raise ValueError("v1.3 recovery closure requires exact bounded nested typed closures")
         if len(self.child_result_sha256s) != len(set(self.child_result_sha256s)) or any(
             re.fullmatch(_SHA256_PATTERN, item) is None for item in self.child_result_sha256s
         ):
@@ -2870,7 +2903,9 @@ class SchedulerTruncationRecoveryFamilyClosure(_SchedulerTruncationRecoveryEntry
         expected_id = "scheduler-recovery-closure-" + _canonical_sha256(
             {
                 "domain": (
-                    "mmaudit.scheduler.truncation-recovery-closure.v2"
+                    "mmaudit.scheduler.truncation-recovery-closure.v3"
+                    if self.schema_version == "1.3"
+                    else "mmaudit.scheduler.truncation-recovery-closure.v2"
                     if self.schema_version == "1.2"
                     else "mmaudit.scheduler.truncation-recovery-closure.v1"
                 ),
@@ -3331,10 +3366,67 @@ class SchedulerRecoveredCandidateReviewOutput(_NonAuthorizingRecoveryJournalMode
         return self
 
 
+class SchedulerTruncationRecoveryFullTreeBinding(_NonAuthorizingRecoveryJournalModel):
+    """Bounded full-tree identities; only original journal replay proves their ancestry."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    family_root_sha256s: tuple[str, ...] = Field(
+        min_length=2, max_length=SCHEDULER_TRUNCATION_RECOVERY_MAX_FAMILIES
+    )
+    family_closure_sha256s: tuple[str, ...] = Field(
+        min_length=2, max_length=SCHEDULER_TRUNCATION_RECOVERY_MAX_FAMILIES
+    )
+    child_result_sha256s: tuple[str, ...] = Field(
+        min_length=4, max_length=TRUNCATION_RECOVERY_MAX_CHILD_REQUESTS
+    )
+    bridge_result_sha256s: tuple[str, ...] = Field(
+        min_length=1, max_length=SCHEDULER_TRUNCATION_RECOVERY_MAX_FAMILIES - 1
+    )
+    leaf_result_sha256s: tuple[str, ...] = Field(
+        min_length=3, max_length=TRUNCATION_RECOVERY_MAX_CHILD_REQUESTS
+    )
+
+    @model_validator(mode="after")
+    def tree_partitions_are_bounded_and_exact(self) -> Self:
+        inventories = (
+            self.family_root_sha256s,
+            self.family_closure_sha256s,
+            self.child_result_sha256s,
+            self.bridge_result_sha256s,
+            self.leaf_result_sha256s,
+        )
+        if any(
+            len(values) != len(set(values))
+            or any(re.fullmatch(_SHA256_PATTERN, item) is None for item in values)
+            for values in inventories
+        ):
+            raise ValueError("full-tree promotion identities are invalid or duplicated")
+        roots, closures, children, bridges, leaves = map(set, inventories)
+        count = len(roots)
+        if (
+            len(closures) != count
+            or len(children) != 2 * count
+            or len(bridges) != count - 1
+            or len(leaves) != count + 1
+            or bridges & leaves
+            or bridges | leaves != children
+            or roots & closures
+            or (roots | closures) & children
+            or self.bridge_result_sha256s
+            != tuple(item for item in self.child_result_sha256s if item in bridges)
+            or self.leaf_result_sha256s
+            != tuple(item for item in self.child_result_sha256s if item in leaves)
+        ):
+            raise ValueError(
+                "full-tree promotion identities do not partition a bounded binary tree"
+            )
+        return self
+
+
 class SchedulerTruncationRecoveryFamilyPromotion(_SchedulerTruncationRecoveryEntry):
     """Append-only effective recovery; self-hashed bytes never authorize appending it."""
 
-    schema_version: Literal["1.0", "1.1"] = "1.0"
+    schema_version: Literal["1.0", "1.1", "1.2"] = "1.0"
     entry_kind: Literal[SchedulerTruncationRecoveryEntryKind.FAMILY_PROMOTED] = (
         SchedulerTruncationRecoveryEntryKind.FAMILY_PROMOTED
     )
@@ -3385,10 +3477,34 @@ class SchedulerTruncationRecoveryFamilyPromotion(_SchedulerTruncationRecoveryEnt
         default=None,
         exclude_if=lambda value: value is None,
     )
+    full_tree_binding: SchedulerTruncationRecoveryFullTreeBinding | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     recovered_output: SchedulerRecoveredCandidateReviewOutput
     capability_binding_sha256: str = Field(pattern=_SHA256_PATTERN)
     promotion_status: Literal["RECOVERED"] = "RECOVERED"
     promotion_id: str = Field(pattern=_RECOVERY_PROMOTION_ID_PATTERN)
+
+    @property
+    def successful_result_sha256s(self) -> tuple[str, ...]:
+        if self.full_tree_binding is not None:
+            return self.full_tree_binding.leaf_result_sha256s
+        return self.promoted_leaf_result_sha256s or self.direct_child_result_sha256s
+
+    @property
+    def bridge_result_sha256s(self) -> tuple[str, ...]:
+        if self.full_tree_binding is not None:
+            return self.full_tree_binding.bridge_result_sha256s
+        return (
+            (self.superseded_bridge_result_sha256,) if self.superseded_bridge_result_sha256 else ()
+        )
+
+    @property
+    def all_result_sha256s(self) -> tuple[str, ...]:
+        if self.full_tree_binding is not None:
+            return self.full_tree_binding.child_result_sha256s
+        return (*self.bridge_result_sha256s, *self.successful_result_sha256s)
 
     @classmethod
     def build(
@@ -3406,6 +3522,7 @@ class SchedulerTruncationRecoveryFamilyPromotion(_SchedulerTruncationRecoveryEnt
         nested_child_result_sha256s: tuple[str, str] | None = None,
         superseded_bridge_result_sha256: str | None = None,
         promoted_leaf_result_sha256s: tuple[str, str, str] | None = None,
+        full_tree_binding: SchedulerTruncationRecoveryFullTreeBinding | None = None,
     ) -> SchedulerTruncationRecoveryFamilyPromotion:
         if (
             closure.family_id != family.family_id
@@ -3422,6 +3539,18 @@ class SchedulerTruncationRecoveryFamilyPromotion(_SchedulerTruncationRecoveryEnt
             promoted_leaf_result_sha256s,
         )
         recursive = any(item is not None for item in recursive_arguments)
+        if full_tree_binding is not None and (
+            recursive
+            or family.parent_kind is not SchedulerTruncationRecoveryParentKind.SCHEDULER_TASK
+            or family.parent_family_id is not None
+            or closure.schema_version != "1.3"
+            or closure.closure_status
+            is not SchedulerTruncationRecoveryClosureStatus.RECURSIVE_STRUCTURALLY_CLOSED_NONAUTHORIZING
+            or full_tree_binding.family_root_sha256s[0] != family.entry_sha256
+            or full_tree_binding.family_closure_sha256s[0] != closure.entry_sha256
+            or full_tree_binding.child_result_sha256s[:2] != direct_child_result_sha256s
+        ):
+            raise ValueError("full-tree recovery promotion differs from its original root")
         if recursive and not all(item is not None for item in recursive_arguments):
             raise ValueError("recursive recovery promotion fields are incomplete")
         if recursive:
@@ -3467,7 +3596,9 @@ class SchedulerTruncationRecoveryFamilyPromotion(_SchedulerTruncationRecoveryEnt
                 != (direct_success_hashes[0], *nested_child_result_sha256s)
             ):
                 raise ValueError("recursive recovery promotion tree is inconsistent")
-        schema_version: Literal["1.0", "1.1"] = "1.1" if recursive else "1.0"
+        schema_version: Literal["1.0", "1.1", "1.2"] = (
+            "1.2" if full_tree_binding is not None else "1.1" if recursive else "1.0"
+        )
         values: dict[str, Any] = {
             **_entry_values(
                 campaign_id=family.campaign_id,
@@ -3487,6 +3618,7 @@ class SchedulerTruncationRecoveryFamilyPromotion(_SchedulerTruncationRecoveryEnt
             "parent_task_id": family.recovery_plan.parent.parent_task_id,
             "original_truncated_result_sha256": (family.parent_terminal_result_sha256),
             "direct_child_result_sha256s": direct_child_result_sha256s,
+            **({"full_tree_binding": full_tree_binding} if full_tree_binding is not None else {}),
             **(
                 {
                     "nested_family_id": nested_family.family_id,
@@ -3508,7 +3640,9 @@ class SchedulerTruncationRecoveryFamilyPromotion(_SchedulerTruncationRecoveryEnt
         promotion_id = "scheduler-recovery-promotion-" + _canonical_sha256(
             {
                 "domain": (
-                    "mmaudit.scheduler.truncation-recovery-promotion.v2"
+                    "mmaudit.scheduler.truncation-recovery-promotion.v3"
+                    if schema_version == "1.2"
+                    else "mmaudit.scheduler.truncation-recovery-promotion.v2"
                     if schema_version == "1.1"
                     else "mmaudit.scheduler.truncation-recovery-promotion.v1"
                 ),
@@ -3525,7 +3659,9 @@ class SchedulerTruncationRecoveryFamilyPromotion(_SchedulerTruncationRecoveryEnt
         expected_id = "scheduler-recovery-promotion-" + _canonical_sha256(
             {
                 "domain": (
-                    "mmaudit.scheduler.truncation-recovery-promotion.v2"
+                    "mmaudit.scheduler.truncation-recovery-promotion.v3"
+                    if self.schema_version == "1.2"
+                    else "mmaudit.scheduler.truncation-recovery-promotion.v2"
                     if self.schema_version == "1.1"
                     else "mmaudit.scheduler.truncation-recovery-promotion.v1"
                 ),
@@ -3575,6 +3711,27 @@ class SchedulerTruncationRecoveryFamilyPromotion(_SchedulerTruncationRecoveryEnt
                 for origin in truncated_child_origins
             )
         )
+        if self.schema_version == "1.2":
+            tree = self.full_tree_binding
+            recursive_shape_is_exact = (
+                tree is not None
+                and all(item is None for item in recursive_fields)
+                and self.recovered_output.schema_version == "1.1"
+                and tree.family_root_sha256s[0] == self.family_root_sha256
+                and tree.family_closure_sha256s[0] == self.family_closure_sha256
+                and tree.child_result_sha256s[:2] == self.direct_child_result_sha256s
+                and all(
+                    origin.child_result_sha256 in tree.bridge_result_sha256s
+                    for origin in truncated_child_origins
+                )
+                and all(
+                    origin.child_result_sha256 in tree.leaf_result_sha256s
+                    for origin in self.recovered_output.candidate_origins
+                    if origin.origin_kind is SchedulerRecoveredCandidateOriginKind.CHILD_BATCH
+                )
+            )
+        elif self.full_tree_binding is not None:
+            recursive_shape_is_exact = False
         if (
             len(set(self.direct_child_result_sha256s)) != len(self.direct_child_result_sha256s)
             or any(
@@ -3598,7 +3755,10 @@ class SchedulerTruncationRecoveryFamilyPromotion(_SchedulerTruncationRecoveryEnt
 class SchedulerTruncationRecoveryPromotionBinding(_NonAuthorizingRecoveryJournalModel):
     """Hash-only public binding to one private recovery promotion."""
 
-    schema_version: Literal["1.0", "1.1"] = "1.0"
+    schema_version: Literal["1.0", "1.1", "1.2"] = "1.0"
+    full_tree_binding: SchedulerTruncationRecoveryFullTreeBinding | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     parent_task_id: str = Field(pattern=_ROOT_TASK_ID_PATTERN)
     original_truncated_result_sha256: str = Field(pattern=_SHA256_PATTERN)
     promotion_entry_sha256: str = Field(pattern=_SHA256_PATTERN)
@@ -3645,6 +3805,26 @@ class SchedulerTruncationRecoveryPromotionBinding(_NonAuthorizingRecoveryJournal
     delivered_source_inventory_sha256: str = Field(pattern=_SHA256_PATTERN)
     binding_sha256: str = Field(pattern=_SHA256_PATTERN)
 
+    @property
+    def successful_result_sha256s(self) -> tuple[str, ...]:
+        if self.full_tree_binding is not None:
+            return self.full_tree_binding.leaf_result_sha256s
+        return self.promoted_leaf_result_sha256s or self.direct_child_result_sha256s
+
+    @property
+    def bridge_result_sha256s(self) -> tuple[str, ...]:
+        if self.full_tree_binding is not None:
+            return self.full_tree_binding.bridge_result_sha256s
+        return (
+            (self.superseded_bridge_result_sha256,) if self.superseded_bridge_result_sha256 else ()
+        )
+
+    @property
+    def all_result_sha256s(self) -> tuple[str, ...]:
+        if self.full_tree_binding is not None:
+            return self.full_tree_binding.child_result_sha256s
+        return (*self.bridge_result_sha256s, *self.successful_result_sha256s)
+
     @field_validator(
         "direct_child_result_sha256s",
         "nested_child_result_sha256s",
@@ -3687,6 +3867,11 @@ class SchedulerTruncationRecoveryPromotionBinding(_NonAuthorizingRecoveryJournal
             "original_truncated_result_sha256": exact.original_truncated_result_sha256,
             "promotion_entry_sha256": exact.entry_sha256,
             "direct_child_result_sha256s": exact.direct_child_result_sha256s,
+            **(
+                {"full_tree_binding": exact.full_tree_binding}
+                if exact.schema_version == "1.2"
+                else {}
+            ),
             **(
                 {
                     "nested_family_id": exact.nested_family_id,
@@ -3740,6 +3925,12 @@ class SchedulerTruncationRecoveryPromotionBinding(_NonAuthorizingRecoveryJournal
         )
         if (
             len(set(self.direct_child_result_sha256s)) != 2
+            or (self.schema_version == "1.2") != (self.full_tree_binding is not None)
+            or (
+                self.full_tree_binding is not None
+                and self.direct_child_result_sha256s
+                != self.full_tree_binding.child_result_sha256s[:2]
+            )
             or any(
                 re.fullmatch(_SHA256_PATTERN, item) is None
                 for item in self.direct_child_result_sha256s
@@ -3782,6 +3973,186 @@ SCHEDULER_TRUNCATION_RECOVERY_ENTRY_TYPES: dict[
         SchedulerTruncationRecoveryFamilyPromotion
     ),
 }
+
+
+def _require_nested_recovery_terminal_outcome(
+    terminal: SchedulerTruncationRecoveryChildResult,
+    activation: SchedulerTruncationRecoveryChildActivation,
+) -> None:
+    """Retain exact specialist success custody; truncated ancestry never earns an outcome."""
+
+    if terminal.terminal_status is SchedulerTruncationRecoveryTerminalStatus.TRUNCATED:
+        if (
+            terminal.schema_version != "1.1"
+            or terminal.runtime_specialist_accepted_outcome is not None
+            or terminal.runtime_specialist_accepted_outcome_sha256 is not None
+        ):
+            raise ValueError("truncated recovery ancestor cannot carry specialist success custody")
+        return
+    usage = terminal.runtime_usage_record
+    artifact_sha256 = terminal.runtime_output_artifact_sha256
+    if usage is None or artifact_sha256 is None:
+        raise ValueError("nested recovery terminal lacks exact successful output custody")
+    outcome = _freeze_exact_specialist_success_outcome(
+        specialist_accepted_outcome=terminal.runtime_specialist_accepted_outcome,
+        activation=activation,
+        usage=usage,
+        requested_surface_count=len(terminal.child_surface_ids),
+        output_artifact_sha256=artifact_sha256,
+    )
+    if terminal.schema_version != (
+        "1.2" if outcome is not None else "1.1"
+    ) or terminal.runtime_specialist_accepted_outcome_sha256 != (
+        outcome.evidence_sha256 if outcome is not None else None
+    ):
+        raise ValueError("nested recovery terminal differs from its exact specialist outcome")
+
+
+def resolve_truncation_recovery_root_family(
+    *,
+    family: SchedulerTruncationRecoveryFamilyRoot,
+    families: Mapping[str, SchedulerTruncationRecoveryFamilyRoot],
+    activations: Mapping[str, SchedulerTruncationRecoveryChildActivation],
+    results: Mapping[
+        str,
+        SchedulerTruncationRecoveryChildResult | SchedulerTruncationRecoveryChildPreflightResult,
+    ],
+    closures: Mapping[str, SchedulerTruncationRecoveryFamilyClosure],
+) -> SchedulerTruncationRecoveryFamilyRoot:
+    """Resolve validated data through every exact, bounded, terminal parent edge.
+
+    This structural check grants no live identity, dispatch, promotion or review authority.
+    A sibling must already have typed terminal custody before a nested family can open.
+    Every ancestor must remain open until this original descendant family opens.
+    Investigator success requires its original accepted outcome at every ancestor edge.
+    """
+
+    if len(families) > SCHEDULER_TRUNCATION_RECOVERY_MAX_FAMILIES:
+        raise ValueError("scheduler recovery ancestry exceeds its family bound")
+    current = family
+    seen: set[str] = set()
+    for _ in range(TRUNCATION_RECOVERY_MAX_DEPTH + 1):
+        if current.family_id in seen:
+            raise ValueError("scheduler recovery ancestry repeats a family")
+        seen.add(current.family_id)
+        parent = current.recovery_plan.parent
+        if current.parent_kind is SchedulerTruncationRecoveryParentKind.SCHEDULER_TASK:
+            if current.parent_family_id is not None or parent.current_depth != 0:
+                raise ValueError("scheduler recovery ancestry lacks one exact root")
+            return current
+        parent_family = families.get(current.parent_family_id or "")
+        if parent_family is None:
+            raise ValueError("scheduler recovery ancestry lacks its immediate parent family")
+        matching = tuple(
+            child
+            for child in parent_family.recovery_plan.children
+            if child.child_task_id == parent.parent_task_id
+        )
+        if len(matching) != 1:
+            raise ValueError("scheduler recovery ancestry lacks its exact parent child")
+        child = matching[0]
+        result = results.get(child.child_task_id)
+        activation = activations.get(child.child_task_id)
+        parent_closure = closures.get(parent_family.family_id)
+        if (
+            not isinstance(result, SchedulerTruncationRecoveryChildResult)
+            or result.schema_version != "1.1"
+            or result.result_origin is not SchedulerTruncationRecoveryResultOrigin.RUNTIME
+            or result.terminal_status is not SchedulerTruncationRecoveryTerminalStatus.TRUNCATED
+            or activation is None
+            or result.runtime_activation != activation
+            or result.runtime_usage_record is None
+            or result.runtime_specialist_accepted_outcome is not None
+            or result.runtime_specialist_accepted_outcome_sha256 is not None
+            or result.family_id != parent_family.family_id
+            or result.family_root_sha256 != parent_family.entry_sha256
+            or parent_family.entry_index >= current.entry_index
+            or parent_family.family_index >= current.family_index
+            or (parent_closure is not None and parent_closure.entry_index <= family.entry_index)
+            or parent.current_depth != child.depth
+            or child.parent_depth != parent_family.recovery_plan.parent.current_depth
+            or parent.current_depth != parent_family.recovery_plan.parent.current_depth + 1
+            or not 1 <= parent.current_depth < current.recovery_plan.policy.max_depth
+            or current.recovery_plan.policy != parent_family.recovery_plan.policy
+            or parent.parent_path != child.path
+            or parent.pass_plan_id != child.pass_plan_id
+            or parent.parent_logical_request_id != child.child_logical_request_id
+            or parent.parent_task_plan_sha256 != child.child_plan_sha256
+            or parent.parent_activation_sha256 != activation.entry_sha256
+            or parent.provider_attempt_evidence_sha256 != result.provider_attempt_evidence_sha256
+            or parent.requested_surface_manifest_sha256 != child.requested_surface_manifest_sha256
+            or parent.requested_surface_ids != child.surface_ids
+            or parent.retained_surface_ids != result.retained_surface_ids
+            or parent.unfinished_surface_ids
+            != tuple(sorted(set(child.surface_ids) - set(result.retained_surface_ids)))
+            or current.truncation_projection != result.truncation_projection
+            or not (
+                (
+                    current.schema_version == "1.0"
+                    and current.truncation_projection.findings_state
+                    is CandidateReviewChannelState.COMPLETE
+                )
+                or (
+                    current.schema_version == "1.1"
+                    and current.truncation_projection.findings_state
+                    in {CandidateReviewChannelState.OPEN, CandidateReviewChannelState.INVALID}
+                    and current.recovery_plan.irreducible_channels
+                    == (TruncationRecoveryChannel.FINDINGS,)
+                    and all(
+                        descendant.channel is TruncationRecoveryChannel.COVERAGE
+                        for descendant in current.recovery_plan.children
+                    )
+                )
+            )
+            or result.retained_surface_ids
+            != tuple(record.surface_id for record in current.truncation_projection.surface_reviews)
+            or current.parent_terminal_result_sha256 != result.entry_sha256
+            or current.request_limit_binding != parent_family.request_limit_binding
+            or current.requested_surface_manifest != parent_family.requested_surface_manifest
+            or activation.request_role is None
+            or (
+                activation.request_role.startswith("specialist:")
+                and activation.request_role not in _SPECIALIST_INVESTIGATOR_REQUEST_ROLES
+            )
+        ):
+            raise ValueError("scheduler recovery ancestry differs from its truncated parent child")
+        for sibling in parent_family.recovery_plan.children:
+            terminal = results.get(sibling.child_task_id)
+            sibling_activation = activations.get(sibling.child_task_id)
+            if (
+                not isinstance(terminal, SchedulerTruncationRecoveryChildResult)
+                or terminal.schema_version not in {"1.1", "1.2"}
+                or terminal.result_origin is not SchedulerTruncationRecoveryResultOrigin.RUNTIME
+                or terminal.terminal_status
+                not in {
+                    SchedulerTruncationRecoveryTerminalStatus.SUCCEEDED,
+                    SchedulerTruncationRecoveryTerminalStatus.TRUNCATED,
+                }
+                or sibling_activation is None
+                or terminal.runtime_activation != sibling_activation
+                or terminal.runtime_usage_record is None
+                or sibling_activation.request_role != activation.request_role
+                or sibling_activation.family_id != parent_family.family_id
+                or sibling_activation.family_root_sha256 != parent_family.entry_sha256
+                or terminal.family_id != parent_family.family_id
+                or terminal.family_root_sha256 != parent_family.entry_sha256
+                or terminal.child_plan_sha256 != sibling.child_plan_sha256
+                or terminal.child_surface_ids != sibling.surface_ids
+                or terminal.global_request_ordinal
+                != parent_family.request_count_before_family + sibling.ordinal + 1
+                or not parent_family.entry_index
+                < sibling_activation.entry_index
+                < terminal.entry_index
+                < current.entry_index
+                or (
+                    terminal.terminal_status is SchedulerTruncationRecoveryTerminalStatus.SUCCEEDED
+                    and terminal.completed_surface_ids != sibling.surface_ids
+                )
+            ):
+                raise ValueError("scheduler recovery ancestry lacks both exact typed terminals")
+            _require_nested_recovery_terminal_outcome(terminal, sibling_activation)
+        current = parent_family
+    raise ValueError("scheduler recovery ancestry exceeds its depth bound")
 
 
 def validate_truncation_recovery_entry_chain(

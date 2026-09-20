@@ -24,6 +24,7 @@ from pydantic import (
     GetJsonSchemaHandler,
     GetPydanticSchema,
     StrictInt,
+    ValidationInfo,
     field_validator,
     model_validator,
 )
@@ -78,6 +79,10 @@ from mmaudit.models.route_constraints import (
     RoutePriceComponentUnitEnvelope,
     normalize_exact_route_pricing,
     project_provider_price_cap,
+)
+from mmaudit.models.route_cost_reservations import (
+    ExactRouteCostReservation,
+    project_route_reservation_provider_caps,
 )
 from mmaudit.models.structured_output import StructuredOutputRepairEvidence
 from mmaudit.models.token_planning import (
@@ -9198,6 +9203,15 @@ class SolidityGraphOmission(StrictModel):
     omitted_sample_sha256s: tuple[str, ...] = Field(default=(), max_length=16)
     evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
+    @field_validator(
+        "analytical_population_sample_sha256s", "omitted_sample_sha256s", mode="before"
+    )
+    @classmethod
+    def json_sample_arrays(cls, value: Any, info: ValidationInfo) -> Any:
+        """Preserve JSON arrays through the legacy before-validator under strict replay."""
+
+        return tuple(value) if info.mode == "json" and type(value) is list else value
+
     @model_validator(mode="before")
     @classmethod
     def default_retained_occurrences(cls, values: Any) -> Any:
@@ -9289,6 +9303,13 @@ class SolidityGraphFactOmission(StrictModel):
     omitted_stream_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     omitted_sample_sha256s: tuple[str, ...] = Field(default=(), max_length=16)
     evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @field_validator("omitted_sample_sha256s", mode="before")
+    @classmethod
+    def json_sample_arrays(cls, value: Any, info: ValidationInfo) -> Any:
+        """Preserve JSON arrays without relaxing strict Python types or omission commitments."""
+
+        return tuple(value) if info.mode == "json" and type(value) is list else value
 
     @model_validator(mode="before")
     @classmethod
@@ -14634,9 +14655,46 @@ class AuditModelRefreshPricingAttemptEvidence(StrictModel):
     capabilities required at the transport boundary.
     """
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        strict=True,
+        json_schema_extra={
+            "allOf": [
+                {
+                    "if": {
+                        "properties": {"schema_version": {"const": "1.2"}},
+                        "required": ["schema_version"],
+                    },
+                    "then": {
+                        "required": [
+                            "operator_cost_reservation",
+                            "route_predicate_profile",
+                            "route_predicate_profile_sha256",
+                        ],
+                        "properties": {
+                            "operator_cost_reservation": {"type": "object"},
+                            "route_predicate_profile": {
+                                "type": "object",
+                                "properties": {"schema_version": {"const": "1.3"}},
+                                "required": ["schema_version"],
+                            },
+                            "route_predicate_profile_sha256": {"type": "string"},
+                        },
+                        "not": {
+                            "anyOf": [
+                                {"required": ["price_cap_algorithm"]},
+                                {"required": ["price_component_unit_envelopes"]},
+                            ]
+                        },
+                    },
+                    "else": {"not": {"required": ["operator_cost_reservation"]}},
+                }
+            ]
+        },
+    )
 
-    schema_version: Literal["1.0", "1.1"] = "1.0"
+    schema_version: Literal["1.0", "1.1", "1.2"] = "1.0"
     evidence_authority: Literal["comparison_required"] = "comparison_required"
     authority_mode: Literal["NON_AUTHORIZING_REQUEST_COST_BOUND"] = (
         "NON_AUTHORIZING_REQUEST_COST_BOUND"
@@ -14725,6 +14783,10 @@ class AuditModelRefreshPricingAttemptEvidence(StrictModel):
         exclude_if=lambda value: value is None,
     )
     cost_bound_pricing_snapshot_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    operator_cost_reservation: ExactRouteCostReservation | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     components: tuple[EndpointRequestCostComponentEvidence, ...] = Field(
         min_length=2,
         max_length=64,
@@ -14745,6 +14807,17 @@ class AuditModelRefreshPricingAttemptEvidence(StrictModel):
     pricing_use_authorized: Literal[False] = False
     provider_access_authorized: Literal[False] = False
     evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def explicit_cost_mode_fields(self) -> Self:
+        operator_mode = self.schema_version == "1.2"
+        fields = self.model_fields_set
+        if ("operator_cost_reservation" in fields) != operator_mode or (
+            operator_mode
+            and ("price_cap_algorithm" in fields or "price_component_unit_envelopes" in fields)
+        ):
+            raise ValueError("pricing attempt has mixed cost-enforcement fields")
+        return self
 
     @classmethod
     def from_bound(
@@ -14847,7 +14920,7 @@ class AuditModelRefreshPricingAttemptEvidence(StrictModel):
                 route_predicate_profile.model_dump_json(),
                 strict=True,
             )
-            if (
+            if canonical_profile.operator_reservation_policy is None and (
                 canonical_profile.price_cap_algorithm
                 is not ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_REQUEST_UNITS_V2
                 or canonical_profile.price_component_unit_envelopes is None
@@ -14855,7 +14928,19 @@ class AuditModelRefreshPricingAttemptEvidence(StrictModel):
                 raise ValueError(
                     "pricing attempt component-unit profile does not select a current policy"
                 )
-        pricing_attempt_schema_version = "1.1" if canonical_profile is not None else "1.0"
+        operator_reservation = endpoint_cost_bound.operator_reservation
+        if (operator_reservation is not None) != (
+            canonical_profile is not None
+            and canonical_profile.operator_reservation_policy is not None
+        ):
+            raise ValueError("pricing attempt cost enforcement differs from its exact bound")
+        pricing_attempt_schema_version = (
+            "1.2"
+            if operator_reservation is not None
+            else "1.1"
+            if canonical_profile is not None
+            else "1.0"
+        )
         values: dict[str, Any] = {
             "schema_version": pricing_attempt_schema_version,
             "evidence_authority": "comparison_required",
@@ -14906,12 +14991,15 @@ class AuditModelRefreshPricingAttemptEvidence(StrictModel):
                 {
                     "route_predicate_profile_sha256": canonical_profile.profile_sha256,
                     "route_predicate_profile": canonical_profile,
-                    "price_cap_algorithm": canonical_profile.price_cap_algorithm,
-                    "price_component_unit_envelopes": (
-                        canonical_profile.price_component_unit_envelopes
-                    ),
                 }
             )
+            if operator_reservation is not None:
+                values["operator_cost_reservation"] = operator_reservation
+            else:
+                values["price_cap_algorithm"] = canonical_profile.price_cap_algorithm
+                values["price_component_unit_envelopes"] = (
+                    canonical_profile.price_component_unit_envelopes
+                )
         if canonical_route.baseline_pricing_overrides:
             values["baseline_pricing_overrides"] = canonical_route.baseline_pricing_overrides
         if canonical_route.baseline_pricing_schedule is not None:
@@ -15020,6 +15108,11 @@ class AuditModelRefreshPricingAttemptEvidence(StrictModel):
             self.reservation_checked_at <= self.transport_checked_at < self.pricing_expires_at
         ):
             raise ValueError("pricing transport is outside its exact validity window")
+        if self.schema_version == "1.2":
+            self._require_operator_reservation_consistency()
+            return self
+        if self.operator_cost_reservation is not None:
+            raise ValueError("legacy pricing attempt cannot carry an operator reservation")
         component_policy = (
             self.route_predicate_profile_sha256,
             self.route_predicate_profile,
@@ -15195,6 +15288,101 @@ class AuditModelRefreshPricingAttemptEvidence(StrictModel):
         ):
             raise ValueError("pricing attempt evidence self-hash is inconsistent")
         return self
+
+    def _require_operator_reservation_consistency(self) -> None:
+        """Retain all refresh joins while replacing only total-provider-cap semantics."""
+
+        from mmaudit.orchestration.budgets import (
+            EndpointPriceComponent,
+            EndpointRequestCostBound,
+            _require_pristine_endpoint_cost_bound_types,
+            _trusted_endpoint_request_maximum_cost_usd,
+        )
+
+        profile = self.route_predicate_profile
+        reservation = self.operator_cost_reservation
+        if (
+            profile is None
+            or profile.schema_version != "1.3"
+            or profile.operator_reservation_policy is None
+            or profile.profile_sha256 != self.route_predicate_profile_sha256
+            or reservation is None
+            or reservation.policy != profile.operator_reservation_policy
+            or reservation.route_predicate_profile_sha256 != profile.profile_sha256
+            or self.price_cap_algorithm is not None
+            or self.price_component_unit_envelopes is not None
+        ):
+            raise ValueError("operator pricing attempt lacks its exact cost policy")
+        current = ExactRouteCostReservation.model_validate_json(reservation.model_dump_json())
+        route = current.request_token_plan.route_intersection.routes[0]
+        baseline = _require_refresh_pricing_schedule(
+            pricing=self.baseline_pricing,
+            overrides=self.baseline_pricing_overrides,
+            schedule=self.baseline_pricing_schedule,
+            label="operator pricing attempt baseline schedule",
+        )
+        maximum = _require_refresh_pricing_schedule(
+            pricing=self.current_pricing,
+            overrides=self.current_pricing_overrides,
+            schedule=self.current_pricing_schedule,
+            label="operator pricing attempt current schedule",
+        )
+        # Validate the complete baseline and its capped subset without claiming a total cap.
+        project_route_reservation_provider_caps(
+            normalize_exact_route_pricing(self.baseline_pricing),
+            schedule=self.baseline_pricing_schedule,
+        )
+        expected_cap = {
+            item.component.value: _canonical_nonnegative_decimal(item.value, router_units=True)
+            for item in current.provider_capped_subset
+        }
+        if (
+            route.exact_model_id != self.exact_model_id
+            or route.provider_endpoint != self.provider_endpoint
+            or current.request_token_plan.request_id != self.logical_request_id
+            or current.request_material_sha256 != self.request_material_sha256
+            or self.request_material_sha256 != self.request_body_sha256
+            or current.exact_pricing != normalize_exact_route_pricing(self.current_pricing)
+            or current.pricing_schedule != self.current_pricing_schedule
+            or tuple(self.baseline_pricing) != tuple(self.current_pricing)
+            or tuple(baseline) != tuple(maximum)
+            or tuple(maximum) != tuple(c.pricing_field for c in self.components)
+            or self.baseline_pricing_sha256
+            != openrouter_pricing_schedule_sha256(
+                self.baseline_pricing, self.baseline_pricing_overrides
+            )
+            or self.current_pricing_sha256
+            != openrouter_pricing_schedule_sha256(
+                self.current_pricing, self.current_pricing_overrides
+            )
+            or self.qualified_pricing_snapshot_sha256 != self.baseline_pricing_sha256
+            or self.provider_max_price != expected_cap
+            or self.provider_max_price_sha256 != _canonical_model_sha256(self.provider_max_price)
+        ):
+            raise ValueError("operator pricing attempt route, request, prices or ancestry differs")
+        _require_pristine_endpoint_cost_bound_types()
+        reconstructed = EndpointRequestCostBound(
+            exact_model_id=self.exact_model_id,
+            provider_endpoint=self.provider_endpoint,
+            request_material_sha256=self.request_material_sha256,
+            pricing_snapshot_sha256=self.cost_bound_pricing_snapshot_sha256,
+            components=tuple(
+                EndpointPriceComponent(
+                    pricing_field=item.pricing_field,
+                    unit_price_usd=Decimal(item.unit_price_usd_exact),
+                    maximum_units=item.maximum_units,
+                )
+                for item in self.components
+            ),
+            operator_reservation=current,
+        )
+        maximum_cost = format(_trusted_endpoint_request_maximum_cost_usd(reconstructed), "f")
+        if self.maximum_cost_usd_exact != maximum_cost:
+            raise ValueError("operator pricing attempt total differs from exact reservation")
+        if self.evidence_sha256 != _pricing_attempt_sha256(
+            self.model_dump(mode="json", exclude={"evidence_sha256"})
+        ):
+            raise ValueError("operator pricing attempt evidence self-hash is inconsistent")
 
 
 class UsageRecord(StrictModel):
@@ -15428,6 +15616,10 @@ class UsageRecord(StrictModel):
             raise ValueError("bound model identity requires a validated provider response")
         _validate_model_retry_routing_evidence(self.routing, attempts=self.attempts)
         _validate_refresh_pricing_attempt_inventory(self)
+        # Local import avoids the schemas/token-planning/reservation dependency cycle.
+        from mmaudit.models.route_cost_reservations import operator_cost_attempts_from_usage
+
+        operator_cost_attempts_from_usage(self)
         return self
 
 
@@ -15697,6 +15889,25 @@ def _validate_refresh_pricing_attempt_inventory(record: UsageRecord) -> None:
         raise ValueError("usage refreshed-price endpoint differs from request routing")
     if record.accounted_cost_usd_exact is None:
         raise ValueError("usage refreshed-price attempts lack exact accounted cost")
+    if any(attempt.schema_version == "1.2" for attempt in attempts):
+        from mmaudit.models.route_cost_reservations import operator_cost_attempts_from_usage
+
+        billed_attempts = operator_cost_attempts_from_usage(record)
+        if len(billed_attempts) != len(attempts) or any(
+            refreshed.schema_version != "1.2"
+            or refreshed.operator_cost_reservation != billed.reservation
+            or refreshed.attempt_index != billed.attempt_index
+            or refreshed.attempt_request_id != billed.attempt_request_id
+            or (
+                billed.actual_billed_cost_usd_exact is not None
+                and not refreshed.transport_attempted
+            )
+            for refreshed, billed in zip(attempts, billed_attempts, strict=True)
+        ):
+            raise ValueError("usage refreshed reservations differ from exact billed attempts")
+        # A reservation is not a provider guarantee. Exact overages must remain recordable;
+        # the ledger and the joined billed-attempt validator enforce the durable stop.
+        return
     with localcontext() as context:
         context.prec = 160
         maximum_accounted = sum(

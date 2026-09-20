@@ -44,6 +44,62 @@ def test_ledger_identity_is_stable_for_exact_file_and_distinct_across_ledgers(
     assert second.identity_sha256 != first.identity_sha256
 
 
+@pytest.mark.parametrize("actual", ("1.01", "250.01"))
+def test_operator_ceiling_records_unclamped_overrun_and_blocks_after_reopen(
+    tmp_path: Path,
+    actual: str,
+) -> None:
+    """An overrun below or above USD 250 is recorded, never forgiven on restart."""
+
+    path = tmp_path / "synthetic-overrun.json"
+    ledger = AtomicCostLedger.initialize(path, cap_usd=Decimal("250"))
+    reservation = ledger.reserve("synthetic-attempt", Decimal("1"))
+    with pytest.raises(CostReservationOverrunError):
+        ledger.reconcile(reservation, Decimal(actual))
+    retained = path.read_bytes()
+    reopened = AtomicCostLedger.open_existing(path, cap_usd=Decimal("250"))
+    snapshot = reopened.snapshot()
+    (entry,) = snapshot.entries
+    assert entry.status is CostEntryStatus.RESERVATION_OVERRUN
+    assert entry.actual_cost_usd == entry.accounted_cost_usd == Decimal(actual)
+    assert snapshot.spent_usd == Decimal(actual)
+    assert snapshot.has_reservation_overrun is True
+    with pytest.raises(CostBudgetExceededError, match="further calls are blocked"):
+        reopened.reserve("prohibited-next-attempt", Decimal("0.01"))
+    assert path.read_bytes() == retained
+
+
+def test_operator_ceiling_rejects_even_minimum_new_charge_at_exact_cap(tmp_path: Path) -> None:
+    path = tmp_path / "synthetic-at-ceiling.json"
+    ledger = AtomicCostLedger.initialize(path, cap_usd=Decimal("250"))
+    reservation = ledger.reserve("synthetic-attempt", Decimal("250"))
+    ledger.reconcile(reservation, Decimal("250"))
+    retained = path.read_bytes()
+    reopened = AtomicCostLedger.open_existing(path, cap_usd=Decimal("250"))
+    assert reopened.snapshot().has_reservation_overrun is False
+    assert reopened.snapshot().remaining_usd == 0
+    with pytest.raises(CostBudgetExceededError):
+        reopened.reserve("prohibited-next-attempt", Decimal("0.000000000000000001"))
+    assert path.read_bytes() == retained
+
+
+def test_operator_ceiling_unknown_bill_is_not_actual_settlement(tmp_path: Path) -> None:
+    path = tmp_path / "synthetic-unknown-bill.json"
+    ledger = AtomicCostLedger.initialize(path, cap_usd=Decimal("250"))
+    reservation = ledger.reserve("synthetic-attempt", Decimal("1"))
+    unknown = ledger.reconcile(reservation, None)
+    assert unknown.status is CostEntryStatus.UNCERTAIN_ACCOUNTED
+    assert unknown.actual_cost_usd is None
+    assert unknown.accounted_cost_usd == Decimal("1")
+    retained = path.read_bytes()
+    reopened = AtomicCostLedger.open_existing(path, cap_usd=Decimal("250"))
+    with pytest.raises(CostBudgetExceededError, match="prior provider costs to be settled"):
+        reopened.reserve(
+            "prohibited-next-attempt", Decimal("0.01"), require_settled_prior_costs=True
+        )
+    assert path.read_bytes() == retained
+
+
 def test_provision_creates_once_then_reopens_without_resetting_state(tmp_path: Path) -> None:
     path = tmp_path / "managed-costs.json"
 

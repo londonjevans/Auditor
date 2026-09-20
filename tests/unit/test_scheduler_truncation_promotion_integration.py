@@ -239,10 +239,23 @@ def _install_detached_recovery_entry_types(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr(
         scheduler_module,
         "_expected_recovery_family_closure",
-        lambda *, family, indexes: family.expected_closure,
+        # These detached v1 fixtures cover direct and one-level closure profiles only.
+        lambda *, family, indexes: (
+            *family.expected_closure,
+            "1.2" if family.expected_closure[2] else "1.1",
+        ),
     )
     monkeypatch.setattr(
         scheduler_module,
+        "stamp_candidate_review_findings",
+        lambda **values: tuple(values["raw_findings"]),
+    )
+    # Recursive reconstruction now lives in the shared deterministic model module.
+    # Keep this detached v1-only stamping stub out of every original live-custody test.
+    from mmaudit.models import truncation_tree as tree_module
+
+    monkeypatch.setattr(
+        tree_module,
         "stamp_candidate_review_findings",
         lambda **values: tuple(values["raw_findings"]),
     )
@@ -1169,7 +1182,7 @@ def _typed_parent_truncation(
         wire_schema_sha256=projection.wire_schema_sha256,
         response_sha256=projection.original_response_sha256,
     )
-    context_evidence = _context_evidence(context, task.logical_request_id)
+    context_evidence = _context_evidence(context, task.logical_request_id, request_role=task.role)
     routing = {
         **base.routing,
         "generation_id": envelope.generation_id,
@@ -1310,6 +1323,7 @@ def _recovery_plan(
     projection: CandidateReviewTruncationProjection,
     manifest: SchedulerTruncationRecoveryRequestedSurfaceManifest,
     parent_usage: UsageRecord,
+    child_resource_limits: tuple[str, int] | None = None,
 ) -> TruncationRecoveryPlan:
     from mmaudit.models.scheduler import (
         SchedulerPassPlan,
@@ -1355,12 +1369,18 @@ def _recovery_plan(
         parent=parent,
         resources=_resources(
             recovery_requests_consumed=0,
-            accounted_before=format(prior_cost, "f"),
+            accounted_before=format(prior_cost.normalize(), "f"),
             attempts_before=sum(item.attempts for item in prior_usages),
             tokens_before=sum(item.completion_tokens for item in prior_usages),
             parent_attempts=parent_usage.attempts,
             parent_tokens=parent_usage.completion_tokens,
             parent_cost=parent_usage.accounted_cost_usd_exact or "0",
+            child_reserved_usd_exact=(
+                child_resource_limits[0] if child_resource_limits is not None else "0.1"
+            ),
+            child_completion_tokens=(
+                child_resource_limits[1] if child_resource_limits is not None else 100
+            ),
         ),
     )
     assert isinstance(plan, TruncationRecoveryPlan)

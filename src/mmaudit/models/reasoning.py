@@ -760,6 +760,15 @@ class ReasoningExecutionEvidence(_FrozenReasoningEvidence):
                     ),
                 }
             )
+            # These optional envelope fields are omitted by canonical serialization
+            # when no provider observation exists; hash that same representation.
+            for name in (
+                "visible_completion_tokens_upper_bound",
+                "accounted_completion_tokens",
+                "token_detail_accounting_evidence_sha256",
+            ):
+                if payload[name] is None:
+                    del payload[name]
         payload["evidence_sha256"] = _canonical_sha256(payload)
         try:
             return cls.model_validate(payload)

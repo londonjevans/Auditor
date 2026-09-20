@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import re
 from collections.abc import Mapping, Sequence
 from datetime import datetime
@@ -13,6 +14,10 @@ from typing import Annotated, Any, Literal, Self, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from mmaudit.models.candidate_plan_ancestry import (
+    resolve_verified_candidate_selection_plan_ancestry,
+    validate_candidate_selection_plan_reactivation,
+)
 from mmaudit.models.candidate_selection import CandidateSelectionPlan
 from mmaudit.models.route_constraints import ProviderPriceCapAlgorithm
 from mmaudit.orchestration.manifest import canonical_sha256
@@ -77,13 +82,16 @@ _OPERATOR_HEADING = re.compile(rf"^## ({_OPERATOR_TIMESTAMP})(?:[ \t]+[^\r\n]*)?
 # Allow a single prose wrap, never join paragraphs or masked examples into a fact.
 _REPORT_SPACE = r"(?:[ \t]*\r?\n[ \t]*|[ \t]+)"
 _LEDGER_PREFIX = re.compile(
-    rf"\bLedger{_REPORT_SPACE}(?:unchanged|now){_REPORT_SPACE}at\b", re.ASCII
+    rf"\b(Ledger(?:-[1-9][0-9]{{0,5}})?){_REPORT_SPACE}"
+    rf"(?:unchanged|now){_REPORT_SPACE}at\b",
+    re.ASCII,
 )
 _AUDIT_PREFIX = re.compile(r"`completed_real_audits`")
 _LEDGER_REPORT = re.compile(
     _LEDGER_PREFIX.pattern
     + rf"{_REPORT_SPACE}([0-9]{{1,12}}){_REPORT_SPACE}entries{_REPORT_SPACE}/"
-    + rf"(?:{_REPORT_SPACE})?`([0-9]{{1,12}}\.[0-9]{{1,18}})`{_REPORT_SPACE}USD\."
+    + rf"(?:{_REPORT_SPACE})?`([0-9]{{1,12}}\.[0-9]{{1,18}})`{_REPORT_SPACE}USD"
+    + r"(?:[ \t]+\([^()\r\n]{1,256}\))?\."
     + r"(?=[ \t\r\n]|\Z)",
     re.ASCII,
 )
@@ -120,6 +128,7 @@ class OperatorObservation(_StrictRecord):
     byte_count: int = Field(ge=1)
     line_count: int = Field(ge=1)
     latest_entry_timestamp: str
+    reported_ledger_label: str = Field(default="Ledger", pattern=r"^Ledger(?:-[1-9][0-9]{0,5})?$")
     reported_ledger_entries: int = Field(ge=0)
     reported_ledger_used_usd: str = Field(pattern=r"^\d+\.\d+$")
     completed_real_audits: int = Field(ge=0, le=0)
@@ -349,8 +358,9 @@ def validate_operator_observation(
     ):
         raise ValueError("operator latest report accounting is absent or ambiguous")
     if (
-        int(ledgers[0][0]) != observation.reported_ledger_entries
-        or ledgers[0][1] != observation.reported_ledger_used_usd
+        ledgers[0][0] != observation.reported_ledger_label
+        or int(ledgers[0][1]) != observation.reported_ledger_entries
+        or ledgers[0][2] != observation.reported_ledger_used_usd
         or int(audits[0]) != observation.completed_real_audits
     ):
         raise ValueError("operator current summary differs from latest reported facts")
@@ -423,16 +433,7 @@ def validate_governance_documents(
     plan = CandidateSelectionPlan.model_validate_json(
         artifact_contents["config/models.selection-plan.json"], strict=True
     )
-    unavailable = plan.authenticated_runner_unavailability
-    if (
-        plan.schema_version != "1.7"
-        or plan.authenticated_runner_selection is not None
-        or unavailable is None
-        or unavailable.route_predicate_profile.schema_version != "1.0"
-        or unavailable.route_predicate_profile.price_cap_algorithm
-        is not ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_CEILING_V1
-    ):
-        raise ValueError("active plan no longer matches retained nonauthorizing V1 custody")
+    validate_current_selection_plan(plan)
     operator_bytes = _read_bytes(repository_root, OPERATOR_RESULTS_PATH)
     historical_operator = documents["docs/remediation/v3/runtime_status.json"][
         "current_operator_result_reconciliation"
@@ -444,16 +445,110 @@ def validate_governance_documents(
     return state
 
 
+def validate_current_selection_plan(plan: CandidateSelectionPlan) -> None:
+    """Replay route and cost successors; a self-hash cannot replace exact ancestry."""
+
+    if plan.schema_version in {"1.9", "1.10", "1.11"}:
+        capability = resolve_verified_candidate_selection_plan_ancestry()
+        validate_candidate_selection_plan_reactivation(capability, successor=plan)
+        return
+    unavailable = plan.authenticated_runner_unavailability
+    if (
+        plan.schema_version != "1.7"
+        or plan.authenticated_runner_selection is not None
+        or unavailable is None
+        or unavailable.route_predicate_profile.schema_version != "1.0"
+        or unavailable.route_predicate_profile.price_cap_algorithm
+        is not ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_CEILING_V1
+    ):
+        raise ValueError("active plan no longer matches retained nonauthorizing V1 custody")
+
+
 def validate_governance_state(repository_root: Path) -> EngineeringState:
     documents = {path: _read_object(repository_root, path) for path in HISTORICAL_PAYLOAD_SHA256S}
     return validate_governance_documents(repository_root, documents)
 
 
+class CurrentRequirementProjection(_StrictRecord):
+    """Current queue-derived status, explicitly separate from immutable review history."""
+
+    status: Literal["NONAUTHORIZING_COORDINATION"] = "NONAUTHORIZING_COORDINATION"
+    current_engineering_state_sha256: Sha256
+    queue_statuses_sha256: Sha256
+    historical_traceability_sha256: Sha256
+    current_requirement_statuses: dict[str, str] = Field(min_length=22, max_length=22)
+    historical_requirement_statuses: dict[str, str] = Field(min_length=22, max_length=22)
+
+
+def derive_requirement_status(tickets: Sequence[str], statuses: Mapping[str, str]) -> str:
+    """Project only declared ticket statuses; this is not evidence of audit completion."""
+
+    if not tickets or len(tickets) != len(set(tickets)):
+        raise ValueError("requirement tickets must be nonempty and unique")
+    if not statuses or any(status not in ALLOWED_STATUSES for status in statuses.values()):
+        raise ValueError("requirement projection requires a valid nonempty queue")
+    if list(tickets) == ["ALL"]:
+        return (
+            "COMPLETE" if all(s in TERMINAL_STATUSES for s in statuses.values()) else "IN_PROGRESS"
+        )
+    if "ALL" in tickets or set(tickets) - set(statuses):
+        raise ValueError("requirement references unknown or mixed ALL tickets")
+    mapped = [statuses[ticket] for ticket in tickets]
+    if "WITHDRAWN_OPERATOR_ERROR" in mapped:
+        raise ValueError("requirement cannot rely on a withdrawn ticket")
+    if all(status == "COMPLETE" for status in mapped):
+        return "COMPLETE"
+    if "IN_PROGRESS" in mapped:
+        return "IN_PROGRESS"
+    if any(status in {"COMPLETE", "PARTIAL"} for status in mapped):
+        return "PARTIAL"
+    for status in ("BLOCKED_SAFETY", "BLOCKED_TECHNICAL"):
+        if status in mapped:
+            return status
+    return "QUEUED"
+
+
+def project_current_requirements(repository_root: Path) -> CurrentRequirementProjection:
+    """Validate current coordination and derive A-V without modifying historical fields."""
+
+    documents = {path: _read_object(repository_root, path) for path in HISTORICAL_PAYLOAD_SHA256S}
+    state = validate_governance_documents(repository_root, documents)
+    statuses = combined_queue_statuses(
+        [_read_bytes(repository_root, path).decode("utf-8") for path in QUEUE_PATHS]
+    )
+    if canonical_sha256(statuses) != state.queue_statuses_sha256:
+        raise ValueError("queue changed during current requirement projection")
+    traceability_path = "docs/remediation/v3/review_traceability.json"
+    requirements = documents[traceability_path]["requirements"]
+    if not isinstance(requirements, list) or [row["id"] for row in requirements] != list(
+        "ABCDEFGHIJKLMNOPQRSTUV"
+    ):
+        raise ValueError("requirement projection must retain the exact A-V mapping")
+    return CurrentRequirementProjection(
+        current_engineering_state_sha256=canonical_sha256(state.model_dump(mode="json")),
+        queue_statuses_sha256=state.queue_statuses_sha256,
+        historical_traceability_sha256=HISTORICAL_PAYLOAD_SHA256S[traceability_path],
+        current_requirement_statuses={
+            row["id"]: derive_requirement_status(row["tickets"], statuses) for row in requirements
+        },
+        historical_requirement_statuses={row["id"]: row["status"] for row in requirements},
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repository-root", type=Path, default=Path(__file__).resolve().parents[1])
+    parser.add_argument(
+        "--current-requirements",
+        action="store_true",
+        help="Print validated current A-V queue status alongside frozen historical status; no writes.",
+    )
     args = parser.parse_args(argv)
     try:
+        if args.current_requirements:
+            projection = project_current_requirements(args.repository_root)
+            print(json.dumps(projection.model_dump(mode="json"), sort_keys=True))
+            return 0
         state = validate_governance_state(args.repository_root)
     except (OSError, TypeError, ValueError, KeyError):
         print("Governance coordination INVALID; no authority granted.")

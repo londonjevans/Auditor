@@ -1,0 +1,8 @@
+{
+  "version": "0.8.30",
+  "binary_sha256": "738dcdc6afddeb505ee4e4ef24f1c1fdba2b8c924e614cbbf5801a5b062dd683",
+  "version_output": "solc, the solidity compiler commandline interface\nVersion: 0.8.30+commit.73712a01.Darwin.appleclang\n",
+  "source_sha256": "4586a912583285b61b292324e561f0569e5b71e9f7f58f4ac020ce41a02cccc7",
+  "native_stdout_sha256": "da5188290694e1996378b70d0c65c161c7bf4abed69ff8a264f8a642a272e4b4",
+  "fixture_scope": "SYNTHETIC_LOCAL_ONLY_NORMALIZED_WRAPPER_NOT_EXECUTION_AUTHORITY"
+}

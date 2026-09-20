@@ -45,6 +45,7 @@ def translate_medusa_corpus(
             "targetContracts": ["MMAuditMedusaProperties"],
             "testLimit": translation.runs,
             "testing": {
+                "propertyTesting": {"enabled": True, "testPrefixes": ["echidna_"]},
                 "stopOnFailedTest": False,
                 "stopOnNoTests": True,
                 "testAllContracts": False,

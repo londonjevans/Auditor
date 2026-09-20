@@ -1,0 +1,70 @@
+{
+  "schema_version": "1.0",
+  "scope": "SYNTHETIC_SCHEMA_REFERENCE_NAMES_ONLY",
+  "cases": [
+    {
+      "id": "empty",
+      "choices": {},
+      "definitions": {},
+      "ref_template": "#/$defs/{model}",
+      "fast_path": true
+    },
+    {
+      "id": "recursive-reference",
+      "choices": {"synthetic_A": ["A", "synthetic_A"]},
+      "definitions": {
+        "synthetic_A": {"type": "object", "properties": {"child": {"$ref": "#/$defs/synthetic_A"}}}
+      },
+      "ref_template": "#/$defs/{model}",
+      "fast_path": true
+    },
+    {
+      "id": "all-intermediate-aliases",
+      "choices": {
+        "synthetic_A": ["A", "A_Input", "synthetic_A"],
+        "synthetic_B": ["B", "B_Input", "synthetic_B"]
+      },
+      "definitions": {
+        "synthetic_A": {"type": "object", "properties": {"b": {"$ref": "#/$defs/B_Input"}}, "examples": ["#/$defs/synthetic_B"]},
+        "synthetic_B": {"type": "string"}
+      },
+      "ref_template": "#/$defs/{model}",
+      "fast_path": true
+    },
+    {
+      "id": "different-schemas-sharing-name",
+      "choices": {"synthetic_A": ["Shared", "synthetic_A"], "synthetic_B": ["Shared", "synthetic_B"]},
+      "definitions": {"synthetic_A": {"type": "integer"}, "synthetic_B": {"type": "string"}},
+      "ref_template": "#/$defs/{model}",
+      "fast_path": false
+    },
+    {
+      "id": "identical-schemas-sharing-name",
+      "choices": {"synthetic_A": ["Shared", "synthetic_A"], "synthetic_B": ["Shared", "synthetic_B"]},
+      "definitions": {"synthetic_A": {"type": "string"}, "synthetic_B": {"type": "string"}},
+      "ref_template": "#/$defs/{model}",
+      "fast_path": false
+    },
+    {
+      "id": "collision-only-in-intermediate-alias",
+      "choices": {"synthetic_A": ["A", "Shared", "synthetic_A"], "synthetic_B": ["B", "Shared", "synthetic_B"]},
+      "definitions": {"synthetic_A": {"type": "string"}, "synthetic_B": {"type": "integer"}},
+      "ref_template": "#/$defs/{model}",
+      "fast_path": false
+    },
+    {
+      "id": "duplicate-alias-within-group",
+      "choices": {"synthetic_A": ["A", "A", "synthetic_A"]},
+      "definitions": {"synthetic_A": {"type": "string"}},
+      "ref_template": "#/$defs/{model}",
+      "fast_path": false
+    },
+    {
+      "id": "nonstandard-template",
+      "choices": {"synthetic_A": ["A", "synthetic_A"]},
+      "definitions": {"synthetic_A": {"type": "string"}},
+      "ref_template": "/synthetic-references/{model}",
+      "fast_path": false
+    }
+  ]
+}

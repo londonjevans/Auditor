@@ -25,7 +25,7 @@ from enum import StrEnum
 from itertools import islice
 from typing import Annotated, Any, Final, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, ValidationInfo, model_validator
 
 from mmaudit.models.schemas import (
     CandidateFinding,
@@ -51,6 +51,7 @@ from mmaudit.models.truncation import (
 )
 from mmaudit.models.truncation_recovery import (
     TRUNCATION_RECOVERY_MAX_CHILD_REQUESTS,
+    TRUNCATION_RECOVERY_MAX_DEPTH,
     TRUNCATION_RECOVERY_MAX_USD_EXACT,
     TruncationRecoveryChannel,
     TruncationRecoveryChildPlan,
@@ -58,6 +59,7 @@ from mmaudit.models.truncation_recovery import (
     TruncationRecoveryPlan,
 )
 from mmaudit.models.truncation_recovery_journal import (
+    SchedulerTruncationRecoveryChildResult,
     rebuild_truncation_recovery_parent_from_projection,
 )
 from mmaudit.models.usage import (
@@ -69,6 +71,9 @@ from mmaudit.models.usage import (
 
 TRUNCATION_CLOSURE_ALGORITHM_VERSION: Final = "mmaudit.truncation-closure.v1"
 TRUNCATION_RECURSIVE_CLOSURE_ALGORITHM_VERSION: Final = "mmaudit.truncation-recursive-closure.v1"
+TRUNCATION_RETAINED_BRIDGE_CLOSURE_ALGORITHM_VERSION: Final = (
+    "mmaudit.truncation-recursive-closure.v2"
+)
 MAX_TRUNCATION_CLOSURE_SURFACES: Final = 10_000
 MAX_TRUNCATION_CLOSURE_ATTEMPTS: Final = 200
 
@@ -120,6 +125,17 @@ _INVARIANT_ROUTING_KEYS: tuple[str, ...] = (
     "audit_model_refresh_pricing_qualified_pricing_snapshot_sha256",
     "audit_model_refresh_pricing_current_pricing_snapshot_sha256",
 )
+
+
+def _recover_strict_json_usage_timestamps(value: object, info: ValidationInfo) -> object:
+    """Keep JSON datetime parsing local to usage without coercing other strict fields."""
+
+    if info.mode != "json":
+        return value
+    return SchedulerTruncationRecoveryChildResult.recover_json_usage_timestamps(value)
+
+
+_JsonUsageRecord = Annotated[UsageRecord, BeforeValidator(_recover_strict_json_usage_timestamps)]
 
 
 class TruncationClosureError(ValueError):
@@ -436,7 +452,7 @@ class TruncationRecoveryParentAttemptEvidence(_NonAuthorizingModel):
     parent_logical_request_id: str = Field(pattern=_REQUEST_ID_PATTERN)
     parent_activation_sha256: str = Field(pattern=_SHA256_PATTERN)
     provider_attempt_evidence_sha256: str = Field(pattern=_SHA256_PATTERN)
-    usage_record: UsageRecord
+    usage_record: _JsonUsageRecord
     usage_record_sha256: str = Field(pattern=_SHA256_PATTERN)
     envelope: CandidateReviewTruncatedEnvelopeEvidence
     projection: CandidateReviewTruncationProjection
@@ -584,21 +600,25 @@ class TruncationRecoveryParentAttemptEvidence(_NonAuthorizingModel):
 
 
 class TruncationRecoveryBridgeAttemptEvidence(_NonAuthorizingModel):
-    """Exact zero-retained truncated recovery child that parents one nested family."""
+    """Exact truncated child; retained records remain provisional until live closure."""
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.0", "1.1", "1.2"] = "1.0"
     child_plan: TruncationRecoveryChildPlan
     activation_sha256: str = Field(pattern=_SHA256_PATTERN)
     provider_attempt_evidence_sha256: str = Field(pattern=_SHA256_PATTERN)
     analysis_context_sha256: str = Field(pattern=_SHA256_PATTERN)
     request_limit_scope: str = Field(pattern=_ROOT_REQUEST_ID_PATTERN)
     request_limit_count_before: int = Field(ge=1, le=1_000_000)
-    usage_record: UsageRecord
+    usage_record: _JsonUsageRecord
     usage_record_sha256: str = Field(pattern=_SHA256_PATTERN)
     envelope: CandidateReviewTruncatedEnvelopeEvidence
     projection: CandidateReviewTruncationProjection
-    retained_surface_ids: tuple[()] = ()
-    retained_surface_record_sha256s: tuple[()] = ()
+    retained_surface_ids: tuple[str, ...] = Field(
+        default=(), max_length=MAX_TRUNCATION_CLOSURE_SURFACES
+    )
+    retained_surface_record_sha256s: tuple[str, ...] = Field(
+        default=(), max_length=MAX_TRUNCATION_CLOSURE_SURFACES
+    )
     provisional_finding_ids: tuple[str, ...] = Field(max_length=1_000)
     provisional_finding_sha256s: tuple[str, ...] = Field(max_length=1_000)
     provisional_findings_credit_eligible: Literal[False] = False
@@ -638,7 +658,9 @@ class TruncationRecoveryBridgeAttemptEvidence(_NonAuthorizingModel):
             "coverage_credit_authorized": False,
             "completion_authorized": False,
             "release_authorized": False,
-            "schema_version": "1.0",
+            "schema_version": (
+                "1.2" if plan.depth > 1 else "1.1" if exact_projection.surface_reviews else "1.0"
+            ),
             "child_plan": plan,
             "activation_sha256": activation_sha256,
             "provider_attempt_evidence_sha256": provider_attempt_evidence_sha256,
@@ -649,8 +671,12 @@ class TruncationRecoveryBridgeAttemptEvidence(_NonAuthorizingModel):
             "usage_record_sha256": _canonical_sha256(usage.model_dump(mode="json")),
             "envelope": exact_envelope,
             "projection": exact_projection,
-            "retained_surface_ids": (),
-            "retained_surface_record_sha256s": (),
+            "retained_surface_ids": tuple(
+                record.surface_id for record in exact_projection.surface_reviews
+            ),
+            "retained_surface_record_sha256s": tuple(
+                _record_sha256(record) for record in exact_projection.surface_reviews
+            ),
             "provisional_finding_ids": tuple(item[0] for item in findings),
             "provisional_finding_sha256s": tuple(item[1] for item in findings),
             "provisional_findings_credit_eligible": False,
@@ -665,7 +691,7 @@ class TruncationRecoveryBridgeAttemptEvidence(_NonAuthorizingModel):
         )
 
     @model_validator(mode="after")
-    def bridge_is_exact_zero_retained_recovery_truncation(self) -> Self:
+    def bridge_is_exact_recovery_truncation(self) -> Self:
         usage = self.usage_record
         context = _usage_context(usage)
         envelope_routing = _truncated_envelope_routing(self.envelope)
@@ -714,13 +740,24 @@ class TruncationRecoveryBridgeAttemptEvidence(_NonAuthorizingModel):
             or any(usage.routing.get(key) != value for key, value in projection_routing.items())
             or context.request_id != self.child_plan.child_logical_request_id
             or self.child_plan.channel is not TruncationRecoveryChannel.COVERAGE
-            or self.child_plan.depth != 1
-            or self.projection.surface_reviews
+            or not 1 <= self.child_plan.depth <= TRUNCATION_RECOVERY_MAX_DEPTH
             or self.projection.findings_state is not CandidateReviewChannelState.COMPLETE
+            or self.schema_version
+            != (
+                "1.2"
+                if self.child_plan.depth > 1
+                else "1.1"
+                if self.projection.surface_reviews
+                else "1.0"
+            )
             or self.retained_surface_ids
+            != tuple(record.surface_id for record in self.projection.surface_reviews)
+            or self.retained_surface_ids != tuple(sorted(set(self.retained_surface_ids)))
+            or not set(self.retained_surface_ids) < set(self.child_plan.surface_ids)
             or self.retained_surface_record_sha256s
+            != tuple(_record_sha256(record) for record in self.projection.surface_reviews)
         ):
-            raise ValueError("truncation bridge differs from its envelope or zero-retained plan")
+            raise ValueError("truncation bridge differs from its envelope or retained partition")
         algorithm_version = candidate_review_schema_algorithm_version(
             wire_schema_sha256=self.projection.wire_schema_sha256,
             normalized_batch_schema_sha256=self.projection.normalized_batch_schema_sha256,
@@ -764,7 +801,7 @@ class TruncationRecoveryChildCompletionEvidence(_NonAuthorizingModel):
     )
     request_limit_scope: str = Field(pattern=_ROOT_REQUEST_ID_PATTERN)
     request_limit_count_before: int = Field(ge=1, le=1_000_000)
-    usage_record: UsageRecord
+    usage_record: _JsonUsageRecord
     usage_record_sha256: str = Field(pattern=_SHA256_PATTERN)
     normalization: CandidateReviewNormalizationEvidence
     normalized_batch: CandidateReviewBatch
@@ -1116,12 +1153,12 @@ class TruncationRecoveredSurfaceReviewArtifact(_NonAuthorizingModel):
 
 
 class TruncationRecoveredRecursiveSurfaceReviewArtifact(_NonAuthorizingModel):
-    """Exact comparison evidence for the one admitted zero-retained recursive tree."""
+    """Exact comparison evidence for one bounded generic recursive tree."""
 
-    schema_version: Literal["1.0"] = "1.0"
-    algorithm_version: Literal["mmaudit.truncation-recursive-closure.v1"] = (
-        TRUNCATION_RECURSIVE_CLOSURE_ALGORITHM_VERSION
-    )
+    schema_version: Literal["1.0", "1.1"] = "1.0"
+    algorithm_version: Literal[
+        "mmaudit.truncation-recursive-closure.v1", "mmaudit.truncation-recursive-closure.v2"
+    ] = TRUNCATION_RECURSIVE_CLOSURE_ALGORITHM_VERSION
     structural_outcome: Literal["EXACT_ONE_LEVEL_RECURSIVE_SURFACE_PARTITION_VALIDATED"] = (
         "EXACT_ONE_LEVEL_RECURSIVE_SURFACE_PARTITION_VALIDATED"
     )
@@ -1161,6 +1198,10 @@ class TruncationRecoveredRecursiveSurfaceReviewArtifact(_NonAuthorizingModel):
     accounting: TruncationRecoveryAttemptAccounting
     accepted_candidates: tuple[CandidateFinding, ...] = Field(default=(), max_length=0)
     artifact_sha256: str = Field(pattern=_SHA256_PATTERN)
+
+    @property
+    def bridges(self) -> tuple[TruncationRecoveryBridgeAttemptEvidence, ...]:
+        return (self.bridge,)
 
     @model_validator(mode="after")
     def exact_recursive_partition_and_hash(self) -> Self:
@@ -1228,14 +1269,20 @@ class TruncationRecoveredRecursiveSurfaceReviewArtifact(_NonAuthorizingModel):
             != nested_plan.parent.provider_attempt_evidence_sha256
             or self.bridge.projection.evidence_sha256
             != nested_plan.parent.truncation_projection_sha256
-            or self.bridge.retained_surface_ids
-            or self.bridge.projection.surface_reviews
+            or self.schema_version != self.bridge.schema_version
+            or self.algorithm_version
+            != (
+                TRUNCATION_RETAINED_BRIDGE_CLOSURE_ALGORITHM_VERSION
+                if self.bridge.retained_surface_ids
+                else TRUNCATION_RECURSIVE_CLOSURE_ALGORITHM_VERSION
+            )
             or self.bridge.projection.findings_state is not CandidateReviewChannelState.COMPLETE
             or nested_plan.parent.requested_surface_manifest_sha256
             != root_plan.parent.requested_surface_manifest_sha256
             or nested_plan.parent.requested_surface_ids != bridge_child.surface_ids
-            or nested_plan.parent.unfinished_surface_ids != bridge_child.surface_ids
-            or nested_plan.parent.retained_surface_ids
+            or nested_plan.parent.unfinished_surface_ids
+            != tuple(sorted(set(bridge_child.surface_ids) - set(self.bridge.retained_surface_ids)))
+            or nested_plan.parent.retained_surface_ids != self.bridge.retained_surface_ids
             or tuple(child.child_plan for child in self.children)
             != (direct_child, *nested_plan.children)
         ):
@@ -1258,6 +1305,10 @@ class TruncationRecoveredRecursiveSurfaceReviewArtifact(_NonAuthorizingModel):
         expected_records = {
             review.surface_id: review for review in self.parent.projection.surface_reviews
         }
+        for review in self.bridge.projection.surface_reviews:
+            if review.surface_id in expected_records:
+                raise ValueError("recursive truncation closure parent and bridge records overlap")
+            expected_records[review.surface_id] = review
         for child in self.children:
             for review in child.surface_artifact.records:
                 if review.surface_id in expected_records:
@@ -1282,7 +1333,9 @@ class TruncationRecoveredRecursiveSurfaceReviewArtifact(_NonAuthorizingModel):
             )
         ):
             raise ValueError("recursive truncation closure record partition has a gap or mutation")
-        if self.origins != _surface_origins(parent=self.parent, children=self.children):
+        if self.origins != _recursive_surface_origins(
+            parent=self.parent, bridge=self.bridge, children=self.children
+        ):
             raise ValueError("recursive truncation closure per-record origins are inconsistent")
 
         _require_recursive_family_identity_uniqueness(
@@ -1495,6 +1548,7 @@ def build_truncation_recovered_recursive_surface_artifact(
             sorted(
                 (
                     *exact_parent.projection.surface_reviews,
+                    *exact_bridge.projection.surface_reviews,
                     *(
                         review
                         for child in exact_children
@@ -1504,7 +1558,9 @@ def build_truncation_recovered_recursive_surface_artifact(
                 key=lambda item: item.surface_id,
             )
         )
-        origins = _surface_origins(parent=exact_parent, children=exact_children)
+        origins = _recursive_surface_origins(
+            parent=exact_parent, bridge=exact_bridge, children=exact_children
+        )
         accounting = _recursive_attempt_accounting(
             root_plan=root_plan,
             nested_plan=nested_plan,
@@ -1519,8 +1575,12 @@ def build_truncation_recovered_recursive_surface_artifact(
             "coverage_credit_authorized": False,
             "completion_authorized": False,
             "release_authorized": False,
-            "schema_version": "1.0",
-            "algorithm_version": TRUNCATION_RECURSIVE_CLOSURE_ALGORITHM_VERSION,
+            "schema_version": exact_bridge.schema_version,
+            "algorithm_version": (
+                TRUNCATION_RETAINED_BRIDGE_CLOSURE_ALGORITHM_VERSION
+                if exact_bridge.retained_surface_ids
+                else TRUNCATION_RECURSIVE_CLOSURE_ALGORITHM_VERSION
+            ),
             "structural_outcome": ("EXACT_ONE_LEVEL_RECURSIVE_SURFACE_PARTITION_VALIDATED"),
             "surface_set_structurally_closed": True,
             "scheduler_custody_verified": False,
@@ -1792,6 +1852,41 @@ def _surface_origins(
                     provisional=False,
                 )
             )
+    return tuple(sorted(origins, key=lambda item: item.surface_id))
+
+
+def _recursive_surface_origins(
+    *,
+    parent: TruncationRecoveryParentAttemptEvidence,
+    bridge: TruncationRecoveryBridgeAttemptEvidence,
+    children: tuple[TruncationRecoveryChildCompletionEvidence, ...],
+) -> tuple[TruncationRecoverySurfaceOrigin, ...]:
+    """Bind retained bridge records to their original truncated request and frame."""
+
+    origins = list(_surface_origins(parent=parent, children=children))
+    frames = {
+        frame.record_id: frame
+        for frame in bridge.projection.accepted_frames
+        if frame.phase is CandidateReviewFramePhase.SURFACE_REVIEW
+    }
+    for record in bridge.projection.surface_reviews:
+        frame = frames.get(record.surface_id)
+        if frame is None:
+            raise TruncationClosureError("bridge surface lacks its accepted truncation frame")
+        origins.append(
+            TruncationRecoveryParentSurfaceOrigin(
+                origin_kind=TruncationSurfaceOriginKind.PARENT_PROVISIONAL,
+                surface_id=record.surface_id,
+                record_sha256=_record_sha256(record),
+                request_id=bridge.child_plan.child_logical_request_id,
+                generation_id=bridge.envelope.generation_id,
+                usage_record_sha256=bridge.usage_record_sha256,
+                projection_sha256=bridge.projection.evidence_sha256,
+                accepted_frame_sequence=frame.sequence,
+                accepted_frame_sha256=frame.frame_sha256,
+                provisional=True,
+            )
+        )
     return tuple(sorted(origins, key=lambda item: item.surface_id))
 
 

@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 from mmaudit.benchmark.engine import BenchmarkReport, evaluate_benchmark, load_manifest
 from mmaudit.models.schemas import AuditProfile
+from scripts.generate_release_schemas import rendered_schema
 
 ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_PATH = ROOT / "schemas" / "benchmark_report.schema.json"
@@ -23,10 +24,8 @@ def _published_schema() -> dict[str, Any]:
 
 
 def _generated_schema() -> dict[str, Any]:
-    schema = BenchmarkReport.model_json_schema()
-    schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
-    schema["$id"] = SCHEMA_URI
-    schema["title"] = "mmaudit benchmark report"
+    schema = json.loads(rendered_schema(SCHEMA_PATH.name, BenchmarkReport))
+    assert isinstance(schema, dict)
     return schema
 
 
@@ -44,6 +43,10 @@ def test_published_benchmark_report_schema_matches_the_typed_contract() -> None:
     schema = _published_schema()
 
     assert schema == _generated_schema()
+    assert schema["$id"] == SCHEMA_URI
+    assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
+    assert schema["title"] == "mmaudit benchmark report"
+    assert schema["$defs"]["MutationScorecard"]["allOf"]
     assert schema["additionalProperties"] is False
     assert set(schema["required"]) == {
         name for name, field in BenchmarkReport.model_fields.items() if field.is_required()

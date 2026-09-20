@@ -246,6 +246,157 @@ def _result(
 
 
 @pytest.mark.parametrize(
+    "algorithm",
+    (
+        ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_CEILING_V1,
+        ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_REQUEST_UNITS_V2,
+    ),
+)
+def test_provider_cap_does_not_invent_an_absent_cache_write_component(
+    algorithm: ProviderPriceCapAlgorithm,
+) -> None:
+    # Synthetic prices: no operator-shared evidence or provider access is needed.
+    pricing = normalize_exact_route_pricing(
+        {"prompt": "0.000007", "completion": "0.000019", "input_cache_read": "0.000002"}
+    )
+    envelopes = (
+        ()
+        if algorithm is ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_CEILING_V1
+        else (RoutePriceComponentUnitEnvelope.build_web_search_disabled(),)
+    )
+    caps = project_provider_price_cap(
+        pricing, algorithm=algorithm, price_component_unit_envelopes=envelopes
+    )
+    assert {item.component.value: item.value for item in caps} == {
+        "completion": 19.0,
+        "prompt": 7.0,
+    }
+    assert RoutePriceComponent.INPUT_CACHE_WRITE not in {item.component for item in pricing}
+    proof = prove_provider_price_cap(
+        pricing=pricing,
+        configured_cap=caps,
+        algorithm=algorithm,
+        price_component_unit_envelopes=envelopes,
+    )
+    assert proof.expressible is True
+    assert proof.no_weaker is True
+
+
+@pytest.mark.parametrize("cache_write", ("0", "0.000001", "0.000009"))
+@pytest.mark.parametrize(
+    "algorithm",
+    (
+        ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_CEILING_V1,
+        ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_REQUEST_UNITS_V2,
+    ),
+)
+def test_legacy_caps_distinguish_absent_cache_write_from_explicit_quotes(
+    algorithm: ProviderPriceCapAlgorithm,
+    cache_write: str,
+) -> None:
+    pricing = normalize_exact_route_pricing(
+        {"prompt": "0.000007", "completion": "0.000019", "input_cache_write": cache_write}
+    )
+    envelopes = (
+        ()
+        if algorithm is ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_CEILING_V1
+        else (RoutePriceComponentUnitEnvelope.build_web_search_disabled(),)
+    )
+    with pytest.raises(RouteConstraintError, match="variable price without a provider cap"):
+        project_provider_price_cap(
+            pricing, algorithm=algorithm, price_component_unit_envelopes=envelopes
+        )
+
+
+@pytest.mark.parametrize("role", tuple(ExactRouteRole))
+@pytest.mark.parametrize("component_envelopes", (False, True))
+def test_legacy_retained_shape_exposes_all_evidence_gaps_without_a_price_refusal(
+    role: ExactRouteRole,
+    component_envelopes: bool,
+) -> None:
+    """A diagnostic projection cannot turn selected-only metadata into admission."""
+
+    profile = _component_envelope_profile() if component_envelopes else _profile()
+    constraint = ExactRouteConstraint.build(
+        role=role, exact_model_id=MODEL, provider_endpoint=ENDPOINT, profile=profile
+    )
+    pricing = normalize_exact_route_pricing(
+        {"prompt": "0.000007", "completion": "0.000019", "input_cache_read": "0.000002"}
+    )
+    facts = _facts(
+        profile=profile,
+        constraint=constraint,
+        exact_pricing=pricing,
+        configured_provider_max_price=project_provider_price_cap(
+            pricing,
+            algorithm=profile.price_cap_algorithm,
+            price_component_unit_envelopes=profile.price_component_unit_envelopes or (),
+        ),
+        provider_display_names=("Provider A",),
+        provider_identity_inventory_complete=False,
+        endpoint_supported_reasoning_efforts=None,
+        model_supported_reasoning_efforts=HIGH_EFFORTS,
+        frozen_live_equivalent=None,
+        registry_selection_plan_sha256=None,
+        registry_profile_sha256=None,
+        registry_constraint_sha256=None,
+    )
+    report = evaluate_route_predicates(profile=profile, constraint=constraint, facts=facts)
+    failures = {
+        RoutePredicateId.PROVIDER_DISPLAY_NAME_INJECTIVITY: (
+            RoutePredicateDisposition.REJECTED,
+            RoutePredicateReason.DISPLAY_INVENTORY_INCOMPLETE,
+        ),
+        RoutePredicateId.FROZEN_LIVE_EQUIVALENCE: (
+            RoutePredicateDisposition.UNAVAILABLE,
+            RoutePredicateReason.LIVE_EQUIVALENCE_UNAVAILABLE,
+        ),
+        RoutePredicateId.REGISTRY_SELECTION_HASH_CUSTODY: (
+            RoutePredicateDisposition.UNAVAILABLE,
+            RoutePredicateReason.REGISTRY_SELECTION_CUSTODY_UNAVAILABLE,
+        ),
+        RoutePredicateId.REGISTRY_CONSTRAINT_HASH_CUSTODY: (
+            RoutePredicateDisposition.UNAVAILABLE,
+            RoutePredicateReason.REGISTRY_CONSTRAINT_CUSTODY_UNAVAILABLE,
+        ),
+        RoutePredicateId.EMPIRICAL_SCHEMA_CONFORMANCE: (
+            RoutePredicateDisposition.UNAVAILABLE,
+            RoutePredicateReason.EMPIRICAL_SCHEMA_EVIDENCE_UNAVAILABLE,
+        ),
+        RoutePredicateId.TOKEN_DETAIL_REPORTING_CONVENTION: (
+            RoutePredicateDisposition.UNAVAILABLE,
+            RoutePredicateReason.TOKEN_DETAIL_CONVENTION_UNAVAILABLE,
+        ),
+    }
+    assert len(report.results) == 29
+    for predicate in ROUTE_PREDICATE_IDS:
+        assert _result(report, predicate) == failures.get(
+            predicate, (RoutePredicateDisposition.SATISFIED, RoutePredicateReason.SATISFIED)
+        )
+    display = {RoutePredicateId.PROVIDER_DISPLAY_NAME_INJECTIVITY}
+    registry = display | {
+        RoutePredicateId.REGISTRY_SELECTION_HASH_CUSTODY,
+        RoutePredicateId.REGISTRY_CONSTRAINT_HASH_CUSTODY,
+    }
+    expected_failures = {
+        RouteConstraintPurpose.DISCOVERY_PUBLICATION: display,
+        RouteConstraintPurpose.REGISTRY_PUBLICATION: registry,
+        RouteConstraintPurpose.NONCREDITING_SMOKE_ADMISSION: registry
+        | {RoutePredicateId.FROZEN_LIVE_EQUIVALENCE},
+        RouteConstraintPurpose.FULL_CAMPAIGN_ADMISSION: registry
+        | {
+            RoutePredicateId.EMPIRICAL_SCHEMA_CONFORMANCE,
+            RoutePredicateId.TOKEN_DETAIL_REPORTING_CONVENTION,
+        },
+    }
+    assert set(expected_failures) == set(RouteConstraintPurpose)
+    for purpose, expected in expected_failures.items():
+        with pytest.raises(RoutePredicateRequirementError) as caught:
+            require_route_predicates(report, purpose=purpose)
+        assert {item.predicate_id for item in caught.value.failures} == expected
+
+
+@pytest.mark.parametrize(
     "policy_name",
     ("_FAILURE_REASONS_BY_PREDICATE", "_PURPOSE_REQUIRED"),
 )
@@ -517,7 +668,7 @@ def test_profile_constraint_facts_and_report_are_deterministic_and_self_hashed()
         facts=facts,
     )
     assert tuple(item.predicate_id for item in report.results) == ROUTE_PREDICATE_IDS
-    assert len(report.results) == len(RoutePredicateId) == 29
+    assert len(report.results) == len(ROUTE_PREDICATE_IDS) == 29
     assert all(
         item.disposition is RoutePredicateDisposition.SATISFIED for item in report.results[:-2]
     )

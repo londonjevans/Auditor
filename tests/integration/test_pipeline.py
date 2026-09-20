@@ -149,6 +149,7 @@ from mmaudit.orchestration.manifest import (
     validate_solidity_shard_artifacts,
     write_run_evidence_manifest,
 )
+from mmaudit.orchestration.mutation_pipeline import MutationPipelineArtifact
 from mmaudit.orchestration.pipeline import AuditPipeline
 from mmaudit.orchestration.prior_audit import build_prior_audit_comparison
 from mmaudit.orchestration.replay import OfflineReplayOrchestrator
@@ -1840,6 +1841,14 @@ async def test_mock_multi_agent_audit_preserves_artifacts_without_false_completi
     )
     assert not (result.run_dir / TERMINAL_AUDIT_LEARNING_ARTIFACT_PATH).exists()
     assert before == after
+    mutation_artifact = MutationPipelineArtifact.model_validate_json(
+        (result.run_dir / "source-local-mutations.json").read_bytes()
+    )
+    assert mutation_artifact.corpus_hash == mutation_artifact.corpus.corpus_hash
+    assert not mutation_artifact.projects and mutation_artifact.runner_attempts == 0
+    assert (
+        not mutation_artifact.execution_validated and not mutation_artifact.qualification_eligible
+    )
     assert fake.chat_calls == len(result.report.usage) == 14
     assert {record.role for record in result.report.usage} >= {
         "threat_model",
@@ -3801,6 +3810,13 @@ async def test_erc4626_generated_harness_executes_locally_and_is_counted_separat
     assert all(execution.compiler_sha256 == compiler_sha256 for execution in executions)
     assert all("[PINNED_SOLC]" in execution.command for execution in executions)
     assert all(str(solc) not in execution.command for execution in executions)
+    mutation_artifact = MutationPipelineArtifact.model_validate_json(
+        (result.run_dir / "source-local-mutations.json").read_bytes()
+    )
+    assert mutation_artifact.property_ids == sorted(
+        p.id for p in mutation_artifact.corpus.properties
+    )
+    assert mutation_artifact.limitations and not mutation_artifact.execution_validated
     coverage = result.report.metadata["solidity"]["coverage"]
     assert coverage["economic_simulations_executed"] >= 1
     template_coverage = coverage["economic_template_execution"]["erc4626_donation_inflation"]

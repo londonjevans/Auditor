@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from decimal import Decimal
-from typing import Any, Literal, Self
+from typing import TYPE_CHECKING, Any, Literal, Self
 
 from pydantic import Field, model_validator
 
@@ -21,6 +21,7 @@ from mmaudit.models.development_audit import (
     development_ledger_request_id,
 )
 from mmaudit.models.development_corpus import (
+    MAX_DEVELOPMENT_CORPUS_FILES,
     DevelopmentCorpusAccountingEntry,
     DevelopmentCorpusManifest,
     DevelopmentCorpusObservation,
@@ -33,6 +34,9 @@ from mmaudit.models.development_judgment import _money_sum
 from mmaudit.models.development_review import DevelopmentReviewMetadata, _DevelopmentModel
 from mmaudit.orchestration.cost_ledger import CostEntryStatus
 from mmaudit.orchestration.manifest import canonical_sha256
+
+if TYPE_CHECKING:
+    from mmaudit.repository.development_corpus import LoadedDevelopmentCorpus
 
 MAX_DEVELOPMENT_CORPUS_REPEATS_PLAN_BYTES = 16_000_000
 MAX_DEVELOPMENT_CORPUS_REPEATS_BYTES = 192_000_000
@@ -135,6 +139,7 @@ def prepare_development_corpus_repeats(
     maximum_completion_tokens: int = 4096,
     maximum_trial_seconds: float = 600.0,
     maximum_run_seconds: float = 600.0,
+    source_custody: LoadedDevelopmentCorpus | None = None,
 ) -> PreparedDevelopmentCorpusRepeats:
     """Prepare all requests and their total estimate without dispatch, credentials or output writes."""
 
@@ -151,6 +156,7 @@ def prepare_development_corpus_repeats(
             run_id=development_corpus_repeat_run_id(run_id, index),
             maximum_completion_tokens=maximum_completion_tokens,
             maximum_run_seconds=maximum_trial_seconds,
+            source_custody=source_custody,
         )
         for index in range(trial_count)
     )
@@ -182,7 +188,9 @@ class DevelopmentCorpusRepeatTrial(_DevelopmentModel):
     trial_index: int = Field(ge=0, le=7)
     status: Literal["NOT_STARTED", "MISSING_RESULT", "INCOMPLETE", "COMPLETE"]
     observation: DevelopmentCorpusObservation | None
-    accounting: tuple[DevelopmentCorpusAccountingEntry, ...] = Field(max_length=64)
+    accounting: tuple[DevelopmentCorpusAccountingEntry, ...] = Field(
+        max_length=MAX_DEVELOPMENT_CORPUS_FILES
+    )
 
     @model_validator(mode="after")
     def slot_preserves_original_observation_and_costs(self) -> Self:
@@ -274,10 +282,16 @@ class DevelopmentCorpusRepeatsObservation(_AuditArtifact):
     started_trial_count: int = Field(ge=0, le=8)
     completed_trial_count: int = Field(ge=0, le=8)
     missing_result_trial_indexes: tuple[int, ...] = Field(max_length=8)
-    selected_request_count: int = Field(ge=2, le=512)
-    missing_accounting_request_ids: tuple[str, ...] = Field(max_length=512)
-    missing_runtime_request_ids: tuple[str, ...] = Field(max_length=512)
-    unknown_actual_cost_request_ids: tuple[str, ...] = Field(max_length=512)
+    selected_request_count: int = Field(ge=2, le=MAX_DEVELOPMENT_CORPUS_FILES * 8)
+    missing_accounting_request_ids: tuple[str, ...] = Field(
+        max_length=MAX_DEVELOPMENT_CORPUS_FILES * 8
+    )
+    missing_runtime_request_ids: tuple[str, ...] = Field(
+        max_length=MAX_DEVELOPMENT_CORPUS_FILES * 8
+    )
+    unknown_actual_cost_request_ids: tuple[str, ...] = Field(
+        max_length=MAX_DEVELOPMENT_CORPUS_FILES * 8
+    )
     total_accounted_cost_usd: Decimal = Field(ge=0)
     reported_actual_cost_usd: Decimal = Field(ge=0)
     uncertain_accounted_cost_usd: Decimal = Field(ge=0)

@@ -21,7 +21,13 @@ from typing import Any, Never, Protocol, SupportsIndex
 
 from pydantic import BaseModel
 
-from mmaudit.models.scheduler import scheduler_canonical_sha256
+from mmaudit.constants import SPECIALIST_INVESTIGATOR_ROLES
+from mmaudit.models.scheduler import (
+    SchedulerTerminalStatus,
+    SchedulerTruncationRecoveryModelRequestEvidence,
+    SchedulerTruncationRecoveryPromotionDisposition,
+    scheduler_canonical_sha256,
+)
 from mmaudit.models.schemas import (
     ContextPackage,
     ContextRequestEvidence,
@@ -58,8 +64,14 @@ from mmaudit.models.truncation_recovery_journal import (
     SchedulerTruncationRecoveryFamilyPromotion,
     SchedulerTruncationRecoveryFamilyRoot,
     SchedulerTruncationRecoveryParentKind,
+    SchedulerTruncationRecoveryPromotionBinding,
     SchedulerTruncationRecoveryResultOrigin,
     SchedulerTruncationRecoveryTerminalStatus,
+    _require_nested_recovery_terminal_outcome,
+)
+from mmaudit.models.truncation_tree import (
+    TruncationRecoveredTreeArtifact,
+    truncation_recovery_tree_inventory,
 )
 from mmaudit.models.usage import (
     atomic_request_limit_reservations_from_usage,
@@ -157,7 +169,7 @@ class VerifiedPromotedTruncationRecoverySurfaceCoverage:
 
 
 class VerifiedRecursiveTruncationRecoveryTree:
-    """Opaque PID-local proof of the admitted zero-retained one-level tree."""
+    """Opaque PID-local proof of the admitted bounded one-level recovery tree."""
 
     __slots__ = ("__weakref__",)
 
@@ -274,6 +286,7 @@ class VerifiedRecursiveTruncationRecoveryTreeProjection:
     nested_child_result_sha256s: tuple[str, str]
     superseded_bridge_result_sha256: str
     promoted_leaf_result_sha256s: tuple[str, str, str]
+    child_specialist_outcome_sha256s: tuple[tuple[str, str | None], ...]
     artifact: TruncationRecoveredRecursiveSurfaceReviewArtifact
     scanner_fingerprints_by_request: tuple[tuple[str, tuple[str, ...]], ...]
     parent_usage_record: UsageRecord
@@ -303,6 +316,7 @@ class VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverageProjection:
     nested_child_result_sha256s: tuple[str, str]
     superseded_bridge_result_sha256: str
     promoted_leaf_result_sha256s: tuple[str, str, str]
+    child_specialist_outcome_sha256s: tuple[tuple[str, str | None], ...]
     artifact: TruncationRecoveredRecursiveSurfaceReviewArtifact
     scanner_fingerprints_by_request: tuple[tuple[str, tuple[str, ...]], ...]
     parent_usage_record: UsageRecord
@@ -311,6 +325,235 @@ class VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverageProjection:
     parent_context: ContextPackage
     bridge_context: ContextPackage
     leaf_contexts: tuple[ContextPackage, ContextPackage, ContextPackage]
+
+    @property
+    def bridge_usage_records(self) -> tuple[UsageRecord, ...]:
+        return (self.bridge_usage_record,)
+
+    @property
+    def bridge_contexts(self) -> tuple[ContextPackage, ...]:
+        return (self.bridge_context,)
+
+    def matches_binding(self, binding: SchedulerTruncationRecoveryPromotionBinding) -> bool:
+        return (
+            binding.schema_version == "1.1"
+            and binding.parent_task_id == self.artifact.parent_task_id
+            and binding.promotion_entry_sha256 == self.promotion_entry_sha256
+            and binding.recovered_output_artifact_sha256 == self.recovered_output_artifact_sha256
+            and binding.direct_child_result_sha256s == self.direct_child_result_sha256s
+            and all(
+                getattr(binding, name) == getattr(self, name)
+                for name in (
+                    "nested_family_id",
+                    "nested_family_root_sha256",
+                    "nested_recovery_plan_sha256",
+                    "nested_family_closure_id",
+                    "nested_family_closure_sha256",
+                    "nested_child_result_sha256s",
+                    "superseded_bridge_result_sha256",
+                    "promoted_leaf_result_sha256s",
+                )
+            )
+        )
+
+    def matches_requests(
+        self, requests: tuple[SchedulerTruncationRecoveryModelRequestEvidence, ...]
+    ) -> bool:
+        ordered: tuple[
+            TruncationRecoveryBridgeAttemptEvidence | TruncationRecoveryChildCompletionEvidence, ...
+        ] = (self.artifact.bridge, *self.artifact.children)
+        hashes = (self.superseded_bridge_result_sha256, *self.promoted_leaf_result_sha256s)
+        expected = tuple(
+            (
+                owner.child_plan.child_task_id,
+                owner.usage_record.request_id,
+                result_hash,
+                self.family_id if index < 2 else self.nested_family_id,
+                self.family_root_sha256 if index < 2 else self.nested_family_root_sha256,
+                self.artifact.recovery_plan.plan_sha256
+                if index < 2
+                else self.nested_recovery_plan_sha256,
+                self.family_closure_id if index < 2 else self.nested_family_closure_id,
+                self.family_closure_sha256 if index < 2 else self.nested_family_closure_sha256,
+                index == 0,
+            )
+            for index, (owner, result_hash) in enumerate(zip(ordered, hashes, strict=True))
+        )
+        if not _promoted_request_inventory_matches(self.promotion_entry_sha256, expected, requests):
+            return False
+        outcomes = dict(self.child_specialist_outcome_sha256s)
+        role = self.artifact.invariant_binding.review_role
+        schema = (
+            "1.4"
+            if role in {f"specialist:{name}" for name in SPECIALIST_INVESTIGATOR_ROLES}
+            else "1.2"
+        )
+        return (
+            len(outcomes) == len(self.child_specialist_outcome_sha256s) == len(requests)
+            and set(outcomes) == {request.logical_request_id for request in requests}
+            and all(
+                request.role == role
+                and request.schema_version == schema
+                and request.specialist_accepted_outcome_sha256
+                == outcomes[request.logical_request_id]
+                for request in requests
+            )
+        )
+
+
+class VerifiedPromotedFullTreeTruncationRecoverySurfaceCoverage:
+    """Separate live public tree custody; comparison data never constructs this token."""
+
+    __slots__ = ("__weakref__",)
+
+    def __new__(cls, *_args: object, **_kwargs: object) -> Never:
+        raise TypeError("promoted full-tree coverage cannot be constructed directly")
+
+    def __init__(self, *_args: object, **_kwargs: object) -> None:
+        del self, _args, _kwargs
+
+    def __copy__(self) -> Never:
+        raise TypeError("promoted full-tree coverage cannot be copied")
+
+    def __deepcopy__(self, _memo: object) -> Never:
+        raise TypeError("promoted full-tree coverage cannot be copied")
+
+    def __reduce__(self) -> Never:
+        raise TypeError("promoted full-tree coverage cannot be serialized")
+
+    def __reduce_ex__(self, _protocol: SupportsIndex) -> Never:
+        raise TypeError("promoted full-tree coverage cannot be serialized")
+
+
+@dataclass(frozen=True, slots=True)
+class VerifiedPromotedFullTreeTruncationRecoverySurfaceCoverageProjection:
+    """Fresh full-tree consumer data, available only after original live custody checks."""
+
+    binding: SchedulerTruncationRecoveryPromotionBinding
+    artifact: TruncationRecoveredTreeArtifact
+    scanner_fingerprints_by_request: tuple[tuple[str, tuple[str, ...]], ...]
+    parent_usage_record: UsageRecord
+    bridge_usage_records: tuple[UsageRecord, ...]
+    leaf_usage_records: tuple[UsageRecord, ...]
+    parent_context: ContextPackage
+    bridge_contexts: tuple[ContextPackage, ...]
+    leaf_contexts: tuple[ContextPackage, ...]
+
+    @property
+    def promotion_entry_sha256(self) -> str:
+        return self.binding.promotion_entry_sha256
+
+    @property
+    def recovered_output_artifact_sha256(self) -> str:
+        return self.binding.recovered_output_artifact_sha256
+
+    def matches_binding(self, binding: SchedulerTruncationRecoveryPromotionBinding) -> bool:
+        return binding == self.binding and binding.schema_version == "1.2"
+
+    def matches_requests(
+        self, requests: tuple[SchedulerTruncationRecoveryModelRequestEvidence, ...]
+    ) -> bool:
+        tree = truncation_recovery_tree_inventory(
+            self.artifact.recovery_prefix, root_family_id=self.artifact.root_family_id
+        )
+        families = {family.family_id: family for family in tree.families}
+        closures = {closure.family_id: closure for closure in tree.closures}
+        expected = tuple(
+            (
+                result.child_task_id,
+                result.child_logical_request_id,
+                result.entry_sha256,
+                result.family_id,
+                families[result.family_id].entry_sha256,
+                families[result.family_id].recovery_plan.plan_sha256,
+                closures[result.family_id].closure_id,
+                closures[result.family_id].entry_sha256,
+                result.terminal_status is SchedulerTruncationRecoveryTerminalStatus.TRUNCATED,
+            )
+            for result in tree.results
+        )
+        if not _promoted_request_inventory_matches(self.promotion_entry_sha256, expected, requests):
+            return False
+        results = {result.child_task_id: result for result in tree.results}
+        role = tree.families[0].request_limit_binding.parent_request_limit_reservation.role
+        schema = (
+            "1.4"
+            if role in {f"specialist:{name}" for name in SPECIALIST_INVESTIGATOR_ROLES}
+            else "1.2"
+        )
+        return all(
+            (
+                request.role,
+                request.schema_version,
+                request.specialist_accepted_outcome_sha256,
+                request.global_request_ordinal,
+                request.activation_id,
+                request.activation_entry_sha256,
+                request.terminal_evidence_sha256,
+                request.usage_record_sha256,
+                request.runtime_completion_evidence_sha256,
+                request.output_artifact_sha256,
+            )
+            == (
+                role,
+                schema,
+                results[request.child_task_id].runtime_specialist_accepted_outcome_sha256,
+                results[request.child_task_id].global_request_ordinal,
+                results[request.child_task_id].activation_id,
+                results[request.child_task_id].activation_sha256,
+                results[request.child_task_id].terminal_evidence_sha256,
+                results[request.child_task_id].runtime_usage_record_sha256,
+                results[request.child_task_id].runtime_completion_evidence_sha256,
+                results[request.child_task_id].runtime_output_artifact_sha256,
+            )
+            for request in requests
+        )
+
+
+type PromotedRecursiveRecoveryCapability = (
+    VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverage
+    | VerifiedPromotedFullTreeTruncationRecoverySurfaceCoverage
+)
+type PromotedRecursiveRecoveryProjection = (
+    VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverageProjection
+    | VerifiedPromotedFullTreeTruncationRecoverySurfaceCoverageProjection
+)
+
+
+def _promoted_request_inventory_matches(
+    promotion_sha256: str,
+    expected: tuple[tuple[str, str, str, str, str, str, str, str, bool], ...],
+    requests: tuple[SchedulerTruncationRecoveryModelRequestEvidence, ...],
+) -> bool:
+    """Compare every request/family/closure coordinate without assuming contiguous ordinals."""
+
+    by_task = {request.child_task_id: request for request in requests}
+    if len(by_task) != len(requests) or len(requests) != len(expected):
+        return False
+    for task, request_id, result, family, root, plan, closure_id, closure, bridge in expected:
+        request = by_task.get(task)
+        if request is None or (
+            request.logical_request_id != request_id
+            or request.child_result_entry_sha256 != result
+            or request.recovery_family_id != family
+            or request.family_root_sha256 != root
+            or request.recovery_plan_sha256 != plan
+            or request.family_closure_id != closure_id
+            or request.family_closure_sha256 != closure
+            or request.promotion_entry_sha256 != promotion_sha256
+            or request.terminal_status
+            is not (
+                SchedulerTerminalStatus.TRUNCATED if bridge else SchedulerTerminalStatus.SUCCEEDED
+            )
+            or request.promotion_disposition
+            is not (
+                SchedulerTruncationRecoveryPromotionDisposition.SUPERSEDED_TRUNCATED_BRIDGE
+                if bridge
+                else SchedulerTruncationRecoveryPromotionDisposition.SUCCESSFUL_LEAF
+            )
+        ):
+            return False
+    return True
 
 
 @dataclass(frozen=True, slots=True)
@@ -1045,7 +1288,7 @@ def _verify_live_recursive_truncation_recovery_material(
         atomic_request_limit_reservations_from_usage
     ),
 ) -> _VerifiedRecursiveTruncationRecoveryMaterial:
-    """Rebuild only the admitted zero-retained one-level tree from live custody."""
+    """Rebuild the bounded one-level tree and its exact retained records from live custody."""
 
     roots = (root_family, nested_family)
     closures = (root_closure, nested_closure)
@@ -1205,7 +1448,6 @@ def _verify_live_recursive_truncation_recovery_material(
         is not CandidateReviewChannelState.COMPLETE
         or exact_nested_family.truncation_projection.findings_state
         is not CandidateReviewChannelState.COMPLETE
-        or exact_nested_family.truncation_projection.surface_reviews
         or exact_nested_family.request_limit_id != exact_root_family.request_limit_id
         or exact_nested_family.request_limit_binding_sha256
         != exact_root_family.request_limit_binding_sha256
@@ -1287,6 +1529,12 @@ def _verify_live_recursive_truncation_recovery_material(
         raise TruncationRecoveryEvidenceError(
             "recursive truncation recovery result order differs from the frozen plans"
         )
+    request_role = exact_root_family.request_limit_binding.parent_request_limit_reservation.role
+    if (
+        request_role.startswith("specialist:")
+        and request_role.removeprefix("specialist:") not in SPECIALIST_INVESTIGATOR_ROLES
+    ):
+        raise TruncationRecoveryEvidenceError("recursive recovery requires a known specialist role")
     for family, plans, results in (
         (exact_root_family, root_plan.children, root_result_pair),
         (exact_nested_family, nested_plan.children, nested_result_pair),
@@ -1298,10 +1546,20 @@ def _verify_live_recursive_truncation_recovery_material(
                 or result.child_task_id != child.child_task_id
                 or result.child_logical_request_id != child.child_logical_request_id
                 or result.child_surface_ids != child.surface_ids
+                or result.runtime_activation is None
+                or result.runtime_activation.request_role != request_role
+                or result.runtime_usage_record is None
+                or result.runtime_usage_record.role != request_role
             ):
                 raise TruncationRecoveryEvidenceError(
                     "recursive truncation recovery child is detached from its exact family"
                 )
+            try:
+                _require_nested_recovery_terminal_outcome(result, result.runtime_activation)
+            except ValueError as exc:
+                raise TruncationRecoveryEvidenceError(
+                    "recursive truncation recovery child differs from its exact role outcome"
+                ) from exc
 
     bridge_results = tuple(
         result
@@ -1332,8 +1590,9 @@ def _verify_live_recursive_truncation_recovery_material(
         or nested_plan.parent.parent_logical_request_id != bridge_plan.child_logical_request_id
         or nested_plan.parent.parent_task_plan_sha256 != bridge_plan.child_plan_sha256
         or nested_plan.parent.requested_surface_ids != bridge_plan.surface_ids
-        or nested_plan.parent.unfinished_surface_ids != bridge_plan.surface_ids
-        or nested_plan.parent.retained_surface_ids
+        or nested_plan.parent.unfinished_surface_ids
+        != tuple(sorted(set(bridge_plan.surface_ids) - set(bridge_result.retained_surface_ids)))
+        or nested_plan.parent.retained_surface_ids != bridge_result.retained_surface_ids
         or nested_plan.parent.parent_path != bridge_plan.path
         or nested_plan.parent.current_depth != bridge_plan.depth
         or exact_nested_family.truncation_projection != bridge_result.truncation_projection
@@ -1345,7 +1604,7 @@ def _verify_live_recursive_truncation_recovery_material(
     successful_results = (direct_result, *nested_result_pair)
     for result in successful_results:
         if (
-            result.schema_version != "1.1"
+            result.schema_version not in {"1.1", "1.2"}
             or result.result_origin is not SchedulerTruncationRecoveryResultOrigin.RUNTIME
             or result.terminal_status is not SchedulerTruncationRecoveryTerminalStatus.SUCCEEDED
             or result.runtime_activation is None
@@ -1355,12 +1614,11 @@ def _verify_live_recursive_truncation_recovery_material(
             or result.runtime_normalized_batch is None
             or result.runtime_requested_surface_requests is None
             or result.runtime_output_artifact is None
-            or result.runtime_specialist_accepted_outcome is not None
             or result.runtime_truncated_envelope_evidence is not None
             or result.truncation_projection is not None
         ):
             raise TruncationRecoveryEvidenceError(
-                "recursive truncation recovery contains a non-generic successful leaf"
+                "recursive truncation recovery lacks exact typed successful leaf custody"
             )
     if (
         bridge_result.schema_version != "1.1"
@@ -1377,12 +1635,14 @@ def _verify_live_recursive_truncation_recovery_material(
         or bridge_result.runtime_specialist_accepted_outcome is not None
         or bridge_result.completed_surface_ids
         or bridge_result.retained_surface_ids
-        or bridge_result.truncation_projection.surface_reviews
+        != tuple(
+            record.surface_id for record in bridge_result.truncation_projection.surface_reviews
+        )
         or bridge_result.truncation_projection.findings_state
         is not CandidateReviewChannelState.COMPLETE
     ):
         raise TruncationRecoveryEvidenceError(
-            "recursive truncation recovery bridge is not exact zero-retained runtime custody"
+            "recursive truncation recovery bridge lacks exact truncated runtime custody"
         )
 
     if (
@@ -1489,18 +1749,22 @@ def _verify_live_recursive_truncation_recovery_material(
         )
 
     request_by_id = {request.surface_id: request for request in exact_requests}
-    for record in parent.projection.surface_reviews:
-        request = request_by_id.get(record.surface_id)
-        if request is None:
-            raise TruncationRecoveryEvidenceError(
-                "recursive truncation recovery parent retained an unrequested surface"
+    for retained_projection, retained_context, retained_usage in (
+        (parent.projection, sealed_parent_context, parent_usage_record),
+        (bridge.projection, sealed_bridge_context, bridge_usage_record),
+    ):
+        for record in retained_projection.surface_reviews:
+            request = request_by_id.get(record.surface_id)
+            if request is None:
+                raise TruncationRecoveryEvidenceError(
+                    "recursive truncation recovery retained an unrequested surface"
+                )
+            _validate_surface_record(
+                context=retained_context,
+                request=request,
+                record=record,
+                expected_role=retained_usage.role,
             )
-        _validate_surface_record(
-            context=sealed_parent_context,
-            request=request,
-            record=record,
-            expected_role=parent_usage_record.role,
-        )
 
     leaf_plans = (direct_plan, *nested_plan.children)
     completions: list[TruncationRecoveryChildCompletionEvidence] = []
@@ -2166,6 +2430,10 @@ def _build_recursive_truncation_recovery_runtime_authority() -> tuple[
             ),
             superseded_bridge_result_sha256=(material.superseded_bridge_result_sha256),
             promoted_leaf_result_sha256s=material.promoted_leaf_result_sha256s,
+            child_specialist_outcome_sha256s=tuple(
+                (result.child_logical_request_id, result.runtime_specialist_accepted_outcome_sha256)
+                for result in (*material.root_child_results, *material.nested_child_results)
+            ),
             artifact=material.artifact,
             scanner_fingerprints_by_request=material.scanner_fingerprints_by_request,
             parent_usage_record=material.parent_usage_record,
@@ -2496,6 +2764,7 @@ def _validated_promoted_recursive_surface_projection(
         nested_child_result_sha256s=tree.nested_child_result_sha256s,
         superseded_bridge_result_sha256=tree.superseded_bridge_result_sha256,
         promoted_leaf_result_sha256s=tree.promoted_leaf_result_sha256s,
+        child_specialist_outcome_sha256s=tree.child_specialist_outcome_sha256s,
         artifact=artifact,
         scanner_fingerprints_by_request=tree.scanner_fingerprints_by_request,
         parent_usage_record=tree.parent_usage_record,

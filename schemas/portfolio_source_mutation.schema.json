@@ -1,0 +1,105 @@
+{
+  "$defs": {
+    "SecurityMutationClass": {
+      "description": "The eleven explicit requirements, distinct from legacy generic operators.",
+      "enum": [
+        "removed_authorization",
+        "removed_nonce_update",
+        "changed_rounding_direction",
+        "removed_stale_price_validation",
+        "external_call_before_state_update",
+        "removed_initializer_protection",
+        "weakened_timelock",
+        "changed_storage_slot",
+        "removed_pause_enforcement",
+        "unchecked_return_handling",
+        "incorrect_decimal_scale"
+      ],
+      "title": "SecurityMutationClass",
+      "type": "string"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/portfolio_source_mutation.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "One exact source span; arbitrary replacement source is never accepted.",
+  "properties": {
+    "expected_file_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Expected File Sha256",
+      "type": "string"
+    },
+    "expected_lines": {
+      "items": {
+        "maxLength": 20000,
+        "type": "string"
+      },
+      "maxItems": 32,
+      "minItems": 1,
+      "title": "Expected Lines",
+      "type": "array"
+    },
+    "id": {
+      "pattern": "^mut-[a-z0-9][a-z0-9-]{0,75}$",
+      "title": "Id",
+      "type": "string"
+    },
+    "kind": {
+      "$ref": "#/$defs/SecurityMutationClass"
+    },
+    "line": {
+      "maximum": 10000000,
+      "minimum": 1,
+      "title": "Line",
+      "type": "integer"
+    },
+    "original_token": {
+      "anyOf": [
+        {
+          "maxLength": 80,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Original Token"
+    },
+    "path": {
+      "title": "Path",
+      "type": "string"
+    },
+    "replacement_token": {
+      "anyOf": [
+        {
+          "maxLength": 80,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Replacement Token"
+    },
+    "schema_version": {
+      "const": "2.0",
+      "default": "2.0",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "kind",
+    "path",
+    "line",
+    "expected_file_sha256",
+    "expected_lines"
+  ],
+  "title": "PortfolioSourceMutationSpec",
+  "type": "object"
+}

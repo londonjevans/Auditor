@@ -112,7 +112,13 @@ from mmaudit.orchestration.budgets import (
     _issue_trusted_budget_recovery_scope,
     _project_trusted_budget_accounting_state,
 )
-from mmaudit.orchestration.cost_ledger import AtomicCostLedger, CostEntryStatus, CostLedgerSnapshot
+from mmaudit.orchestration.cost_ledger import (
+    AtomicCostLedger,
+    CostEntryStatus,
+    CostLedgerSnapshot,
+    CostPriorBillingUnknownError,
+    unknown_prior_billing_entries,
+)
 from mmaudit.orchestration.scheduler_runtime import build_scheduler_cost_ledger_baseline
 from mmaudit.privacy import (
     PrivacyProfile,
@@ -1028,6 +1034,28 @@ def _preflight_authenticated_runner_smoke_launch(
         )
     initial = ledger.snapshot()
     _require_clean_snapshot(initial, final=False)
+    # Metadata-only inspection spends nothing. A model launch must be compatible
+    # with every selected role's billing policy, even before judge requests exist.
+    # This read-only check does not replace the ledger's atomic dispatch recheck.
+    if not live_route_metadata_only and any(
+        (profile := evidence.endpoint_snapshot.route_predicate_profile) is not None
+        and profile.operator_reservation_policy is not None
+        and profile.operator_reservation_policy.unknown_billing_blocks_new_work
+        and unknown_prior_billing_entries(
+            initial.entries,
+            legacy_uncertain_allowance=(
+                profile.operator_reservation_policy.legacy_uncertain_allowance
+            ),
+        )
+        for evidence in (
+            launch.candidate_discovery_evidence[0],
+            *(plan.judge_discovery_evidence[0] for plan in launch.run_plans),
+        )
+    ):
+        raise CostPriorBillingUnknownError(
+            "UNKNOWN_PRIOR_BILLING: smoke launch cost policy requires actual prior bills; "
+            "unknown billing blocks new work"
+        )
     _require_unused_smoke_run_index(initial, smoke_run_index=smoke_run_index)
     maximum_attempts = config.execution.maximum_model_attempts
     if (

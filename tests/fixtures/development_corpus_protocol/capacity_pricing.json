@@ -1,0 +1,12 @@
+{
+  "fixture_scope": "SYNTHETIC_CAPACITY_ONLY_NOT_PROVIDER_PRICES_OR_EXECUTION_AUTHORITY",
+  "pricing": {
+    "prompt": "0.0000002",
+    "completion": "0.0000006",
+    "input_cache_read": "0.00000005",
+    "input_cache_write": "0",
+    "request": "0.00001",
+    "web_search": "0.001",
+    "image": "0.001"
+  }
+}

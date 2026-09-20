@@ -1,0 +1,6096 @@
+{
+  "$defs": {
+    "AnalysisState": {
+      "description": "Evidence-aware state used by engines and coverage reports.",
+      "enum": [
+        "not_analyzed",
+        "attempted_but_failed",
+        "analyzed_with_fallback_parser",
+        "model_only",
+        "scanner_supported",
+        "deterministic",
+        "reproduced",
+        "formally_proven"
+      ],
+      "title": "AnalysisState",
+      "type": "string"
+    },
+    "AttackerCapability": {
+      "enum": [
+        "starting_capital",
+        "flash_liquidity",
+        "token_approval",
+        "timing",
+        "transaction_ordering",
+        "oracle_influence",
+        "governance_rights",
+        "privileged_role",
+        "cross_chain_message"
+      ],
+      "title": "AttackerCapability",
+      "type": "string"
+    },
+    "AttackerCapabilityPolicy": {
+      "additionalProperties": false,
+      "description": "Explicit capability envelope for the attack phase of a reproduction.",
+      "properties": {
+        "attacker_controlled_actors": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "title": "Attacker Controlled Actors",
+          "type": "array"
+        },
+        "attacker_controlled_contracts": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 16,
+          "title": "Attacker Controlled Contracts",
+          "type": "array"
+        },
+        "capability_justifications": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "maxProperties": 9,
+          "propertyNames": {
+            "$ref": "#/$defs/AttackerCapability"
+          },
+          "title": "Capability Justifications",
+          "type": "object"
+        },
+        "cross_chain_messages": {
+          "$ref": "#/$defs/CrossChainMessageCapability",
+          "default": "none"
+        },
+        "flash_liquidity_wei": {
+          "default": 0,
+          "maximum": 115792089237316195423570985008687907853269984665640564039457584007913129639935,
+          "minimum": 0,
+          "title": "Flash Liquidity Wei",
+          "type": "integer"
+        },
+        "governance_rights": {
+          "default": false,
+          "title": "Governance Rights",
+          "type": "boolean"
+        },
+        "max_block_advance": {
+          "default": 0,
+          "maximum": 10000000,
+          "minimum": 0,
+          "title": "Max Block Advance",
+          "type": "integer"
+        },
+        "max_time_shift_seconds": {
+          "default": 0,
+          "maximum": 31536000,
+          "minimum": 0,
+          "title": "Max Time Shift Seconds",
+          "type": "integer"
+        },
+        "oracle_influence": {
+          "$ref": "#/$defs/OracleInfluenceCapability",
+          "default": "none"
+        },
+        "privileged_roles": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 16,
+          "title": "Privileged Roles",
+          "type": "array"
+        },
+        "starting_native_capital_wei": {
+          "default": 0,
+          "maximum": 115792089237316195423570985008687907853269984665640564039457584007913129639935,
+          "minimum": 0,
+          "title": "Starting Native Capital Wei",
+          "type": "integer"
+        },
+        "token_approval_targets": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 32,
+          "title": "Token Approval Targets",
+          "type": "array"
+        },
+        "transaction_ordering": {
+          "$ref": "#/$defs/TransactionOrderingCapability",
+          "default": "none"
+        }
+      },
+      "required": [
+        "attacker_controlled_actors"
+      ],
+      "title": "AttackerCapabilityPolicy",
+      "type": "object"
+    },
+    "CollectedMutationExecution": {
+      "additionalProperties": false,
+      "description": "Retained original runner result and private raw artifacts, without runtime admission.",
+      "properties": {
+        "artifact_path": {
+          "title": "Artifact Path",
+          "type": "string"
+        },
+        "mutation_id": {
+          "title": "Mutation Id",
+          "type": "string"
+        },
+        "result": {
+          "$ref": "#/$defs/InvariantExecutionResult"
+        },
+        "stage": {
+          "enum": [
+            "baseline",
+            "mutant"
+          ],
+          "title": "Stage",
+          "type": "string"
+        }
+      },
+      "required": [
+        "mutation_id",
+        "stage",
+        "artifact_path",
+        "result"
+      ],
+      "title": "CollectedMutationExecution",
+      "type": "object"
+    },
+    "CompilerBoundPropertyTest": {
+      "additionalProperties": false,
+      "description": "An exact generated assertion, not an inference from a test's name.",
+      "properties": {
+        "property_id": {
+          "pattern": "^prop-[0-9a-f]{24}$",
+          "title": "Property Id",
+          "type": "string"
+        },
+        "record": {
+          "$ref": "#/$defs/RepositorySuiteInventoryRecord"
+        },
+        "test_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Test Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "property_id",
+        "record",
+        "test_id"
+      ],
+      "title": "CompilerBoundPropertyTest",
+      "type": "object"
+    },
+    "CompilerPropertyReachability": {
+      "additionalProperties": false,
+      "description": "Complete bounded structural closure; serialized declarations grant no authority.",
+      "properties": {
+        "build_info_sha256s": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 1000,
+          "minItems": 1,
+          "title": "Build Info Sha256S",
+          "type": "array"
+        },
+        "corpus_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Corpus Hash",
+          "type": "string"
+        },
+        "evidence_authority": {
+          "const": "COLLECTED_UNATTESTED",
+          "default": "COLLECTED_UNATTESTED",
+          "title": "Evidence Authority",
+          "type": "string"
+        },
+        "execution_validated": {
+          "const": false,
+          "default": false,
+          "title": "Execution Validated",
+          "type": "boolean"
+        },
+        "inventory_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Inventory Sha256",
+          "type": "string"
+        },
+        "limits": {
+          "$ref": "#/$defs/PropertyReachabilityLimits"
+        },
+        "path_feasibility_established": {
+          "const": false,
+          "default": false,
+          "title": "Path Feasibility Established",
+          "type": "boolean"
+        },
+        "project_root": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Project Root",
+          "type": "string"
+        },
+        "properties": {
+          "items": {
+            "$ref": "#/$defs/CompilerPropertyReachabilityRow"
+          },
+          "maxItems": 10000,
+          "title": "Properties",
+          "type": "array"
+        },
+        "qualification_eligible": {
+          "const": false,
+          "default": false,
+          "title": "Qualification Eligible",
+          "type": "boolean"
+        },
+        "reachability_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Reachability Sha256",
+          "type": "string"
+        },
+        "references": {
+          "items": {
+            "$ref": "#/$defs/CompilerPropertyReference"
+          },
+          "maxItems": 200000,
+          "title": "References",
+          "type": "array"
+        },
+        "regions": {
+          "items": {
+            "$ref": "#/$defs/CompilerPropertyRegion"
+          },
+          "maxItems": 100000,
+          "title": "Regions",
+          "type": "array"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "sources": {
+          "items": {
+            "$ref": "#/$defs/FoundryInventorySourceBinding"
+          },
+          "maxItems": 100000,
+          "minItems": 1,
+          "title": "Sources",
+          "type": "array"
+        },
+        "unresolved": {
+          "items": {
+            "$ref": "#/$defs/UnresolvedCompilerPropertyReference"
+          },
+          "maxItems": 200000,
+          "title": "Unresolved",
+          "type": "array"
+        }
+      },
+      "required": [
+        "project_root",
+        "inventory_sha256",
+        "corpus_hash",
+        "build_info_sha256s",
+        "sources",
+        "regions",
+        "references",
+        "unresolved",
+        "properties",
+        "limits",
+        "reachability_sha256"
+      ],
+      "title": "CompilerPropertyReachability",
+      "type": "object"
+    },
+    "CompilerPropertyReachabilityRow": {
+      "additionalProperties": false,
+      "properties": {
+        "property_id": {
+          "pattern": "^prop-[0-9a-f]{24}$",
+          "title": "Property Id",
+          "type": "string"
+        },
+        "reachable_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100000,
+          "title": "Reachable Ids",
+          "type": "array"
+        },
+        "seed_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100000,
+          "title": "Seed Ids",
+          "type": "array"
+        },
+        "unresolved_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100000,
+          "title": "Unresolved Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "property_id",
+        "seed_ids",
+        "reachable_ids",
+        "unresolved_ids"
+      ],
+      "title": "CompilerPropertyReachabilityRow",
+      "type": "object"
+    },
+    "CompilerPropertyReference": {
+      "additionalProperties": false,
+      "properties": {
+        "ast_node_id": {
+          "minimum": 0,
+          "title": "Ast Node Id",
+          "type": "integer"
+        },
+        "caller_id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Caller Id",
+          "type": "string"
+        },
+        "end_byte_exclusive": {
+          "exclusiveMinimum": 0,
+          "title": "End Byte Exclusive",
+          "type": "integer"
+        },
+        "id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "DIRECT_INTERNAL_CALL",
+            "MODIFIER_INVOCATION"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "start_byte": {
+          "minimum": 0,
+          "title": "Start Byte",
+          "type": "integer"
+        },
+        "target_id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Target Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "caller_id",
+        "target_id",
+        "ast_node_id",
+        "start_byte",
+        "end_byte_exclusive",
+        "kind"
+      ],
+      "title": "CompilerPropertyReference",
+      "type": "object"
+    },
+    "CompilerPropertyRegion": {
+      "additionalProperties": false,
+      "properties": {
+        "ast_node_id": {
+          "minimum": 0,
+          "title": "Ast Node Id",
+          "type": "integer"
+        },
+        "build_info_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Build Info Sha256",
+          "type": "string"
+        },
+        "end_byte_exclusive": {
+          "exclusiveMinimum": 0,
+          "title": "End Byte Exclusive",
+          "type": "integer"
+        },
+        "end_line": {
+          "minimum": 1,
+          "title": "End Line",
+          "type": "integer"
+        },
+        "id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "FunctionDefinition",
+            "ModifierDefinition"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "path": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "source_id": {
+          "minimum": 0,
+          "title": "Source Id",
+          "type": "integer"
+        },
+        "start_byte": {
+          "minimum": 0,
+          "title": "Start Byte",
+          "type": "integer"
+        },
+        "start_line": {
+          "minimum": 1,
+          "title": "Start Line",
+          "type": "integer"
+        },
+        "virtual": {
+          "title": "Virtual",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "build_info_sha256",
+        "ast_node_id",
+        "source_id",
+        "path",
+        "start_byte",
+        "end_byte_exclusive",
+        "start_line",
+        "end_line",
+        "kind",
+        "virtual"
+      ],
+      "title": "CompilerPropertyRegion",
+      "type": "object"
+    },
+    "CompilerSourceBuildBinding": {
+      "additionalProperties": false,
+      "description": "A transformed source's exact compiler build and source-unit identity.",
+      "properties": {
+        "build_info_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Build Info Sha256",
+          "type": "string"
+        },
+        "source_id": {
+          "minimum": 0,
+          "title": "Source Id",
+          "type": "integer"
+        },
+        "transformation": {
+          "$ref": "#/$defs/CompilerSourceTransformation"
+        }
+      },
+      "required": [
+        "build_info_sha256",
+        "source_id",
+        "transformation"
+      ],
+      "title": "CompilerSourceBuildBinding",
+      "type": "object"
+    },
+    "CompilerSourceTransformation": {
+      "additionalProperties": false,
+      "description": "Hash-bound description; the complete original/compiler bytes must reproduce it.",
+      "properties": {
+        "algorithm": {
+          "const": "CRLF_TO_LF_V1",
+          "default": "CRLF_TO_LF_V1",
+          "title": "Algorithm",
+          "type": "string"
+        },
+        "boundary_map_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Boundary Map Sha256",
+          "type": "string"
+        },
+        "compiler_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Compiler Sha256",
+          "type": "string"
+        },
+        "compiler_size_bytes": {
+          "maximum": 100000000,
+          "minimum": 0,
+          "title": "Compiler Size Bytes",
+          "type": "integer"
+        },
+        "original_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Original Sha256",
+          "type": "string"
+        },
+        "original_size_bytes": {
+          "exclusiveMinimum": 0,
+          "maximum": 100000000,
+          "title": "Original Size Bytes",
+          "type": "integer"
+        },
+        "removed_crlf_count": {
+          "exclusiveMinimum": 0,
+          "maximum": 1000000,
+          "title": "Removed Crlf Count",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "original_sha256",
+        "compiler_sha256",
+        "original_size_bytes",
+        "compiler_size_bytes",
+        "removed_crlf_count",
+        "boundary_map_sha256"
+      ],
+      "title": "CompilerSourceTransformation",
+      "type": "object"
+    },
+    "CrossChainMessageCapability": {
+      "enum": [
+        "none",
+        "valid_message",
+        "reorder_valid_messages"
+      ],
+      "title": "CrossChainMessageCapability",
+      "type": "string"
+    },
+    "DiscoveredPortfolioMutation": {
+      "additionalProperties": false,
+      "properties": {
+        "ast_node_ids": {
+          "items": {
+            "type": "integer"
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "title": "Ast Node Ids",
+          "type": "array"
+        },
+        "build_info_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Build Info Sha256",
+          "type": "string"
+        },
+        "declaration_ast_ids": {
+          "items": {
+            "type": "integer"
+          },
+          "maxItems": 100,
+          "title": "Declaration Ast Ids",
+          "type": "array"
+        },
+        "end_byte_exclusive": {
+          "exclusiveMinimum": 0,
+          "title": "End Byte Exclusive",
+          "type": "integer"
+        },
+        "source_id": {
+          "minimum": 0,
+          "title": "Source Id",
+          "type": "integer"
+        },
+        "specification": {
+          "$ref": "#/$defs/PortfolioSourceMutationSpec"
+        },
+        "start_byte": {
+          "minimum": 0,
+          "title": "Start Byte",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "specification",
+        "build_info_sha256",
+        "source_id",
+        "ast_node_ids",
+        "declaration_ast_ids",
+        "start_byte",
+        "end_byte_exclusive"
+      ],
+      "title": "DiscoveredPortfolioMutation",
+      "type": "object"
+    },
+    "DynamicPropertySpec": {
+      "additionalProperties": false,
+      "description": "One shared property with enough typed context for deterministic translation.",
+      "properties": {
+        "actions": {
+          "items": {
+            "$ref": "#/$defs/StatefulActionSpec"
+          },
+          "maxItems": 32,
+          "title": "Actions",
+          "type": "array"
+        },
+        "actors": {
+          "items": {
+            "$ref": "#/$defs/ForkActor"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "title": "Actors",
+          "type": "array"
+        },
+        "analysis_state": {
+          "$ref": "#/$defs/AnalysisState"
+        },
+        "assumptions": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Assumptions",
+          "type": "array"
+        },
+        "campaign": {
+          "$ref": "#/$defs/PropertyCampaignBounds"
+        },
+        "capability_policy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AttackerCapabilityPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "category": {
+          "$ref": "#/$defs/InvariantCategory"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "covered_entity_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "minItems": 1,
+          "title": "Covered Entity Ids",
+          "type": "array"
+        },
+        "covered_functions": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Covered Functions",
+          "type": "array"
+        },
+        "covered_state_variables": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Covered State Variables",
+          "type": "array"
+        },
+        "description": {
+          "maxLength": 8000,
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "harness_name": {
+          "pattern": "^[A-Za-z][A-Za-z0-9_]{0,63}$",
+          "title": "Harness Name",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^prop-[0-9a-f]{24}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "invariant_evidence_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Invariant Evidence Hash",
+          "type": "string"
+        },
+        "invariant_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Invariant Id",
+          "type": "string"
+        },
+        "predicate": {
+          "$ref": "#/$defs/InvariantPropertySpec"
+        },
+        "property_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Property Hash",
+          "type": "string"
+        },
+        "property_id": {
+          "pattern": "^[A-Za-z][A-Za-z0-9_]{0,47}$",
+          "title": "Property Id",
+          "type": "string"
+        },
+        "provenance": {
+          "$ref": "#/$defs/SolidityProvenance"
+        },
+        "setup_calls": {
+          "items": {
+            "$ref": "#/$defs/ForkCallStep"
+          },
+          "maxItems": 32,
+          "title": "Setup Calls",
+          "type": "array"
+        },
+        "source_evidence": {
+          "items": {
+            "$ref": "#/$defs/PropertySourceEvidence"
+          },
+          "maxItems": 100,
+          "minItems": 1,
+          "title": "Source Evidence",
+          "type": "array"
+        },
+        "target_aliases": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Target Aliases",
+          "type": "array"
+        },
+        "template": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InvariantTemplate"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "title": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "token_balance_seeds": {
+          "items": {
+            "$ref": "#/$defs/TokenBalanceSeed"
+          },
+          "maxItems": 16,
+          "title": "Token Balance Seeds",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "invariant_id",
+        "harness_name",
+        "property_id",
+        "title",
+        "description",
+        "category",
+        "predicate",
+        "actors",
+        "target_aliases",
+        "source_evidence",
+        "covered_entity_ids",
+        "provenance",
+        "confidence",
+        "analysis_state",
+        "campaign",
+        "invariant_evidence_hash",
+        "property_hash"
+      ],
+      "title": "DynamicPropertySpec",
+      "type": "object"
+    },
+    "EconomicMetrics": {
+      "additionalProperties": false,
+      "properties": {
+        "borrowed_capital": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Borrowed Capital"
+        },
+        "bounded_actions": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Bounded Actions"
+        },
+        "fees": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Fees"
+        },
+        "financial_settlement": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FinancialSettlementEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "gas_used": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Gas Used"
+        },
+        "gross_extraction": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Gross Extraction"
+        },
+        "lending_boundary": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LendingBoundaryEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "market_assumptions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Market Assumptions",
+          "type": "array"
+        },
+        "maximum_victim_loss": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Maximum Victim Loss"
+        },
+        "net_profit_or_loss": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Net Profit Or Loss"
+        },
+        "protocol_insolvency": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Protocol Insolvency"
+        },
+        "repeatable": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Repeatable"
+        },
+        "required_initial_capital": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Required Initial Capital"
+        },
+        "required_privileges": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Required Privileges",
+          "type": "array"
+        },
+        "resource_threshold": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Resource Threshold"
+        },
+        "share_price_boundary": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SharePriceBoundaryEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "EconomicMetrics",
+      "type": "object"
+    },
+    "EconomicSimulationKind": {
+      "enum": [
+        "erc4626_donation_inflation",
+        "reward_index_manipulation",
+        "flash_loan_oracle_manipulation",
+        "oracle_freshness_scale_availability",
+        "amm_reserve_manipulation",
+        "liquidation_edge_cases",
+        "share_price_exchange_rate",
+        "fee_on_transfer_rebasing_accounting",
+        "rounding_exploitation",
+        "governance_timelock_race",
+        "upgrade_initializer_misuse",
+        "cross_chain_duplicate_ordering",
+        "callback_receiver_reentrancy",
+        "bounded_state_growth",
+        "multi_transaction_state_ordering",
+        "sandwich_sensitive_flow",
+        "signature_nonce_domain_replay"
+      ],
+      "title": "EconomicSimulationKind",
+      "type": "string"
+    },
+    "ExecutionEvidenceKind": {
+      "description": "Whether a runtime record came from a real process or a test double.",
+      "enum": [
+        "real",
+        "mock",
+        "unverified"
+      ],
+      "title": "ExecutionEvidenceKind",
+      "type": "string"
+    },
+    "FinancialAssetKind": {
+      "enum": [
+        "native",
+        "erc20"
+      ],
+      "title": "FinancialAssetKind",
+      "type": "string"
+    },
+    "FinancialSettlementEvidence": {
+      "additionalProperties": false,
+      "description": "Single-asset settled cashflow with exact base-unit arithmetic.",
+      "properties": {
+        "actor": {
+          "pattern": "^[A-Za-z][A-Za-z0-9_]{0,47}$",
+          "title": "Actor",
+          "type": "string"
+        },
+        "asset_kind": {
+          "$ref": "#/$defs/FinancialAssetKind"
+        },
+        "asset_target": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z][A-Za-z0-9_]{0,47}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Asset Target"
+        },
+        "borrowed_assets": {
+          "maximum": 115792089237316195423570985008687907853269984665640564039457584007913129639935,
+          "minimum": 0,
+          "title": "Borrowed Assets",
+          "type": "integer"
+        },
+        "ending_assets": {
+          "maximum": 115792089237316195423570985008687907853269984665640564039457584007913129639935,
+          "minimum": 0,
+          "title": "Ending Assets",
+          "type": "integer"
+        },
+        "fees_paid": {
+          "maximum": 115792089237316195423570985008687907853269984665640564039457584007913129639935,
+          "minimum": 0,
+          "title": "Fees Paid",
+          "type": "integer"
+        },
+        "gross_assets_received": {
+          "maximum": 115792089237316195423570985008687907853269984665640564039457584007913129639935,
+          "minimum": 0,
+          "title": "Gross Assets Received",
+          "type": "integer"
+        },
+        "net_impact": {
+          "maximum": 57896044618658097711785492504343953926634992332820282019728792003956564819967,
+          "minimum": -57896044618658097711785492504343953926634992332820282019728792003956564819968,
+          "title": "Net Impact",
+          "type": "integer"
+        },
+        "repaid_assets": {
+          "maximum": 115792089237316195423570985008687907853269984665640564039457584007913129639935,
+          "minimum": 0,
+          "title": "Repaid Assets",
+          "type": "integer"
+        },
+        "slippage_loss": {
+          "maximum": 115792089237316195423570985008687907853269984665640564039457584007913129639935,
+          "minimum": 0,
+          "title": "Slippage Loss",
+          "type": "integer"
+        },
+        "starting_assets": {
+          "maximum": 115792089237316195423570985008687907853269984665640564039457584007913129639935,
+          "minimum": 0,
+          "title": "Starting Assets",
+          "type": "integer"
+        },
+        "unit": {
+          "const": "base_units",
+          "default": "base_units",
+          "title": "Unit",
+          "type": "string"
+        }
+      },
+      "required": [
+        "actor",
+        "asset_kind",
+        "starting_assets",
+        "borrowed_assets",
+        "repaid_assets",
+        "gross_assets_received",
+        "fees_paid",
+        "slippage_loss",
+        "ending_assets",
+        "net_impact"
+      ],
+      "title": "FinancialSettlementEvidence",
+      "type": "object"
+    },
+    "FinancialSettlementProbeSpec": {
+      "additionalProperties": false,
+      "description": "Typed uint256 probes used to validate one settled invariant action.",
+      "properties": {
+        "action_id": {
+          "pattern": "^[A-Za-z][A-Za-z0-9_]{0,47}$",
+          "title": "Action Id",
+          "type": "string"
+        },
+        "actor": {
+          "pattern": "^[A-Za-z][A-Za-z0-9_]{0,47}$",
+          "title": "Actor",
+          "type": "string"
+        },
+        "asset_kind": {
+          "$ref": "#/$defs/FinancialAssetKind"
+        },
+        "asset_target": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z][A-Za-z0-9_]{0,47}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Asset Target"
+        },
+        "borrowed_assets": {
+          "$ref": "#/$defs/InvariantProbe"
+        },
+        "ending_assets": {
+          "$ref": "#/$defs/InvariantProbe"
+        },
+        "fees_paid": {
+          "$ref": "#/$defs/InvariantProbe"
+        },
+        "gross_assets_received": {
+          "$ref": "#/$defs/InvariantProbe"
+        },
+        "net_impact": {
+          "$ref": "#/$defs/InvariantProbe"
+        },
+        "repaid_assets": {
+          "$ref": "#/$defs/InvariantProbe"
+        },
+        "slippage_loss": {
+          "$ref": "#/$defs/InvariantProbe"
+        },
+        "starting_assets": {
+          "$ref": "#/$defs/InvariantProbe"
+        }
+      },
+      "required": [
+        "actor",
+        "asset_kind",
+        "action_id",
+        "starting_assets",
+        "borrowed_assets",
+        "repaid_assets",
+        "gross_assets_received",
+        "fees_paid",
+        "slippage_loss",
+        "ending_assets",
+        "net_impact"
+      ],
+      "title": "FinancialSettlementProbeSpec",
+      "type": "object"
+    },
+    "ForkActor": {
+      "additionalProperties": false,
+      "properties": {
+        "address": {
+          "pattern": "^0x[0-9a-fA-F]{40}$",
+          "title": "Address",
+          "type": "string"
+        },
+        "initial_native_balance_wei": {
+          "default": 0,
+          "maximum": 115792089237316195423570985008687907853269984665640564039457584007913129639935,
+          "minimum": 0,
+          "title": "Initial Native Balance Wei",
+          "type": "integer"
+        },
+        "name": {
+          "pattern": "^[A-Za-z][A-Za-z0-9_]{0,47}$",
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "address"
+      ],
+      "title": "ForkActor",
+      "type": "object"
+    },
+    "ForkArgument": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/ForkArgumentKind"
+        },
+        "value": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Value",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "value"
+      ],
+      "title": "ForkArgument",
+      "type": "object"
+    },
+    "ForkArgumentKind": {
+      "enum": [
+        "uint256",
+        "int256",
+        "address",
+        "bool",
+        "bytes32",
+        "bytes",
+        "string"
+      ],
+      "title": "ForkArgumentKind",
+      "type": "string"
+    },
+    "ForkCallStep": {
+      "additionalProperties": false,
+      "description": "Attacker-reachable external call constrained by the capability policy.",
+      "properties": {
+        "actor": {
+          "pattern": "^[A-Za-z][A-Za-z0-9_]{0,47}$",
+          "title": "Actor",
+          "type": "string"
+        },
+        "arguments": {
+          "items": {
+            "$ref": "#/$defs/ForkArgument"
+          },
+          "maxItems": 24,
+          "title": "Arguments",
+          "type": "array"
+        },
+        "function_signature": {
+          "maxLength": 256,
+          "minLength": 3,
+          "title": "Function Signature",
+          "type": "string"
+        },
+        "required_capabilities": {
+          "items": {
+            "$ref": "#/$defs/AttackerCapability"
+          },
+          "maxItems": 9,
+          "title": "Required Capabilities",
+          "type": "array"
+        },
+        "step_id": {
+          "pattern": "^[A-Za-z][A-Za-z0-9_]{0,47}$",
+          "title": "Step Id",
+          "type": "string"
+        },
+        "target": {
+          "pattern": "^[A-Za-z][A-Za-z0-9_]{0,47}$",
+          "title": "Target",
+          "type": "string"
+        },
+        "value_wei": {
+          "default": 0,
+          "maximum": 115792089237316195423570985008687907853269984665640564039457584007913129639935,
+          "minimum": 0,
+          "title": "Value Wei",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "step_id",
+        "actor",
+        "target",
+        "function_signature"
+      ],
+      "title": "ForkCallStep",
+      "type": "object"
+    },
+    "FoundryInvariantHarnessSpec": {
+      "additionalProperties": false,
+      "description": "Operator/model-neutral declarative stateful invariant harness.",
+      "properties": {
+        "actions": {
+          "items": {
+            "$ref": "#/$defs/StatefulActionSpec"
+          },
+          "maxItems": 32,
+          "title": "Actions",
+          "type": "array"
+        },
+        "actors": {
+          "items": {
+            "$ref": "#/$defs/ForkActor"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "title": "Actors",
+          "type": "array"
+        },
+        "assumptions": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 40,
+          "title": "Assumptions",
+          "type": "array"
+        },
+        "capability_policy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AttackerCapabilityPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "depth": {
+          "default": 64,
+          "maximum": 10000,
+          "minimum": 1,
+          "title": "Depth",
+          "type": "integer"
+        },
+        "economic_template": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EconomicSimulationKind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "financial_settlement": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FinancialSettlementProbeSpec"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "invariant_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Invariant Id",
+          "type": "string"
+        },
+        "lending_boundary": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LendingBoundaryProbeSpec"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "local_deployments": {
+          "items": {
+            "$ref": "#/$defs/LocalInvariantDeployment"
+          },
+          "maxItems": 16,
+          "title": "Local Deployments",
+          "type": "array"
+        },
+        "name": {
+          "pattern": "^[A-Za-z][A-Za-z0-9_]{0,63}$",
+          "title": "Name",
+          "type": "string"
+        },
+        "properties": {
+          "items": {
+            "$ref": "#/$defs/InvariantPropertySpec"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "title": "Properties",
+          "type": "array"
+        },
+        "required_action_sequence": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 8,
+          "title": "Required Action Sequence",
+          "type": "array"
+        },
+        "required_transaction_ordering": {
+          "$ref": "#/$defs/TransactionOrderingCapability",
+          "default": "none"
+        },
+        "runs": {
+          "default": 256,
+          "maximum": 100000,
+          "minimum": 1,
+          "title": "Runs",
+          "type": "integer"
+        },
+        "seed": {
+          "default": 1,
+          "maximum": 115792089237316195423570985008687907853269984665640564039457584007913129639935,
+          "minimum": 0,
+          "title": "Seed",
+          "type": "integer"
+        },
+        "setup_calls": {
+          "items": {
+            "$ref": "#/$defs/ForkCallStep"
+          },
+          "maxItems": 32,
+          "title": "Setup Calls",
+          "type": "array"
+        },
+        "share_price_boundary": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SharePriceBoundaryProbeSpec"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "token_balance_seeds": {
+          "items": {
+            "$ref": "#/$defs/TokenBalanceSeed"
+          },
+          "maxItems": 16,
+          "title": "Token Balance Seeds",
+          "type": "array"
+        }
+      },
+      "required": [
+        "invariant_id",
+        "name",
+        "actors",
+        "properties"
+      ],
+      "title": "FoundryInvariantHarnessSpec",
+      "type": "object"
+    },
+    "FoundryInventorySourceBinding": {
+      "additionalProperties": false,
+      "description": "Original-source identity and explicit per-build nonidentity compiler mappings.",
+      "properties": {
+        "compiler_source_bindings": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/CompilerSourceBuildBinding"
+          },
+          "maxItems": 1000,
+          "title": "Compiler Source Bindings",
+          "type": "array"
+        },
+        "path": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "size_bytes": {
+          "minimum": 0,
+          "title": "Size Bytes",
+          "type": "integer"
+        },
+        "source_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "source_sha256",
+        "size_bytes"
+      ],
+      "title": "FoundryInventorySourceBinding",
+      "type": "object"
+    },
+    "FoundryPropertyTestMapping": {
+      "additionalProperties": false,
+      "description": "Complete property/test accounting; consistency grants no runtime or truth authority.",
+      "properties": {
+        "compiler_reachability": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CompilerPropertyReachability"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "corpus": {
+          "$ref": "#/$defs/PropertyCorpus"
+        },
+        "execution_validated": {
+          "const": false,
+          "default": false,
+          "title": "Execution Validated",
+          "type": "boolean"
+        },
+        "expected_chain_id": {
+          "anyOf": [
+            {
+              "maximum": 115792089237316195423570985008687907853269984665640564039457584007913129639935,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expected Chain Id"
+        },
+        "harnesses": {
+          "items": {
+            "$ref": "#/$defs/FoundryInvariantHarnessSpec"
+          },
+          "maxItems": 10000,
+          "title": "Harnesses",
+          "type": "array"
+        },
+        "inventory_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Inventory Sha256",
+          "type": "string"
+        },
+        "mapping_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Mapping Sha256",
+          "type": "string"
+        },
+        "project_root": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Project Root",
+          "type": "string"
+        },
+        "qualification_eligible": {
+          "const": false,
+          "default": false,
+          "title": "Qualification Eligible",
+          "type": "boolean"
+        },
+        "tests": {
+          "items": {
+            "$ref": "#/$defs/CompilerBoundPropertyTest"
+          },
+          "maxItems": 10000,
+          "title": "Tests",
+          "type": "array"
+        },
+        "unresolved_property_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 10000,
+          "title": "Unresolved Property Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "corpus",
+        "project_root",
+        "inventory_sha256",
+        "harnesses",
+        "tests",
+        "unresolved_property_ids",
+        "mapping_sha256"
+      ],
+      "title": "FoundryPropertyTestMapping",
+      "type": "object"
+    },
+    "GeneratedMutationWorkspace": {
+      "additionalProperties": false,
+      "description": "Exact additive lineage; a generated workspace never substitutes for the audited source.",
+      "properties": {
+        "augmented_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Augmented Sha256",
+          "type": "string"
+        },
+        "generated_files": {
+          "items": {
+            "$ref": "#/$defs/MutationSourceFile"
+          },
+          "maxItems": 10000,
+          "minItems": 1,
+          "title": "Generated Files",
+          "type": "array"
+        },
+        "original_files": {
+          "items": {
+            "$ref": "#/$defs/MutationSourceFile"
+          },
+          "maxItems": 100000,
+          "minItems": 1,
+          "title": "Original Files",
+          "type": "array"
+        },
+        "original_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Original Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "original_files",
+        "generated_files",
+        "original_sha256",
+        "augmented_sha256"
+      ],
+      "title": "GeneratedMutationWorkspace",
+      "type": "object"
+    },
+    "HarnessArgument": {
+      "additionalProperties": false,
+      "properties": {
+        "fuzz_slot": {
+          "anyOf": [
+            {
+              "maximum": 7,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Fuzz Slot"
+        },
+        "kind": {
+          "$ref": "#/$defs/ForkArgumentKind"
+        },
+        "maximum": {
+          "anyOf": [
+            {
+              "maximum": 115792089237316195423570985008687907853269984665640564039457584007913129639935,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Maximum"
+        },
+        "minimum": {
+          "anyOf": [
+            {
+              "maximum": 115792089237316195423570985008687907853269984665640564039457584007913129639935,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Minimum"
+        },
+        "source": {
+          "$ref": "#/$defs/HarnessArgumentSource"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "maxLength": 4096,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Value"
+        }
+      },
+      "required": [
+        "kind",
+        "source"
+      ],
+      "title": "HarnessArgument",
+      "type": "object"
+    },
+    "HarnessArgumentSource": {
+      "enum": [
+        "constant",
+        "fuzz_uint",
+        "actor"
+      ],
+      "title": "HarnessArgumentSource",
+      "type": "string"
+    },
+    "InvariantCampaignCoverage": {
+      "additionalProperties": false,
+      "description": "Separate observed function, state-property, and sequence campaign evidence.",
+      "properties": {
+        "attempts_consistent": {
+          "title": "Attempts Consistent",
+          "type": "boolean"
+        },
+        "declared_action_functions": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 32,
+          "title": "Declared Action Functions",
+          "type": "array"
+        },
+        "declared_state_properties": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 16,
+          "title": "Declared State Properties",
+          "type": "array"
+        },
+        "minimized_sequence_action_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 32,
+          "title": "Minimized Sequence Action Ids",
+          "type": "array"
+        },
+        "observed_action_functions": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 32,
+          "title": "Observed Action Functions",
+          "type": "array"
+        },
+        "observed_campaign_calls": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Observed Campaign Calls",
+          "type": "integer"
+        },
+        "observed_campaign_runs": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Observed Campaign Runs",
+          "type": "integer"
+        },
+        "observed_sequence_lengths": {
+          "items": {
+            "type": "integer"
+          },
+          "maxItems": 32,
+          "title": "Observed Sequence Lengths",
+          "type": "array"
+        },
+        "observed_state_properties": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 16,
+          "title": "Observed State Properties",
+          "type": "array"
+        },
+        "sequence_depth_bound": {
+          "maximum": 10000,
+          "minimum": 1,
+          "title": "Sequence Depth Bound",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "sequence_depth_bound",
+        "attempts_consistent"
+      ],
+      "title": "InvariantCampaignCoverage",
+      "type": "object"
+    },
+    "InvariantCategory": {
+      "enum": [
+        "accounting",
+        "authorization",
+        "token_standard",
+        "state_machine",
+        "economic"
+      ],
+      "title": "InvariantCategory",
+      "type": "string"
+    },
+    "InvariantExecutionAttemptEvidence": {
+      "additionalProperties": false,
+      "description": "Normalized evidence for one generated invariant campaign in a fresh copy.",
+      "properties": {
+        "attempt": {
+          "maximum": 10,
+          "minimum": 1,
+          "title": "Attempt",
+          "type": "integer"
+        },
+        "campaign_calls": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Campaign Calls",
+          "type": "integer"
+        },
+        "campaign_runs": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Campaign Runs",
+          "type": "integer"
+        },
+        "fresh_workspace": {
+          "title": "Fresh Workspace",
+          "type": "boolean"
+        },
+        "machine_output_validated": {
+          "default": false,
+          "title": "Machine Output Validated",
+          "type": "boolean"
+        },
+        "process_exit_code": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Process Exit Code"
+        },
+        "source_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Sha256",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/InvariantExecutionStatus"
+        },
+        "stderr_path": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Stderr Path",
+          "type": "string"
+        },
+        "stderr_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Stderr Sha256",
+          "type": "string"
+        },
+        "stdout_path": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Stdout Path",
+          "type": "string"
+        },
+        "stdout_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Stdout Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "attempt",
+        "status",
+        "source_sha256",
+        "fresh_workspace",
+        "stdout_sha256",
+        "stderr_sha256",
+        "stdout_path",
+        "stderr_path"
+      ],
+      "title": "InvariantExecutionAttemptEvidence",
+      "type": "object"
+    },
+    "InvariantExecutionMinimizationEvidence": {
+      "additionalProperties": false,
+      "description": "Bounded proof metadata for a minimized invariant action sequence.",
+      "properties": {
+        "foundry_original_sequence_length": {
+          "anyOf": [
+            {
+              "maximum": 10000,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Foundry Original Sequence Length"
+        },
+        "foundry_shrunk_sequence_length": {
+          "anyOf": [
+            {
+              "maximum": 10000,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Foundry Shrunk Sequence Length"
+        },
+        "original_action_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "title": "Original Action Ids",
+          "type": "array"
+        },
+        "proven_minimal": {
+          "title": "Proven Minimal",
+          "type": "boolean"
+        },
+        "removal_trials": {
+          "items": {
+            "$ref": "#/$defs/InvariantExecutionRemovalTrial"
+          },
+          "maxItems": 32,
+          "title": "Removal Trials",
+          "type": "array"
+        },
+        "retained_action_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "title": "Retained Action Ids",
+          "type": "array"
+        },
+        "strategy": {
+          "enum": [
+            "single_action_trivial",
+            "bounded_action_removal",
+            "not_attempted"
+          ],
+          "title": "Strategy",
+          "type": "string"
+        }
+      },
+      "required": [
+        "original_action_ids",
+        "retained_action_ids",
+        "strategy",
+        "proven_minimal"
+      ],
+      "title": "InvariantExecutionMinimizationEvidence",
+      "type": "object"
+    },
+    "InvariantExecutionRemovalTrial": {
+      "additionalProperties": false,
+      "description": "One clean bounded campaign with a candidate sequence action removed.",
+      "properties": {
+        "removed_action_id": {
+          "pattern": "^[A-Za-z][A-Za-z0-9_]{0,47}$",
+          "title": "Removed Action Id",
+          "type": "string"
+        },
+        "replay_confirmed": {
+          "title": "Replay Confirmed",
+          "type": "boolean"
+        },
+        "retained_action_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 31,
+          "minItems": 1,
+          "title": "Retained Action Ids",
+          "type": "array"
+        },
+        "seed": {
+          "maximum": 115792089237316195423570985008687907853269984665640564039457584007913129639935,
+          "minimum": 0,
+          "title": "Seed",
+          "type": "integer"
+        },
+        "status": {
+          "$ref": "#/$defs/InvariantExecutionStatus"
+        }
+      },
+      "required": [
+        "removed_action_id",
+        "retained_action_ids",
+        "status",
+        "replay_confirmed",
+        "seed"
+      ],
+      "title": "InvariantExecutionRemovalTrial",
+      "type": "object"
+    },
+    "InvariantExecutionResult": {
+      "additionalProperties": false,
+      "properties": {
+        "attempt_evidence": {
+          "items": {
+            "$ref": "#/$defs/InvariantExecutionAttemptEvidence"
+          },
+          "maxItems": 10,
+          "title": "Attempt Evidence",
+          "type": "array"
+        },
+        "attempts": {
+          "default": 0,
+          "maximum": 10,
+          "minimum": 0,
+          "title": "Attempts",
+          "type": "integer"
+        },
+        "campaign_coverage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InvariantCampaignCoverage"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "capability_policy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AttackerCapabilityPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "command": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Command",
+          "type": "array"
+        },
+        "compiler_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Compiler Sha256"
+        },
+        "compiler_version": {
+          "anyOf": [
+            {
+              "maxLength": 1000,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Compiler Version"
+        },
+        "counterexample_summary": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Counterexample Summary"
+        },
+        "depth": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Depth",
+          "type": "integer"
+        },
+        "duration_seconds": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Duration Seconds",
+          "type": "number"
+        },
+        "economic_metrics": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EconomicMetrics"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "economic_template": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EconomicSimulationKind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "executable_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Executable Sha256"
+        },
+        "execution_evidence": {
+          "$ref": "#/$defs/ExecutionEvidenceKind",
+          "default": "unverified"
+        },
+        "execution_observation_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Execution Observation Sha256"
+        },
+        "harness_name": {
+          "title": "Harness Name",
+          "type": "string"
+        },
+        "harness_spec_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Harness Spec Sha256"
+        },
+        "invariant_id": {
+          "title": "Invariant Id",
+          "type": "string"
+        },
+        "isolation_attestation_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Isolation Attestation Sha256"
+        },
+        "isolation_backend": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Isolation Backend"
+        },
+        "limitations": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Limitations",
+          "type": "array"
+        },
+        "minimization_evidence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InvariantExecutionMinimizationEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "replay_confirmed": {
+          "default": false,
+          "title": "Replay Confirmed",
+          "type": "boolean"
+        },
+        "required_transaction_ordering": {
+          "$ref": "#/$defs/TransactionOrderingCapability",
+          "default": "none"
+        },
+        "runs": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Runs",
+          "type": "integer"
+        },
+        "seed": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Seed",
+          "type": "integer"
+        },
+        "source_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Path"
+        },
+        "source_sha256": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Sha256"
+        },
+        "status": {
+          "$ref": "#/$defs/InvariantExecutionStatus"
+        },
+        "stderr_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stderr Path"
+        },
+        "stdout_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stdout Path"
+        },
+        "successful_attempts": {
+          "default": 0,
+          "maximum": 10,
+          "minimum": 0,
+          "title": "Successful Attempts",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "invariant_id",
+        "harness_name",
+        "status"
+      ],
+      "title": "InvariantExecutionResult",
+      "type": "object"
+    },
+    "InvariantExecutionStatus": {
+      "enum": [
+        "not_attempted",
+        "generation_failed",
+        "environment_blocked",
+        "compile_failed",
+        "execution_failed",
+        "timed_out",
+        "passed",
+        "counterexample"
+      ],
+      "title": "InvariantExecutionStatus",
+      "type": "string"
+    },
+    "InvariantProbe": {
+      "additionalProperties": false,
+      "properties": {
+        "arguments": {
+          "items": {
+            "$ref": "#/$defs/ForkArgument"
+          },
+          "maxItems": 24,
+          "title": "Arguments",
+          "type": "array"
+        },
+        "function_signature": {
+          "maxLength": 256,
+          "minLength": 3,
+          "title": "Function Signature",
+          "type": "string"
+        },
+        "target": {
+          "pattern": "^[A-Za-z][A-Za-z0-9_]{0,47}$",
+          "title": "Target",
+          "type": "string"
+        }
+      },
+      "required": [
+        "target",
+        "function_signature"
+      ],
+      "title": "InvariantProbe",
+      "type": "object"
+    },
+    "InvariantPropertySpec": {
+      "additionalProperties": false,
+      "properties": {
+        "compare_to_initial": {
+          "default": false,
+          "title": "Compare To Initial",
+          "type": "boolean"
+        },
+        "expected_uint": {
+          "anyOf": [
+            {
+              "maximum": 115792089237316195423570985008687907853269984665640564039457584007913129639935,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expected Uint"
+        },
+        "left": {
+          "$ref": "#/$defs/InvariantProbe"
+        },
+        "property_id": {
+          "pattern": "^[A-Za-z][A-Za-z0-9_]{0,47}$",
+          "title": "Property Id",
+          "type": "string"
+        },
+        "relation": {
+          "$ref": "#/$defs/InvariantRelation"
+        },
+        "required_action_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 32,
+          "title": "Required Action Ids",
+          "type": "array"
+        },
+        "right": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InvariantProbe"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "property_id",
+        "left",
+        "relation"
+      ],
+      "title": "InvariantPropertySpec",
+      "type": "object"
+    },
+    "InvariantRelation": {
+      "enum": [
+        "eq",
+        "gte",
+        "lte"
+      ],
+      "title": "InvariantRelation",
+      "type": "string"
+    },
+    "InvariantTemplate": {
+      "enum": [
+        "conservation_of_balances",
+        "observed_asset_accounting",
+        "no_free_mint",
+        "claim_once",
+        "reward_index_monotonic",
+        "debt_collateral_consistency",
+        "authorized_upgrade",
+        "authorized_admin_change",
+        "pause_enforcement",
+        "initialize_once",
+        "erc20_supply_balance",
+        "erc4626_conversion_sanity",
+        "permit_replay_protection",
+        "fee_bounds",
+        "rounding_bounds",
+        "oracle_manipulation_resistance",
+        "oracle_guard_sanity",
+        "governance_delay_sanity",
+        "upgrade_initializer_sanity",
+        "message_consumption_once",
+        "callback_state_consistency",
+        "state_growth_bound",
+        "erc20_return_handling",
+        "donation_inflation_resistance",
+        "ordering_value_bound",
+        "multi_step_state_consistency"
+      ],
+      "title": "InvariantTemplate",
+      "type": "string"
+    },
+    "LendingBoundaryEvidence": {
+      "additionalProperties": false,
+      "description": "Same-unit debt and collateral evidence for one healthy-position boundary.",
+      "properties": {
+        "bad_debt_after": {
+          "maximum": 115792089237316195423570985008687907853269984665640564039457584007913129639935,
+          "minimum": 0,
+          "title": "Bad Debt After",
+          "type": "integer"
+        },
+        "collateral_after": {
+          "maximum": 115792089237316195423570985008687907853269984665640564039457584007913129639935,
+          "minimum": 0,
+          "title": "Collateral After",
+          "type": "integer"
+        },
+        "collateral_before": {
+          "maximum": 115792089237316195423570985008687907853269984665640564039457584007913129639935,
+          "minimum": 0,
+          "title": "Collateral Before",
+          "type": "integer"
+        },
+        "collateral_seized": {
+          "maximum": 115792089237316195423570985008687907853269984665640564039457584007913129639935,
+          "minimum": 0,
+          "title": "Collateral Seized",
+          "type": "integer"
+        },
+        "debt_after": {
+          "maximum": 115792089237316195423570985008687907853269984665640564039457584007913129639935,
+          "minimum": 0,
+          "title": "Debt After",
+          "type": "integer"
+        },
+        "debt_before": {
+          "maximum": 115792089237316195423570985008687907853269984665640564039457584007913129639935,
+          "minimum": 0,
+          "title": "Debt Before",
+          "type": "integer"
+        },
+        "unit": {
+          "const": "base_units",
+          "default": "base_units",
+          "title": "Unit",
+          "type": "string"
+        }
+      },
+      "required": [
+        "debt_before",
+        "collateral_before",
+        "debt_after",
+        "collateral_after",
+        "collateral_seized",
+        "bad_debt_after"
+      ],
+      "title": "LendingBoundaryEvidence",
+      "type": "object"
+    },
+    "LendingBoundaryProbeSpec": {
+      "additionalProperties": false,
+      "description": "Typed uint256 probes for one settled healthy-position liquidation boundary.",
+      "properties": {
+        "action_id": {
+          "pattern": "^[A-Za-z][A-Za-z0-9_]{0,47}$",
+          "title": "Action Id",
+          "type": "string"
+        },
+        "bad_debt_after": {
+          "$ref": "#/$defs/InvariantProbe"
+        },
+        "collateral_after": {
+          "$ref": "#/$defs/InvariantProbe"
+        },
+        "collateral_before": {
+          "$ref": "#/$defs/InvariantProbe"
+        },
+        "collateral_seized": {
+          "$ref": "#/$defs/InvariantProbe"
+        },
+        "debt_after": {
+          "$ref": "#/$defs/InvariantProbe"
+        },
+        "debt_before": {
+          "$ref": "#/$defs/InvariantProbe"
+        }
+      },
+      "required": [
+        "action_id",
+        "debt_before",
+        "collateral_before",
+        "debt_after",
+        "collateral_after",
+        "collateral_seized",
+        "bad_debt_after"
+      ],
+      "title": "LendingBoundaryProbeSpec",
+      "type": "object"
+    },
+    "LocalInvariantDeployment": {
+      "additionalProperties": false,
+      "description": "Bounded source-local deployment used only inside an isolated generated test.",
+      "properties": {
+        "constructor_arguments": {
+          "items": {
+            "$ref": "#/$defs/LocalInvariantDeploymentArgument"
+          },
+          "maxItems": 8,
+          "title": "Constructor Arguments",
+          "type": "array"
+        },
+        "contract_name": {
+          "pattern": "^[A-Za-z][A-Za-z0-9_]{0,63}$",
+          "title": "Contract Name",
+          "type": "string"
+        },
+        "source_path": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Source Path",
+          "type": "string"
+        },
+        "target_alias": {
+          "pattern": "^[A-Za-z][A-Za-z0-9_]{0,47}$",
+          "title": "Target Alias",
+          "type": "string"
+        },
+        "token_seed_function_signature": {
+          "anyOf": [
+            {
+              "const": "mint(address,uint256)",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Token Seed Function Signature"
+        }
+      },
+      "required": [
+        "target_alias",
+        "contract_name",
+        "source_path"
+      ],
+      "title": "LocalInvariantDeployment",
+      "type": "object"
+    },
+    "LocalInvariantDeploymentArgument": {
+      "additionalProperties": false,
+      "description": "One constructor dependency for a synthetic local invariant target.",
+      "properties": {
+        "cast_contract": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z][A-Za-z0-9_]{0,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cast Contract"
+        },
+        "target_alias": {
+          "pattern": "^[A-Za-z][A-Za-z0-9_]{0,47}$",
+          "title": "Target Alias",
+          "type": "string"
+        }
+      },
+      "required": [
+        "target_alias"
+      ],
+      "title": "LocalInvariantDeploymentArgument",
+      "type": "object"
+    },
+    "Location": {
+      "additionalProperties": false,
+      "properties": {
+        "content_hash": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Content Hash"
+        },
+        "end_line": {
+          "minimum": 1,
+          "title": "End Line",
+          "type": "integer"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "start_line": {
+          "minimum": 1,
+          "title": "Start Line",
+          "type": "integer"
+        },
+        "symbol": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Symbol"
+        }
+      },
+      "required": [
+        "path",
+        "start_line",
+        "end_line"
+      ],
+      "title": "Location",
+      "type": "object"
+    },
+    "MutationApplicabilityBinding": {
+      "additionalProperties": false,
+      "description": "One independently declared property/mutation denominator member.",
+      "properties": {
+        "mutation_id": {
+          "pattern": "^mut-[a-z0-9][a-z0-9-]{0,75}$",
+          "title": "Mutation Id",
+          "type": "string"
+        },
+        "property_id": {
+          "pattern": "^prop-[0-9a-f]{24}$",
+          "title": "Property Id",
+          "type": "string"
+        },
+        "test_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 10000,
+          "minItems": 1,
+          "title": "Test Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "property_id",
+        "mutation_id",
+        "test_ids"
+      ],
+      "title": "MutationApplicabilityBinding",
+      "type": "object"
+    },
+    "MutationApplicabilityPlan": {
+      "$comment": "Runtime validation additionally binds every source hash, exact property/mutation pair, candidate ID and explicit non-applicability record. Attached compiler inventory must match the selected project, compiler/build/repository identities and all declared test IDs. Automatic property mappings bind complete generated assertions and retain unresolved candidate/property pairs as inconclusive score denominator members, not exclusions. JSON does not grant execution authority.",
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "schema_version": {
+                "const": "1.1"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "kind_accounting": {
+                "allOf": [
+                  {
+                    "contains": {
+                      "properties": {
+                        "kind": {
+                          "const": "access_control_guard_removal"
+                        }
+                      },
+                      "required": [
+                        "kind"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "kind": {
+                          "const": "accounting_operator_replacement"
+                        }
+                      },
+                      "required": [
+                        "kind"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "kind": {
+                          "const": "boundary_check_weakening"
+                        }
+                      },
+                      "required": [
+                        "kind"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "kind": {
+                          "const": "external_call_result_check_removal"
+                        }
+                      },
+                      "required": [
+                        "kind"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "kind": {
+                          "const": "replay_state_update_removal"
+                        }
+                      },
+                      "required": [
+                        "kind"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  }
+                ],
+                "maxItems": 5,
+                "minItems": 5
+              },
+              "portfolio_scope": {
+                "const": "implemented_five_class_subset"
+              },
+              "specifications": {
+                "items": {
+                  "$ref": "#/$defs/SourceMutationSpec"
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "schema_version": {
+                "const": "2.0"
+              }
+            },
+            "required": [
+              "schema_version"
+            ]
+          },
+          "then": {
+            "properties": {
+              "kind_accounting": {
+                "allOf": [
+                  {
+                    "contains": {
+                      "properties": {
+                        "kind": {
+                          "const": "changed_rounding_direction"
+                        }
+                      },
+                      "required": [
+                        "kind"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "kind": {
+                          "const": "changed_storage_slot"
+                        }
+                      },
+                      "required": [
+                        "kind"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "kind": {
+                          "const": "external_call_before_state_update"
+                        }
+                      },
+                      "required": [
+                        "kind"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "kind": {
+                          "const": "incorrect_decimal_scale"
+                        }
+                      },
+                      "required": [
+                        "kind"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "kind": {
+                          "const": "removed_authorization"
+                        }
+                      },
+                      "required": [
+                        "kind"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "kind": {
+                          "const": "removed_initializer_protection"
+                        }
+                      },
+                      "required": [
+                        "kind"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "kind": {
+                          "const": "removed_nonce_update"
+                        }
+                      },
+                      "required": [
+                        "kind"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "kind": {
+                          "const": "removed_pause_enforcement"
+                        }
+                      },
+                      "required": [
+                        "kind"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "kind": {
+                          "const": "removed_stale_price_validation"
+                        }
+                      },
+                      "required": [
+                        "kind"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "kind": {
+                          "const": "unchecked_return_handling"
+                        }
+                      },
+                      "required": [
+                        "kind"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "kind": {
+                          "const": "weakened_timelock"
+                        }
+                      },
+                      "required": [
+                        "kind"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  }
+                ],
+                "maxItems": 11,
+                "minItems": 11
+              },
+              "portfolio_scope": {
+                "const": "required_eleven_class"
+              },
+              "specifications": {
+                "items": {
+                  "$ref": "#/$defs/PortfolioSourceMutationSpec"
+                }
+              }
+            },
+            "required": [
+              "portfolio_scope"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "discovery": {
+                "not": {
+                  "type": "null"
+                }
+              }
+            },
+            "required": [
+              "discovery"
+            ]
+          },
+          "then": {
+            "properties": {
+              "schema_version": {
+                "const": "2.0"
+              }
+            },
+            "required": [
+              "schema_version"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "compiler_inventory": {
+                "not": {
+                  "type": "null"
+                }
+              }
+            },
+            "required": [
+              "compiler_inventory"
+            ]
+          },
+          "then": {
+            "properties": {
+              "compiler_inventory": {
+                "properties": {
+                  "phase": {
+                    "const": "pre_execution"
+                  }
+                }
+              },
+              "discovery": {
+                "not": {
+                  "type": "null"
+                }
+              },
+              "schema_version": {
+                "const": "2.0"
+              }
+            },
+            "required": [
+              "schema_version",
+              "discovery"
+            ]
+          }
+        },
+        {
+          "else": {
+            "properties": {
+              "bindings": {
+                "minItems": 1
+              }
+            }
+          },
+          "if": {
+            "properties": {
+              "property_tests": {
+                "not": {
+                  "type": "null"
+                }
+              }
+            },
+            "required": [
+              "property_tests"
+            ]
+          },
+          "then": {
+            "properties": {
+              "compiler_inventory": {
+                "not": {
+                  "type": "null"
+                }
+              },
+              "discovery": {
+                "not": {
+                  "type": "null"
+                }
+              },
+              "schema_version": {
+                "const": "2.0"
+              }
+            },
+            "required": [
+              "schema_version",
+              "discovery",
+              "compiler_inventory"
+            ]
+          }
+        }
+      ],
+      "description": "Hash-bound source mutations and property pairs that define the score denominator.",
+      "properties": {
+        "approved_executor_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Approved Executor Sha256",
+          "type": "string"
+        },
+        "approved_isolation_policy_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Approved Isolation Policy Sha256",
+          "type": "string"
+        },
+        "bindings": {
+          "items": {
+            "$ref": "#/$defs/MutationApplicabilityBinding"
+          },
+          "maxItems": 100000,
+          "title": "Bindings",
+          "type": "array"
+        },
+        "compiler_inventory": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RepositorySuiteInventoryEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "discovery": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PortfolioMutationDiscovery"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "kind_accounting": {
+          "items": {
+            "$ref": "#/$defs/MutationKindAccounting"
+          },
+          "maxItems": 11,
+          "minItems": 5,
+          "title": "Kind Accounting",
+          "type": "array"
+        },
+        "non_applicability": {
+          "items": {
+            "$ref": "#/$defs/MutationNonApplicabilityRecord"
+          },
+          "maxItems": 100000,
+          "title": "Non Applicability",
+          "type": "array"
+        },
+        "plan_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Plan Sha256",
+          "type": "string"
+        },
+        "portfolio_scope": {
+          "default": "implemented_five_class_subset",
+          "enum": [
+            "implemented_five_class_subset",
+            "required_eleven_class"
+          ],
+          "title": "Portfolio Scope",
+          "type": "string"
+        },
+        "property_corpus_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Property Corpus Hash",
+          "type": "string"
+        },
+        "property_repositories": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "maxProperties": 10000,
+          "minProperties": 1,
+          "title": "Property Repositories",
+          "type": "object"
+        },
+        "property_tests": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FoundryPropertyTestMapping"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "schema_version": {
+          "default": "1.1",
+          "enum": [
+            "1.1",
+            "2.0"
+          ],
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "source_repository_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Repository Sha256",
+          "type": "string"
+        },
+        "specifications": {
+          "items": {
+            "$ref": "#/$defs/MutationSpecification"
+          },
+          "maxItems": 100000,
+          "minItems": 1,
+          "title": "Specifications",
+          "type": "array"
+        }
+      },
+      "required": [
+        "property_corpus_hash",
+        "source_repository_sha256",
+        "approved_executor_sha256",
+        "approved_isolation_policy_sha256",
+        "property_repositories",
+        "specifications",
+        "bindings",
+        "kind_accounting",
+        "plan_sha256"
+      ],
+      "title": "MutationApplicabilityPlan",
+      "type": "object"
+    },
+    "MutationCampaignEvidence": {
+      "additionalProperties": false,
+      "description": "Path-free source, execution, restoration, and disposal evidence for one mutant.",
+      "properties": {
+        "disposal_entry_count": {
+          "maximum": 210000,
+          "minimum": 0,
+          "title": "Disposal Entry Count",
+          "type": "integer"
+        },
+        "evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evidence Sha256",
+          "type": "string"
+        },
+        "executor_observation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MutationSuiteObservation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "failure_kind": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z][A-Za-z0-9_]{0,99}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Failure Kind"
+        },
+        "mutated_workspace_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Mutated Workspace Sha256",
+          "type": "string"
+        },
+        "mutation_id": {
+          "pattern": "^mut-[a-z0-9][a-z0-9-]{0,75}$",
+          "title": "Mutation Id",
+          "type": "string"
+        },
+        "mutation_specification_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Mutation Specification Sha256",
+          "type": "string"
+        },
+        "plan_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Plan Sha256",
+          "type": "string"
+        },
+        "pristine_workspace_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Pristine Workspace Sha256",
+          "type": "string"
+        },
+        "restoration_verified": {
+          "title": "Restoration Verified",
+          "type": "boolean"
+        },
+        "restored_workspace_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Restored Workspace Sha256"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "source_preserved": {
+          "title": "Source Preserved",
+          "type": "boolean"
+        },
+        "source_repository_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Repository Sha256",
+          "type": "string"
+        },
+        "workspace_disposed": {
+          "title": "Workspace Disposed",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "plan_sha256",
+        "mutation_id",
+        "mutation_specification_sha256",
+        "source_repository_sha256",
+        "pristine_workspace_sha256",
+        "mutated_workspace_sha256",
+        "restoration_verified",
+        "workspace_disposed",
+        "source_preserved",
+        "disposal_entry_count",
+        "evidence_sha256"
+      ],
+      "title": "MutationCampaignEvidence",
+      "type": "object"
+    },
+    "MutationClassScore": {
+      "additionalProperties": false,
+      "description": "Keep every required class and each of its property gates visible.",
+      "properties": {
+        "gate_passed": {
+          "title": "Gate Passed",
+          "type": "boolean"
+        },
+        "mutation_class": {
+          "$ref": "#/$defs/SecurityMutationClass"
+        },
+        "property_scores": {
+          "items": {
+            "$ref": "#/$defs/PropertyMutationScore"
+          },
+          "maxItems": 10000,
+          "title": "Property Scores",
+          "type": "array"
+        }
+      },
+      "required": [
+        "mutation_class",
+        "property_scores",
+        "gate_passed"
+      ],
+      "title": "MutationClassScore",
+      "type": "object"
+    },
+    "MutationKind": {
+      "description": "Implemented source-local classes used to challenge defensive properties.",
+      "enum": [
+        "access_control_guard_removal",
+        "replay_state_update_removal",
+        "boundary_check_weakening",
+        "accounting_operator_replacement",
+        "external_call_result_check_removal"
+      ],
+      "title": "MutationKind",
+      "type": "string"
+    },
+    "MutationKindAccounting": {
+      "additionalProperties": false,
+      "description": "Exact candidate accounting for one implemented mutation kind.",
+      "properties": {
+        "candidate_count": {
+          "maximum": 100000,
+          "minimum": 0,
+          "title": "Candidate Count",
+          "type": "integer"
+        },
+        "candidate_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100000,
+          "title": "Candidate Ids",
+          "type": "array"
+        },
+        "kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MutationKind"
+            },
+            {
+              "$ref": "#/$defs/SecurityMutationClass"
+            }
+          ],
+          "title": "Kind"
+        },
+        "limitation": {
+          "anyOf": [
+            {
+              "maxLength": 500,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Limitation"
+        },
+        "status": {
+          "$ref": "#/$defs/MutationKindInventoryStatus"
+        }
+      },
+      "required": [
+        "kind",
+        "status",
+        "candidate_count"
+      ],
+      "title": "MutationKindAccounting",
+      "type": "object"
+    },
+    "MutationKindInventoryStatus": {
+      "description": "Whether this implemented mutation kind has source candidates in the plan.",
+      "enum": [
+        "candidates_declared",
+        "no_candidate_declared"
+      ],
+      "title": "MutationKindInventoryStatus",
+      "type": "string"
+    },
+    "MutationNonApplicabilityReason": {
+      "description": "Reason for a manual exclusion or an unresolved automatic property mapping.",
+      "enum": [
+        "property_scope_mismatch",
+        "no_executable_assertion",
+        "unsupported_property_mapping"
+      ],
+      "title": "MutationNonApplicabilityReason",
+      "type": "string"
+    },
+    "MutationNonApplicabilityRecord": {
+      "additionalProperties": false,
+      "description": "Record a manual exclusion or an automatic gap that stays in the score denominator.",
+      "properties": {
+        "mutation_id": {
+          "pattern": "^mut-[a-z0-9][a-z0-9-]{0,75}$",
+          "title": "Mutation Id",
+          "type": "string"
+        },
+        "property_id": {
+          "pattern": "^prop-[0-9a-f]{24}$",
+          "title": "Property Id",
+          "type": "string"
+        },
+        "rationale": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Rationale",
+          "type": "string"
+        },
+        "reason": {
+          "$ref": "#/$defs/MutationNonApplicabilityReason"
+        }
+      },
+      "required": [
+        "property_id",
+        "mutation_id",
+        "reason",
+        "rationale"
+      ],
+      "title": "MutationNonApplicabilityRecord",
+      "type": "object"
+    },
+    "MutationPipelineLimits": {
+      "additionalProperties": false,
+      "properties": {
+        "inventory_timeout_seconds": {
+          "default": 30,
+          "exclusiveMinimum": 0,
+          "maximum": 3600,
+          "title": "Inventory Timeout Seconds",
+          "type": "number"
+        },
+        "maximum_campaigns": {
+          "default": 16,
+          "maximum": 200,
+          "minimum": 0,
+          "title": "Maximum Campaigns",
+          "type": "integer"
+        },
+        "maximum_runner_attempts": {
+          "default": 40,
+          "maximum": 500,
+          "minimum": 0,
+          "title": "Maximum Runner Attempts",
+          "type": "integer"
+        },
+        "minimum_property_kill_score": {
+          "default": 0.95,
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Minimum Property Kill Score",
+          "type": "number"
+        },
+        "stage_timeout_seconds": {
+          "default": 900,
+          "exclusiveMinimum": 0,
+          "maximum": 7200,
+          "title": "Stage Timeout Seconds",
+          "type": "number"
+        }
+      },
+      "title": "MutationPipelineLimits",
+      "type": "object"
+    },
+    "MutationProjectExecution": {
+      "additionalProperties": false,
+      "properties": {
+        "campaigns": {
+          "items": {
+            "$ref": "#/$defs/MutationCampaignEvidence"
+          },
+          "maxItems": 200,
+          "title": "Campaigns",
+          "type": "array"
+        },
+        "compiler_input_files": {
+          "items": {
+            "$ref": "#/$defs/MutationSourceFile"
+          },
+          "maxItems": 100000,
+          "title": "Compiler Input Files",
+          "type": "array"
+        },
+        "executions": {
+          "items": {
+            "$ref": "#/$defs/CollectedMutationExecution"
+          },
+          "maxItems": 500,
+          "title": "Executions",
+          "type": "array"
+        },
+        "limitations": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 1000,
+          "title": "Limitations",
+          "type": "array"
+        },
+        "plan": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MutationApplicabilityPlan"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "project_root": {
+          "title": "Project Root",
+          "type": "string"
+        },
+        "projected_corpus_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Projected Corpus Hash",
+          "type": "string"
+        },
+        "property_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 10000,
+          "title": "Property Ids",
+          "type": "array"
+        },
+        "score": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MutationScorecard"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "source_preserved": {
+          "default": false,
+          "title": "Source Preserved",
+          "type": "boolean"
+        },
+        "workspace": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GeneratedMutationWorkspace"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "workspace_disposed": {
+          "default": false,
+          "title": "Workspace Disposed",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "project_root",
+        "property_ids",
+        "projected_corpus_hash"
+      ],
+      "title": "MutationProjectExecution",
+      "type": "object"
+    },
+    "MutationPropertyOutcome": {
+      "additionalProperties": false,
+      "description": "Hash-linked outcome for one property/mutation pair.",
+      "properties": {
+        "evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evidence Sha256",
+          "type": "string"
+        },
+        "mutation_id": {
+          "pattern": "^mut-[a-z0-9][a-z0-9-]{0,75}$",
+          "title": "Mutation Id",
+          "type": "string"
+        },
+        "mutation_kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MutationKind"
+            },
+            {
+              "$ref": "#/$defs/SecurityMutationClass"
+            }
+          ],
+          "title": "Mutation Kind"
+        },
+        "outcome": {
+          "$ref": "#/$defs/MutationTestOutcome"
+        },
+        "property_id": {
+          "pattern": "^prop-[0-9a-f]{24}$",
+          "title": "Property Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "mutation_id",
+        "mutation_kind",
+        "property_id",
+        "outcome",
+        "evidence_sha256"
+      ],
+      "title": "MutationPropertyOutcome",
+      "type": "object"
+    },
+    "MutationScorecard": {
+      "$comment": "Runtime reconstructs per-property and per-class arithmetic and requires every gate. Missing classes cannot pass. Neither serialization nor local comparison grants admitted campaign, benchmark, qualification or release authority.",
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "else": {
+            "properties": {
+              "class_scores": {
+                "type": "null"
+              },
+              "portfolio_scope": {
+                "type": "null"
+              }
+            }
+          },
+          "if": {
+            "properties": {
+              "schema_version": {
+                "const": "2.0"
+              }
+            },
+            "required": [
+              "schema_version"
+            ]
+          },
+          "then": {
+            "properties": {
+              "applicability_plan_sha256": {
+                "type": "string"
+              },
+              "class_scores": {
+                "allOf": [
+                  {
+                    "contains": {
+                      "properties": {
+                        "mutation_class": {
+                          "const": "changed_rounding_direction"
+                        }
+                      },
+                      "required": [
+                        "mutation_class"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "mutation_class": {
+                          "const": "changed_storage_slot"
+                        }
+                      },
+                      "required": [
+                        "mutation_class"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "mutation_class": {
+                          "const": "external_call_before_state_update"
+                        }
+                      },
+                      "required": [
+                        "mutation_class"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "mutation_class": {
+                          "const": "incorrect_decimal_scale"
+                        }
+                      },
+                      "required": [
+                        "mutation_class"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "mutation_class": {
+                          "const": "removed_authorization"
+                        }
+                      },
+                      "required": [
+                        "mutation_class"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "mutation_class": {
+                          "const": "removed_initializer_protection"
+                        }
+                      },
+                      "required": [
+                        "mutation_class"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "mutation_class": {
+                          "const": "removed_nonce_update"
+                        }
+                      },
+                      "required": [
+                        "mutation_class"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "mutation_class": {
+                          "const": "removed_pause_enforcement"
+                        }
+                      },
+                      "required": [
+                        "mutation_class"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "mutation_class": {
+                          "const": "removed_stale_price_validation"
+                        }
+                      },
+                      "required": [
+                        "mutation_class"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "mutation_class": {
+                          "const": "unchecked_return_handling"
+                        }
+                      },
+                      "required": [
+                        "mutation_class"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "mutation_class": {
+                          "const": "weakened_timelock"
+                        }
+                      },
+                      "required": [
+                        "mutation_class"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  }
+                ],
+                "maxItems": 11,
+                "minItems": 11,
+                "type": "array"
+              },
+              "evidence_origin": {
+                "enum": [
+                  "planned_unattested",
+                  "process_local_comparison"
+                ]
+              },
+              "portfolio_scope": {
+                "const": "required_eleven_class"
+              }
+            },
+            "required": [
+              "portfolio_scope",
+              "class_scores",
+              "applicability_plan_sha256"
+            ]
+          }
+        }
+      ],
+      "description": "Per-property mutation quality evidence; aggregate scores cannot hide weak properties.",
+      "properties": {
+        "applicability_plan_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Applicability Plan Sha256"
+        },
+        "class_scores": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/MutationClassScore"
+              },
+              "maxItems": 11,
+              "minItems": 11,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Class Scores"
+        },
+        "evidence_origin": {
+          "$ref": "#/$defs/MutationScorecardEvidenceOrigin",
+          "default": "declarative"
+        },
+        "expected_property_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 10000,
+          "minItems": 1,
+          "title": "Expected Property Ids",
+          "type": "array"
+        },
+        "gate_passed": {
+          "title": "Gate Passed",
+          "type": "boolean"
+        },
+        "minimum_property_kill_score": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Minimum Property Kill Score",
+          "type": "number"
+        },
+        "mutation_count": {
+          "maximum": 100000,
+          "minimum": 0,
+          "title": "Mutation Count",
+          "type": "integer"
+        },
+        "outcomes": {
+          "items": {
+            "$ref": "#/$defs/MutationPropertyOutcome"
+          },
+          "maxItems": 100000,
+          "title": "Outcomes",
+          "type": "array"
+        },
+        "overall_kill_score": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Overall Kill Score"
+        },
+        "portfolio_scope": {
+          "anyOf": [
+            {
+              "const": "required_eleven_class",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Portfolio Scope"
+        },
+        "projection_authority": {
+          "anyOf": [
+            {
+              "const": "comparison_only",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Projection Authority"
+        },
+        "property_corpus_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Property Corpus Hash",
+          "type": "string"
+        },
+        "property_repositories": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "maxProperties": 10000,
+          "minProperties": 1,
+          "title": "Property Repositories",
+          "type": "object"
+        },
+        "property_scores": {
+          "items": {
+            "$ref": "#/$defs/PropertyMutationScore"
+          },
+          "maxItems": 10000,
+          "minItems": 1,
+          "title": "Property Scores",
+          "type": "array"
+        },
+        "schema_version": {
+          "default": "1.0",
+          "enum": [
+            "1.0",
+            "1.1",
+            "2.0"
+          ],
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "property_corpus_hash",
+        "minimum_property_kill_score",
+        "expected_property_ids",
+        "property_repositories",
+        "mutation_count",
+        "property_scores",
+        "gate_passed"
+      ],
+      "title": "MutationScorecard",
+      "type": "object"
+    },
+    "MutationScorecardEvidenceOrigin": {
+      "description": "Trust origin of mutation outcomes; process origin still needs a live opaque seal.",
+      "enum": [
+        "declarative",
+        "planned_unattested",
+        "process_local_comparison"
+      ],
+      "title": "MutationScorecardEvidenceOrigin",
+      "type": "string"
+    },
+    "MutationSourceFile": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "size": {
+          "minimum": 0,
+          "title": "Size",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "path",
+        "sha256",
+        "size"
+      ],
+      "title": "MutationSourceFile",
+      "type": "object"
+    },
+    "MutationSpecification": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SourceMutationSpec"
+        },
+        {
+          "$ref": "#/$defs/PortfolioSourceMutationSpec"
+        }
+      ]
+    },
+    "MutationSuiteObservation": {
+      "additionalProperties": false,
+      "description": "Typed same-selection baseline/mutant execution evidence from one executor.",
+      "properties": {
+        "baseline_compilation_succeeded": {
+          "title": "Baseline Compilation Succeeded",
+          "type": "boolean"
+        },
+        "baseline_execution_evidence": {
+          "$ref": "#/$defs/ExecutionEvidenceKind"
+        },
+        "baseline_isolation_attestation_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Baseline Isolation Attestation Sha256"
+        },
+        "baseline_source_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Baseline Source Sha256",
+          "type": "string"
+        },
+        "baseline_tests": {
+          "items": {
+            "$ref": "#/$defs/MutationSuiteTestObservation"
+          },
+          "maxItems": 10000,
+          "minItems": 1,
+          "title": "Baseline Tests",
+          "type": "array"
+        },
+        "executor_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Executor Sha256",
+          "type": "string"
+        },
+        "isolation_policy_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Isolation Policy Sha256",
+          "type": "string"
+        },
+        "mutant_compilation_succeeded": {
+          "title": "Mutant Compilation Succeeded",
+          "type": "boolean"
+        },
+        "mutant_execution_evidence": {
+          "$ref": "#/$defs/ExecutionEvidenceKind"
+        },
+        "mutant_isolation_attestation_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mutant Isolation Attestation Sha256"
+        },
+        "mutant_source_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Mutant Source Sha256",
+          "type": "string"
+        },
+        "mutant_tests": {
+          "items": {
+            "$ref": "#/$defs/MutationSuiteTestObservation"
+          },
+          "maxItems": 10000,
+          "minItems": 1,
+          "title": "Mutant Tests",
+          "type": "array"
+        },
+        "mutation_id": {
+          "pattern": "^mut-[a-z0-9][a-z0-9-]{0,75}$",
+          "title": "Mutation Id",
+          "type": "string"
+        },
+        "observation_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Observation Sha256",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "suite_selection_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Suite Selection Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "mutation_id",
+        "baseline_source_sha256",
+        "mutant_source_sha256",
+        "suite_selection_sha256",
+        "executor_sha256",
+        "isolation_policy_sha256",
+        "baseline_execution_evidence",
+        "mutant_execution_evidence",
+        "baseline_compilation_succeeded",
+        "mutant_compilation_succeeded",
+        "baseline_tests",
+        "mutant_tests",
+        "observation_sha256"
+      ],
+      "title": "MutationSuiteObservation",
+      "type": "object"
+    },
+    "MutationSuiteTestObservation": {
+      "additionalProperties": false,
+      "description": "One path-free baseline or mutant test observation.",
+      "properties": {
+        "status": {
+          "$ref": "#/$defs/MutationSuiteTestStatus"
+        },
+        "test_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,199}$",
+          "title": "Test Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "test_id",
+        "status"
+      ],
+      "title": "MutationSuiteTestObservation",
+      "type": "object"
+    },
+    "MutationSuiteTestStatus": {
+      "description": "Bounded suite status used to derive, never declare, mutation credit.",
+      "enum": [
+        "passed",
+        "failed",
+        "unavailable",
+        "timed_out",
+        "invalid_output"
+      ],
+      "title": "MutationSuiteTestStatus",
+      "type": "string"
+    },
+    "MutationTestOutcome": {
+      "description": "Normalized result of challenging one property with one applicable mutation.",
+      "enum": [
+        "killed",
+        "survived",
+        "inconclusive"
+      ],
+      "title": "MutationTestOutcome",
+      "type": "string"
+    },
+    "OracleInfluenceCapability": {
+      "enum": [
+        "none",
+        "bounded_market",
+        "fixture_configured"
+      ],
+      "title": "OracleInfluenceCapability",
+      "type": "string"
+    },
+    "PortfolioDiscoveryLimits": {
+      "additionalProperties": false,
+      "properties": {
+        "maximum_candidates": {
+          "default": 10000,
+          "maximum": 100000,
+          "minimum": 1,
+          "title": "Maximum Candidates",
+          "type": "integer"
+        },
+        "maximum_unsupported": {
+          "default": 10000,
+          "maximum": 100000,
+          "minimum": 1,
+          "title": "Maximum Unsupported",
+          "type": "integer"
+        }
+      },
+      "title": "PortfolioDiscoveryLimits",
+      "type": "object"
+    },
+    "PortfolioMutationDiscovery": {
+      "$comment": "Runtime validation retains every selected source/class pair, candidate, unsupported attempt and exact compiler/source hash. This artifact is not execution authority.",
+      "additionalProperties": false,
+      "description": "A complete selected-source/class denominator, never a qualification artifact.",
+      "properties": {
+        "artifact_kind": {
+          "const": "portfolio_mutation_discovery",
+          "default": "portfolio_mutation_discovery",
+          "title": "Artifact Kind",
+          "type": "string"
+        },
+        "build_info_sha256s": {
+          "items": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "maxItems": 1000,
+          "minItems": 1,
+          "title": "Build Info Sha256S",
+          "type": "array"
+        },
+        "candidates": {
+          "items": {
+            "$ref": "#/$defs/DiscoveredPortfolioMutation"
+          },
+          "maxItems": 100000,
+          "title": "Candidates",
+          "type": "array"
+        },
+        "compiler_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Compiler Sha256",
+          "type": "string"
+        },
+        "compiler_version": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Compiler Version",
+          "type": "string"
+        },
+        "discovery_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Discovery Sha256",
+          "type": "string"
+        },
+        "execution_validated": {
+          "const": false,
+          "default": false,
+          "title": "Execution Validated",
+          "type": "boolean"
+        },
+        "limitations": {
+          "const": [
+            "Supplied compiler/source consistency is not independent compiler-execution custody.",
+            "Structural candidates are not proven property applicability or exhaustive semantic coverage.",
+            "Unsupported syntax and absent classes remain gaps; no mutation execution is credited."
+          ],
+          "default": [
+            "Supplied compiler/source consistency is not independent compiler-execution custody.",
+            "Structural candidates are not proven property applicability or exhaustive semantic coverage.",
+            "Unsupported syntax and absent classes remain gaps; no mutation execution is credited."
+          ],
+          "items": {
+            "type": "string"
+          },
+          "title": "Limitations",
+          "type": "array"
+        },
+        "limits": {
+          "$ref": "#/$defs/PortfolioDiscoveryLimits"
+        },
+        "project_root": {
+          "title": "Project Root",
+          "type": "string"
+        },
+        "property_applicability_established": {
+          "const": false,
+          "default": false,
+          "title": "Property Applicability Established",
+          "type": "boolean"
+        },
+        "qualification_eligible": {
+          "const": false,
+          "default": false,
+          "title": "Qualification Eligible",
+          "type": "boolean"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "source_classes": {
+          "allOf": [
+            {
+              "contains": {
+                "properties": {
+                  "kind": {
+                    "const": "changed_rounding_direction"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              "minContains": 1
+            },
+            {
+              "contains": {
+                "properties": {
+                  "kind": {
+                    "const": "changed_storage_slot"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              "minContains": 1
+            },
+            {
+              "contains": {
+                "properties": {
+                  "kind": {
+                    "const": "external_call_before_state_update"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              "minContains": 1
+            },
+            {
+              "contains": {
+                "properties": {
+                  "kind": {
+                    "const": "incorrect_decimal_scale"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              "minContains": 1
+            },
+            {
+              "contains": {
+                "properties": {
+                  "kind": {
+                    "const": "removed_authorization"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              "minContains": 1
+            },
+            {
+              "contains": {
+                "properties": {
+                  "kind": {
+                    "const": "removed_initializer_protection"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              "minContains": 1
+            },
+            {
+              "contains": {
+                "properties": {
+                  "kind": {
+                    "const": "removed_nonce_update"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              "minContains": 1
+            },
+            {
+              "contains": {
+                "properties": {
+                  "kind": {
+                    "const": "removed_pause_enforcement"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              "minContains": 1
+            },
+            {
+              "contains": {
+                "properties": {
+                  "kind": {
+                    "const": "removed_stale_price_validation"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              "minContains": 1
+            },
+            {
+              "contains": {
+                "properties": {
+                  "kind": {
+                    "const": "unchecked_return_handling"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              "minContains": 1
+            },
+            {
+              "contains": {
+                "properties": {
+                  "kind": {
+                    "const": "weakened_timelock"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              "minContains": 1
+            }
+          ],
+          "items": {
+            "$ref": "#/$defs/PortfolioSourceClassCoverage"
+          },
+          "maxItems": 1100000,
+          "minItems": 11,
+          "title": "Source Classes",
+          "type": "array"
+        },
+        "sources": {
+          "items": {
+            "$ref": "#/$defs/FoundryInventorySourceBinding"
+          },
+          "maxItems": 100000,
+          "minItems": 1,
+          "title": "Sources",
+          "type": "array"
+        },
+        "target_paths": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100000,
+          "minItems": 1,
+          "title": "Target Paths",
+          "type": "array"
+        },
+        "unsupported": {
+          "items": {
+            "$ref": "#/$defs/UnsupportedPortfolioMutation"
+          },
+          "maxItems": 100000,
+          "title": "Unsupported",
+          "type": "array"
+        }
+      },
+      "required": [
+        "project_root",
+        "compiler_version",
+        "compiler_sha256",
+        "build_info_sha256s",
+        "sources",
+        "target_paths",
+        "candidates",
+        "unsupported",
+        "source_classes",
+        "limits",
+        "discovery_sha256"
+      ],
+      "title": "PortfolioMutationDiscovery",
+      "type": "object"
+    },
+    "PortfolioSourceClassCoverage": {
+      "additionalProperties": false,
+      "properties": {
+        "candidate_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Candidate Ids",
+          "type": "array"
+        },
+        "kind": {
+          "$ref": "#/$defs/SecurityMutationClass"
+        },
+        "limitation": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Limitation"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "unsupported_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Unsupported Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "path",
+        "kind",
+        "candidate_ids",
+        "unsupported_ids"
+      ],
+      "title": "PortfolioSourceClassCoverage",
+      "type": "object"
+    },
+    "PortfolioSourceMutationSpec": {
+      "additionalProperties": false,
+      "description": "One exact source span; arbitrary replacement source is never accepted.",
+      "properties": {
+        "expected_file_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Expected File Sha256",
+          "type": "string"
+        },
+        "expected_lines": {
+          "items": {
+            "maxLength": 20000,
+            "type": "string"
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "title": "Expected Lines",
+          "type": "array"
+        },
+        "id": {
+          "pattern": "^mut-[a-z0-9][a-z0-9-]{0,75}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/SecurityMutationClass"
+        },
+        "line": {
+          "maximum": 10000000,
+          "minimum": 1,
+          "title": "Line",
+          "type": "integer"
+        },
+        "original_token": {
+          "anyOf": [
+            {
+              "maxLength": 80,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Original Token"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "replacement_token": {
+          "anyOf": [
+            {
+              "maxLength": 80,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Replacement Token"
+        },
+        "schema_version": {
+          "const": "2.0",
+          "default": "2.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "path",
+        "line",
+        "expected_file_sha256",
+        "expected_lines"
+      ],
+      "title": "PortfolioSourceMutationSpec",
+      "type": "object"
+    },
+    "PropertyCampaignBounds": {
+      "additionalProperties": false,
+      "description": "Deterministic limits shared by every dynamic-engine translation.",
+      "properties": {
+        "depth": {
+          "maximum": 10000,
+          "minimum": 1,
+          "title": "Depth",
+          "type": "integer"
+        },
+        "fuzz_inputs": {
+          "items": {
+            "$ref": "#/$defs/PropertyFuzzInputBound"
+          },
+          "maxItems": 8,
+          "title": "Fuzz Inputs",
+          "type": "array"
+        },
+        "maximum_actor_initial_balance_wei": {
+          "default": 0,
+          "maximum": 115792089237316195423570985008687907853269984665640564039457584007913129639935,
+          "minimum": 0,
+          "title": "Maximum Actor Initial Balance Wei",
+          "type": "integer"
+        },
+        "maximum_call_value_wei": {
+          "default": 0,
+          "maximum": 115792089237316195423570985008687907853269984665640564039457584007913129639935,
+          "minimum": 0,
+          "title": "Maximum Call Value Wei",
+          "type": "integer"
+        },
+        "maximum_time_shift_seconds": {
+          "default": 0,
+          "maximum": 31536000,
+          "minimum": 0,
+          "title": "Maximum Time Shift Seconds",
+          "type": "integer"
+        },
+        "maximum_token_seed_amount": {
+          "default": 0,
+          "maximum": 115792089237316195423570985008687907853269984665640564039457584007913129639935,
+          "minimum": 0,
+          "title": "Maximum Token Seed Amount",
+          "type": "integer"
+        },
+        "runs": {
+          "maximum": 100000,
+          "minimum": 1,
+          "title": "Runs",
+          "type": "integer"
+        },
+        "seed": {
+          "maximum": 115792089237316195423570985008687907853269984665640564039457584007913129639935,
+          "minimum": 0,
+          "title": "Seed",
+          "type": "integer"
+        },
+        "transaction_ordering": {
+          "$ref": "#/$defs/TransactionOrderingCapability",
+          "default": "none"
+        }
+      },
+      "required": [
+        "seed",
+        "runs",
+        "depth"
+      ],
+      "title": "PropertyCampaignBounds",
+      "type": "object"
+    },
+    "PropertyCorpus": {
+      "additionalProperties": false,
+      "description": "Deterministically ordered property input shared by dynamic engines.",
+      "properties": {
+        "corpus_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Corpus Hash",
+          "type": "string"
+        },
+        "limitations": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 10000,
+          "title": "Limitations",
+          "type": "array"
+        },
+        "properties": {
+          "items": {
+            "$ref": "#/$defs/DynamicPropertySpec"
+          },
+          "maxItems": 10000,
+          "title": "Properties",
+          "type": "array"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "corpus_hash"
+      ],
+      "title": "PropertyCorpus",
+      "type": "object"
+    },
+    "PropertyFuzzInputBound": {
+      "additionalProperties": false,
+      "description": "One engine-neutral fuzz slot and its stable campaign bounds.",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/ForkArgumentKind"
+        },
+        "maximum": {
+          "anyOf": [
+            {
+              "maximum": 115792089237316195423570985008687907853269984665640564039457584007913129639935,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Maximum"
+        },
+        "minimum": {
+          "anyOf": [
+            {
+              "maximum": 115792089237316195423570985008687907853269984665640564039457584007913129639935,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Minimum"
+        },
+        "slot": {
+          "maximum": 7,
+          "minimum": 0,
+          "title": "Slot",
+          "type": "integer"
+        },
+        "sources": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Sources",
+          "type": "array"
+        }
+      },
+      "required": [
+        "slot",
+        "kind",
+        "sources"
+      ],
+      "title": "PropertyFuzzInputBound",
+      "type": "object"
+    },
+    "PropertyMutationScore": {
+      "additionalProperties": false,
+      "description": "Explicit kill score for one expected invariant/property.",
+      "properties": {
+        "applicable_mutations": {
+          "maximum": 100000,
+          "minimum": 0,
+          "title": "Applicable Mutations",
+          "type": "integer"
+        },
+        "gate_passed": {
+          "title": "Gate Passed",
+          "type": "boolean"
+        },
+        "inconclusive": {
+          "maximum": 100000,
+          "minimum": 0,
+          "title": "Inconclusive",
+          "type": "integer"
+        },
+        "kill_score": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Kill Score"
+        },
+        "killed": {
+          "maximum": 100000,
+          "minimum": 0,
+          "title": "Killed",
+          "type": "integer"
+        },
+        "minimum_required": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Minimum Required",
+          "type": "number"
+        },
+        "property_id": {
+          "pattern": "^prop-[0-9a-f]{24}$",
+          "title": "Property Id",
+          "type": "string"
+        },
+        "survived": {
+          "maximum": 100000,
+          "minimum": 0,
+          "title": "Survived",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "property_id",
+        "applicable_mutations",
+        "killed",
+        "survived",
+        "inconclusive",
+        "minimum_required",
+        "gate_passed"
+      ],
+      "title": "PropertyMutationScore",
+      "type": "object"
+    },
+    "PropertyReachabilityLimits": {
+      "additionalProperties": false,
+      "properties": {
+        "maximum_graph_items": {
+          "default": 200000,
+          "maximum": 200000,
+          "minimum": 1,
+          "title": "Maximum Graph Items",
+          "type": "integer"
+        },
+        "maximum_property_relations": {
+          "default": 100000,
+          "maximum": 100000,
+          "minimum": 1,
+          "title": "Maximum Property Relations",
+          "type": "integer"
+        },
+        "maximum_seed_checks": {
+          "default": 1000000,
+          "maximum": 1000000,
+          "minimum": 1,
+          "title": "Maximum Seed Checks",
+          "type": "integer"
+        }
+      },
+      "title": "PropertyReachabilityLimits",
+      "type": "object"
+    },
+    "PropertySourceEvidence": {
+      "additionalProperties": false,
+      "description": "Exact source lineage retained by an engine-neutral property.",
+      "properties": {
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "entity_id": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Entity Id",
+          "type": "string"
+        },
+        "location": {
+          "$ref": "#/$defs/Location"
+        },
+        "provenance": {
+          "$ref": "#/$defs/SolidityProvenance"
+        },
+        "transformation": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Transformation",
+          "type": "string"
+        }
+      },
+      "required": [
+        "entity_id",
+        "location",
+        "provenance",
+        "confidence",
+        "transformation"
+      ],
+      "title": "PropertySourceEvidence",
+      "type": "object"
+    },
+    "RepositorySuiteInventoryArtifact": {
+      "additionalProperties": false,
+      "description": "Hash-only identity for one private compiler inventory artifact.",
+      "properties": {
+        "bytes": {
+          "maximum": 100000000,
+          "minimum": 1,
+          "title": "Bytes",
+          "type": "integer"
+        },
+        "name": {
+          "maxLength": 255,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._-]+$",
+          "title": "Name",
+          "type": "string"
+        },
+        "normalized_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Normalized Sha256",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "sha256",
+        "normalized_sha256",
+        "bytes"
+      ],
+      "title": "RepositorySuiteInventoryArtifact",
+      "type": "object"
+    },
+    "RepositorySuiteInventoryEvidence": {
+      "additionalProperties": false,
+      "description": "Self-hashed proof of isolated Forge list/build-info inventories.",
+      "properties": {
+        "compiler_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Compiler Sha256",
+          "type": "string"
+        },
+        "compiler_version": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Compiler Version",
+          "type": "string"
+        },
+        "configuration_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Configuration Sha256",
+          "type": "string"
+        },
+        "execution_evidence": {
+          "$ref": "#/$defs/ExecutionEvidenceKind"
+        },
+        "framework": {
+          "const": "foundry",
+          "default": "foundry",
+          "title": "Framework",
+          "type": "string"
+        },
+        "inventory_record_count": {
+          "maximum": 10000,
+          "minimum": 1,
+          "title": "Inventory Record Count",
+          "type": "integer"
+        },
+        "inventory_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Inventory Sha256",
+          "type": "string"
+        },
+        "isolation_attestation_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Isolation Attestation Sha256",
+          "type": "string"
+        },
+        "isolation_backend": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Isolation Backend",
+          "type": "string"
+        },
+        "normalized_inventory_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Normalized Inventory Sha256",
+          "type": "string"
+        },
+        "phase": {
+          "$ref": "#/$defs/RepositorySuiteInventoryPhase"
+        },
+        "project_bundle_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Project Bundle Sha256",
+          "type": "string"
+        },
+        "projects": {
+          "items": {
+            "$ref": "#/$defs/RepositorySuiteProjectInventoryEvidence"
+          },
+          "maxItems": 1000,
+          "minItems": 1,
+          "title": "Projects",
+          "type": "array"
+        },
+        "repository_code_execution": {
+          "const": "isolated",
+          "default": "isolated",
+          "title": "Repository Code Execution",
+          "type": "string"
+        },
+        "repository_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Repository Sha256",
+          "type": "string"
+        },
+        "safety_claim": {
+          "const": false,
+          "default": false,
+          "title": "Safety Claim",
+          "type": "boolean"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "tool_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Tool Sha256",
+          "type": "string"
+        },
+        "tool_version": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Tool Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "phase",
+        "repository_sha256",
+        "configuration_sha256",
+        "tool_version",
+        "tool_sha256",
+        "compiler_version",
+        "compiler_sha256",
+        "isolation_backend",
+        "isolation_attestation_sha256",
+        "execution_evidence",
+        "projects",
+        "project_bundle_sha256",
+        "normalized_inventory_sha256",
+        "inventory_record_count",
+        "inventory_sha256"
+      ],
+      "title": "RepositorySuiteInventoryEvidence",
+      "type": "object"
+    },
+    "RepositorySuiteInventoryPhase": {
+      "description": "When an isolated repository-suite inventory was observed.",
+      "enum": [
+        "pre_execution",
+        "post_execution"
+      ],
+      "title": "RepositorySuiteInventoryPhase",
+      "type": "string"
+    },
+    "RepositorySuiteInventoryRecord": {
+      "additionalProperties": false,
+      "description": "Compiler-bound execution and declaration identity for one runnable test.",
+      "properties": {
+        "build_info_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Build Info Sha256",
+          "type": "string"
+        },
+        "declaration_contract_ast_id": {
+          "minimum": 0,
+          "title": "Declaration Contract Ast Id",
+          "type": "integer"
+        },
+        "declaration_end_line": {
+          "minimum": 1,
+          "title": "Declaration End Line",
+          "type": "integer"
+        },
+        "declaration_function_ast_id": {
+          "minimum": 0,
+          "title": "Declaration Function Ast Id",
+          "type": "integer"
+        },
+        "declaration_path": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Declaration Path",
+          "type": "string"
+        },
+        "declaration_signature": {
+          "maxLength": 1000,
+          "minLength": 3,
+          "title": "Declaration Signature",
+          "type": "string"
+        },
+        "declaration_source_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Declaration Source Sha256",
+          "type": "string"
+        },
+        "declaration_start_line": {
+          "minimum": 1,
+          "title": "Declaration Start Line",
+          "type": "integer"
+        },
+        "declaration_suite_name": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Declaration Suite Name",
+          "type": "string"
+        },
+        "execution_contract_ast_id": {
+          "minimum": 0,
+          "title": "Execution Contract Ast Id",
+          "type": "integer"
+        },
+        "execution_end_line": {
+          "minimum": 1,
+          "title": "Execution End Line",
+          "type": "integer"
+        },
+        "execution_path": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Execution Path",
+          "type": "string"
+        },
+        "execution_signature": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Execution Signature",
+          "type": "string"
+        },
+        "execution_source_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Execution Source Sha256",
+          "type": "string"
+        },
+        "execution_start_line": {
+          "minimum": 1,
+          "title": "Execution Start Line",
+          "type": "integer"
+        },
+        "execution_suite_name": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Execution Suite Name",
+          "type": "string"
+        },
+        "project_root": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Project Root",
+          "type": "string"
+        },
+        "record_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Record Sha256",
+          "type": "string"
+        },
+        "test_name": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Test Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "project_root",
+        "execution_path",
+        "execution_suite_name",
+        "test_name",
+        "execution_signature",
+        "execution_source_sha256",
+        "execution_start_line",
+        "execution_end_line",
+        "execution_contract_ast_id",
+        "declaration_path",
+        "declaration_suite_name",
+        "declaration_signature",
+        "declaration_source_sha256",
+        "declaration_start_line",
+        "declaration_end_line",
+        "declaration_contract_ast_id",
+        "declaration_function_ast_id",
+        "build_info_sha256",
+        "record_sha256"
+      ],
+      "title": "RepositorySuiteInventoryRecord",
+      "type": "object"
+    },
+    "RepositorySuiteProjectInventoryEvidence": {
+      "additionalProperties": false,
+      "description": "One isolated Forge inventory invocation for a canonical project root.",
+      "properties": {
+        "build_info_artifacts": {
+          "items": {
+            "$ref": "#/$defs/RepositorySuiteInventoryArtifact"
+          },
+          "maxItems": 10000,
+          "minItems": 1,
+          "title": "Build Info Artifacts",
+          "type": "array"
+        },
+        "build_info_bundle_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Build Info Bundle Sha256",
+          "type": "string"
+        },
+        "command_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Command Sha256",
+          "type": "string"
+        },
+        "machine_output_validated": {
+          "const": true,
+          "default": true,
+          "title": "Machine Output Validated",
+          "type": "boolean"
+        },
+        "normalized_build_info_bundle_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Normalized Build Info Bundle Sha256",
+          "type": "string"
+        },
+        "normalized_inventory_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Normalized Inventory Sha256",
+          "type": "string"
+        },
+        "parser_inventory_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Parser Inventory Sha256",
+          "type": "string"
+        },
+        "process_exit_code": {
+          "const": 0,
+          "default": 0,
+          "title": "Process Exit Code",
+          "type": "integer"
+        },
+        "project_inventory_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Project Inventory Sha256",
+          "type": "string"
+        },
+        "project_root": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Project Root",
+          "type": "string"
+        },
+        "records": {
+          "items": {
+            "$ref": "#/$defs/RepositorySuiteInventoryRecord"
+          },
+          "maxItems": 10000,
+          "minItems": 1,
+          "title": "Records",
+          "type": "array"
+        },
+        "stderr_bytes": {
+          "maximum": 100000000,
+          "minimum": 0,
+          "title": "Stderr Bytes",
+          "type": "integer"
+        },
+        "stderr_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Stderr Sha256",
+          "type": "string"
+        },
+        "stdout_bytes": {
+          "maximum": 100000000,
+          "minimum": 2,
+          "title": "Stdout Bytes",
+          "type": "integer"
+        },
+        "stdout_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Stdout Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "project_root",
+        "command_sha256",
+        "stdout_sha256",
+        "stdout_bytes",
+        "stderr_sha256",
+        "stderr_bytes",
+        "build_info_artifacts",
+        "build_info_bundle_sha256",
+        "normalized_build_info_bundle_sha256",
+        "parser_inventory_sha256",
+        "records",
+        "normalized_inventory_sha256",
+        "project_inventory_sha256"
+      ],
+      "title": "RepositorySuiteProjectInventoryEvidence",
+      "type": "object"
+    },
+    "SecurityMutationClass": {
+      "description": "The eleven explicit requirements, distinct from legacy generic operators.",
+      "enum": [
+        "removed_authorization",
+        "removed_nonce_update",
+        "changed_rounding_direction",
+        "removed_stale_price_validation",
+        "external_call_before_state_update",
+        "removed_initializer_protection",
+        "weakened_timelock",
+        "changed_storage_slot",
+        "removed_pause_enforcement",
+        "unchecked_return_handling",
+        "incorrect_decimal_scale"
+      ],
+      "title": "SecurityMutationClass",
+      "type": "string"
+    },
+    "SharePriceBoundaryEvidence": {
+      "additionalProperties": false,
+      "description": "Deterministic share-rate evidence that isolates legitimate yield.",
+      "properties": {
+        "assets_redeemed": {
+          "maximum": 115792089237316195423570985008687907853269984665640564039457584007913129639935,
+          "minimum": 0,
+          "title": "Assets Redeemed",
+          "type": "integer"
+        },
+        "excess_assets": {
+          "maximum": 115792089237316195423570985008687907853269984665640564039457584007913129639935,
+          "minimum": 0,
+          "title": "Excess Assets",
+          "type": "integer"
+        },
+        "expected_rate_after_yield": {
+          "maximum": 115792089237316195423570985008687907853269984665640564039457584007913129639935,
+          "minimum": 0,
+          "title": "Expected Rate After Yield",
+          "type": "integer"
+        },
+        "legitimate_yield": {
+          "maximum": 115792089237316195423570985008687907853269984665640564039457584007913129639935,
+          "minimum": 0,
+          "title": "Legitimate Yield",
+          "type": "integer"
+        },
+        "observed_rate_after": {
+          "maximum": 115792089237316195423570985008687907853269984665640564039457584007913129639935,
+          "minimum": 0,
+          "title": "Observed Rate After",
+          "type": "integer"
+        },
+        "rate_scale": {
+          "maximum": 115792089237316195423570985008687907853269984665640564039457584007913129639935,
+          "minimum": 1,
+          "title": "Rate Scale",
+          "type": "integer"
+        },
+        "shares_redeemed": {
+          "maximum": 115792089237316195423570985008687907853269984665640564039457584007913129639935,
+          "minimum": 1,
+          "title": "Shares Redeemed",
+          "type": "integer"
+        },
+        "total_assets_before": {
+          "maximum": 115792089237316195423570985008687907853269984665640564039457584007913129639935,
+          "minimum": 0,
+          "title": "Total Assets Before",
+          "type": "integer"
+        },
+        "total_shares_before": {
+          "maximum": 115792089237316195423570985008687907853269984665640564039457584007913129639935,
+          "minimum": 1,
+          "title": "Total Shares Before",
+          "type": "integer"
+        },
+        "unit": {
+          "const": "base_units",
+          "default": "base_units",
+          "title": "Unit",
+          "type": "string"
+        }
+      },
+      "required": [
+        "rate_scale",
+        "total_assets_before",
+        "total_shares_before",
+        "legitimate_yield",
+        "expected_rate_after_yield",
+        "observed_rate_after",
+        "shares_redeemed",
+        "assets_redeemed",
+        "excess_assets"
+      ],
+      "title": "SharePriceBoundaryEvidence",
+      "type": "object"
+    },
+    "SharePriceBoundaryProbeSpec": {
+      "additionalProperties": false,
+      "description": "Typed uint256 probes for one settled share-price boundary transition.",
+      "properties": {
+        "action_id": {
+          "pattern": "^[A-Za-z][A-Za-z0-9_]{0,47}$",
+          "title": "Action Id",
+          "type": "string"
+        },
+        "assets_redeemed": {
+          "$ref": "#/$defs/InvariantProbe"
+        },
+        "excess_assets": {
+          "$ref": "#/$defs/InvariantProbe"
+        },
+        "expected_rate_after_yield": {
+          "$ref": "#/$defs/InvariantProbe"
+        },
+        "legitimate_yield": {
+          "$ref": "#/$defs/InvariantProbe"
+        },
+        "observed_rate_after": {
+          "$ref": "#/$defs/InvariantProbe"
+        },
+        "rate_scale": {
+          "$ref": "#/$defs/InvariantProbe"
+        },
+        "shares_redeemed": {
+          "$ref": "#/$defs/InvariantProbe"
+        },
+        "total_assets_before": {
+          "$ref": "#/$defs/InvariantProbe"
+        },
+        "total_shares_before": {
+          "$ref": "#/$defs/InvariantProbe"
+        }
+      },
+      "required": [
+        "action_id",
+        "rate_scale",
+        "total_assets_before",
+        "total_shares_before",
+        "legitimate_yield",
+        "expected_rate_after_yield",
+        "observed_rate_after",
+        "shares_redeemed",
+        "assets_redeemed",
+        "excess_assets"
+      ],
+      "title": "SharePriceBoundaryProbeSpec",
+      "type": "object"
+    },
+    "SolidityProvenance": {
+      "enum": [
+        "compiler",
+        "fallback",
+        "static_tool",
+        "heuristic",
+        "model_suggested"
+      ],
+      "title": "SolidityProvenance",
+      "type": "string"
+    },
+    "SourceMutationSpec": {
+      "additionalProperties": false,
+      "description": "One hash-pinned mutation of exactly one source line.",
+      "properties": {
+        "expected_file_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Expected File Sha256",
+          "type": "string"
+        },
+        "expected_line": {
+          "maxLength": 20000,
+          "minLength": 1,
+          "title": "Expected Line",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^mut-[a-z0-9][a-z0-9-]{0,75}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/MutationKind"
+        },
+        "line": {
+          "maximum": 10000000,
+          "minimum": 1,
+          "title": "Line",
+          "type": "integer"
+        },
+        "original_operator": {
+          "anyOf": [
+            {
+              "enum": [
+                "<",
+                "<=",
+                ">",
+                ">=",
+                "+",
+                "-",
+                "*",
+                "/"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Original Operator"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "replacement_operator": {
+          "anyOf": [
+            {
+              "enum": [
+                "<",
+                "<=",
+                ">",
+                ">=",
+                "+",
+                "-",
+                "*",
+                "/"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Replacement Operator"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "path",
+        "line",
+        "expected_file_sha256",
+        "expected_line"
+      ],
+      "title": "SourceMutationSpec",
+      "type": "object"
+    },
+    "StatefulActionSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "action_id": {
+          "pattern": "^[A-Za-z][A-Za-z0-9_]{0,47}$",
+          "title": "Action Id",
+          "type": "string"
+        },
+        "actor_fuzz_slot": {
+          "anyOf": [
+            {
+              "maximum": 7,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Actor Fuzz Slot"
+        },
+        "actor_names": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "title": "Actor Names",
+          "type": "array"
+        },
+        "arguments": {
+          "items": {
+            "$ref": "#/$defs/HarnessArgument"
+          },
+          "maxItems": 24,
+          "title": "Arguments",
+          "type": "array"
+        },
+        "function_signature": {
+          "maxLength": 256,
+          "minLength": 3,
+          "title": "Function Signature",
+          "type": "string"
+        },
+        "target": {
+          "pattern": "^[A-Za-z][A-Za-z0-9_]{0,47}$",
+          "title": "Target",
+          "type": "string"
+        },
+        "time_shift_seconds_before": {
+          "default": 0,
+          "maximum": 31536000,
+          "minimum": 0,
+          "title": "Time Shift Seconds Before",
+          "type": "integer"
+        },
+        "value_wei": {
+          "default": 0,
+          "maximum": 115792089237316195423570985008687907853269984665640564039457584007913129639935,
+          "minimum": 0,
+          "title": "Value Wei",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "action_id",
+        "target",
+        "function_signature",
+        "actor_names"
+      ],
+      "title": "StatefulActionSpec",
+      "type": "object"
+    },
+    "TokenBalanceSeed": {
+      "additionalProperties": false,
+      "description": "Deterministic ERC token balance seeding for isolated fork harness setup.",
+      "properties": {
+        "actor": {
+          "pattern": "^[A-Za-z][A-Za-z0-9_]{0,47}$",
+          "title": "Actor",
+          "type": "string"
+        },
+        "amount": {
+          "exclusiveMinimum": 0,
+          "maximum": 115792089237316195423570985008687907853269984665640564039457584007913129639935,
+          "title": "Amount",
+          "type": "integer"
+        },
+        "token": {
+          "pattern": "^[A-Za-z][A-Za-z0-9_]{0,47}$",
+          "title": "Token",
+          "type": "string"
+        }
+      },
+      "required": [
+        "token",
+        "actor",
+        "amount"
+      ],
+      "title": "TokenBalanceSeed",
+      "type": "object"
+    },
+    "TransactionOrderingCapability": {
+      "enum": [
+        "none",
+        "same_block",
+        "multi_transaction"
+      ],
+      "title": "TransactionOrderingCapability",
+      "type": "string"
+    },
+    "UnresolvedCompilerPropertyReference": {
+      "additionalProperties": false,
+      "properties": {
+        "ast_node_id": {
+          "minimum": 0,
+          "title": "Ast Node Id",
+          "type": "integer"
+        },
+        "caller_id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Caller Id",
+          "type": "string"
+        },
+        "end_byte_exclusive": {
+          "exclusiveMinimum": 0,
+          "title": "End Byte Exclusive",
+          "type": "integer"
+        },
+        "id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "reason": {
+          "enum": [
+            "UNRESOLVED_OR_DYNAMIC_CALL",
+            "UNRESOLVED_OR_VIRTUAL_MODIFIER",
+            "INLINE_ASSEMBLY"
+          ],
+          "title": "Reason",
+          "type": "string"
+        },
+        "start_byte": {
+          "minimum": 0,
+          "title": "Start Byte",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "caller_id",
+        "ast_node_id",
+        "start_byte",
+        "end_byte_exclusive",
+        "reason"
+      ],
+      "title": "UnresolvedCompilerPropertyReference",
+      "type": "object"
+    },
+    "UnsupportedPortfolioMutation": {
+      "additionalProperties": false,
+      "properties": {
+        "ast_node_id": {
+          "minimum": 0,
+          "title": "Ast Node Id",
+          "type": "integer"
+        },
+        "build_info_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Build Info Sha256",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/SecurityMutationClass"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "reason": {
+          "enum": [
+            "SEMANTIC_CONTEXT_NOT_ESTABLISHED",
+            "UNSUPPORTED_SOURCE_SHAPE"
+          ],
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "path",
+        "build_info_sha256",
+        "ast_node_id",
+        "reason"
+      ],
+      "title": "UnsupportedPortfolioMutation",
+      "type": "object"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/source_local_mutation_pipeline.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "artifact_kind": {
+      "const": "source_local_mutation_pipeline",
+      "default": "source_local_mutation_pipeline",
+      "title": "Artifact Kind",
+      "type": "string"
+    },
+    "audit_complete": {
+      "const": false,
+      "default": false,
+      "title": "Audit Complete",
+      "type": "boolean"
+    },
+    "corpus": {
+      "$ref": "#/$defs/PropertyCorpus"
+    },
+    "corpus_hash": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Corpus Hash",
+      "type": "string"
+    },
+    "evidence_authority": {
+      "const": "COLLECTED_UNATTESTED",
+      "default": "COLLECTED_UNATTESTED",
+      "title": "Evidence Authority",
+      "type": "string"
+    },
+    "execution_validated": {
+      "const": false,
+      "default": false,
+      "title": "Execution Validated",
+      "type": "boolean"
+    },
+    "expected_source_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Expected Source Sha256"
+    },
+    "limitations": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 1000,
+      "title": "Limitations",
+      "type": "array"
+    },
+    "limits": {
+      "$ref": "#/$defs/MutationPipelineLimits"
+    },
+    "projects": {
+      "items": {
+        "$ref": "#/$defs/MutationProjectExecution"
+      },
+      "maxItems": 1000,
+      "title": "Projects",
+      "type": "array"
+    },
+    "property_ids": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 10000,
+      "title": "Property Ids",
+      "type": "array"
+    },
+    "qualification_eligible": {
+      "const": false,
+      "default": false,
+      "title": "Qualification Eligible",
+      "type": "boolean"
+    },
+    "runner_attempts": {
+      "default": 0,
+      "maximum": 500,
+      "minimum": 0,
+      "title": "Runner Attempts",
+      "type": "integer"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "unresolved_property_ids": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 10000,
+      "title": "Unresolved Property Ids",
+      "type": "array"
+    }
+  },
+  "required": [
+    "corpus_hash",
+    "corpus",
+    "property_ids",
+    "unresolved_property_ids",
+    "projects",
+    "limits"
+  ],
+  "title": "MutationPipelineArtifact",
+  "type": "object"
+}

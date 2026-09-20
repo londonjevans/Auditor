@@ -311,7 +311,7 @@ from mmaudit.orchestration.authenticated_runner_smoke_openrouter import (
     preflight_authenticated_runner_smoke_live_routes,
     preflight_authenticated_runner_smoke_openrouter_launch,
 )
-from mmaudit.orchestration.budgets import BudgetManager
+from mmaudit.orchestration.budgets import BudgetExhaustedError, BudgetManager
 from mmaudit.orchestration.certification import (
     certify_maximum_assurance_run,
     write_maximum_assurance_certification,
@@ -1222,9 +1222,40 @@ def models_emit_selection_plan_reactivation(
         Path,
         typer.Option(
             "--output",
-            help="Fresh private JSON file for the nonauthorizing schema-v1.8 plan.",
+            help="Fresh private JSON file for the nonauthorizing reactivation plan.",
         ),
     ],
+    refresh_endpoint_inventory: Annotated[
+        bool,
+        typer.Option(
+            "--refresh-endpoint-inventory",
+            help="Explicitly stage unverified endpoints for all three retained model roles.",
+        ),
+    ] = False,
+    primary_judge_endpoint: Annotated[
+        str | None,
+        typer.Option(
+            "--primary-judge-endpoint", help="New endpoint for the retained primary judge."
+        ),
+    ] = None,
+    replay_judge_endpoint: Annotated[
+        str | None,
+        typer.Option("--replay-judge-endpoint", help="New endpoint for the retained replay judge."),
+    ] = None,
+    reserve_then_reconcile_costs: Annotated[
+        bool,
+        typer.Option(
+            "--reserve-then-reconcile-costs",
+            help="Explicit OP-COST-2026-09-09 cost-only successor of exact authenticated v1.9.",
+        ),
+    ] = False,
+    candidate_endpoint_trial: Annotated[
+        bool,
+        typer.Option(
+            "--candidate-endpoint-trial",
+            help="Stage only the authorized Fireworks candidate addition; no adoption or paid run.",
+        ),
+    ] = False,
     no_color: Annotated[bool, typer.Option("--no-color")] = False,
 ) -> None:
     """Derive a private reactivation only from compiled exact repository ancestry."""
@@ -1242,6 +1273,11 @@ def models_emit_selection_plan_reactivation(
             ancestry,
             candidate_model_id=candidate_model_id,
             provider_endpoint=provider_endpoint,
+            refresh_endpoint_inventory=refresh_endpoint_inventory,
+            primary_judge_provider_endpoint=primary_judge_endpoint,
+            replay_judge_provider_endpoint=replay_judge_endpoint,
+            reserve_then_reconcile_costs=reserve_then_reconcile_costs,
+            candidate_endpoint_trial=candidate_endpoint_trial,
         )
         published = write_candidate_selection_plan_reactivation(
             ancestry,
@@ -1251,13 +1287,26 @@ def models_emit_selection_plan_reactivation(
     except ValueError as exc:
         local_console.print(f"[red]Selection-plan reactivation invalid:[/red] {exc}")
         raise typer.Exit(ExitCode.CONFIGURATION) from exc
+    cost_description = (
+        "exact retained v1.11 policy; Fireworks smoke trial only; adoption prohibited"
+        if candidate_endpoint_trial
+        else "explicit operator reservation policy; no provider-enforced total ceiling"
+        if reserve_then_reconcile_costs
+        else "retained V1 profile"
+    )
     local_console.print(
-        f"[green]Published NONAUTHORIZING schema-v1.8 selection-plan reactivation "
+        f"[green]Published NONAUTHORIZING schema-v{published.schema_version} "
+        f"selection-plan reactivation "
         f"{published.plan_sha256} at {output}; immediate predecessor "
         f"{published.predecessor_plan_sha256}; verified selected ancestor "
-        f"{projection.selected_ancestor_plan_sha256}; retained V1 profile; no provider access "
+        f"{projection.selected_ancestor_plan_sha256}; {cost_description}; no provider access "
         f"occurred and the plan was not adopted.[/green]"
     )
+    if refresh_endpoint_inventory:
+        local_console.print(
+            "Three-role endpoint inventory is staged and unverified; constrained discovery "
+            "and all runtime qualification gates remain required."
+        )
 
 
 @models_app.command("discover")
@@ -6146,6 +6195,7 @@ def _execute_audit(
 SecretlessErrors = (
     ConfigError,
     CostLedgerError,
+    BudgetExhaustedError,
     RepositorySafetyError,
     OpenRouterError,
     OSError,
@@ -8049,7 +8099,14 @@ def _openrouter_authentication_valid(config: AuditConfig, api_key: str) -> bool:
 def _run_async_cli(function: Any) -> None:
     try:
         asyncio.run(function())
-    except (ConfigError, CostLedgerError, OpenRouterError, OSError, ValueError) as exc:
+    except (
+        ConfigError,
+        CostLedgerError,
+        BudgetExhaustedError,
+        OpenRouterError,
+        OSError,
+        ValueError,
+    ) as exc:
         console.print(f"mmaudit failed safely: {exc}", style="red", markup=False)
         raise typer.Exit(ExitCode.CONFIGURATION) from exc
 

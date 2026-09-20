@@ -446,6 +446,511 @@
       "title": "CandidateSelectionPlanAncestryTransitionBinding",
       "type": "object"
     },
+    "CandidateSelectionPlanCostTransitionBinding": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "schema_version": {
+                "const": "1.0"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "operator_decision_id": {
+                "const": "OP-COST-2026-09-09"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "schema_version": {
+                "const": "1.1"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "operator_decision_id": {
+                "const": "OP-COSTLEGACY-2026-09-11"
+              }
+            }
+          }
+        }
+      ],
+      "description": "Cost-only successor data; opaque ancestry replay supplies its authentication.",
+      "properties": {
+        "ancestry_evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Ancestry Evidence Sha256",
+          "type": "string"
+        },
+        "artifact_kind": {
+          "const": "REPOSITORY_PINNED_OPERATOR_COST_TRANSITION",
+          "default": "REPOSITORY_PINNED_OPERATOR_COST_TRANSITION",
+          "title": "Artifact Kind",
+          "type": "string"
+        },
+        "binding_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Binding Sha256",
+          "type": "string"
+        },
+        "operator_decision_id": {
+          "default": "OP-COST-2026-09-09",
+          "enum": [
+            "OP-COST-2026-09-09",
+            "OP-COSTLEGACY-2026-09-11"
+          ],
+          "title": "Operator Decision Id",
+          "type": "string"
+        },
+        "predecessor_constraints": {
+          "items": {
+            "$ref": "#/$defs/ExactRouteConstraint"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "title": "Predecessor Constraints",
+          "type": "array"
+        },
+        "predecessor_plan_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Predecessor Plan Sha256",
+          "type": "string"
+        },
+        "predecessor_profile_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Predecessor Profile Sha256",
+          "type": "string"
+        },
+        "predecessor_raw_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Predecessor Raw Sha256",
+          "type": "string"
+        },
+        "provider_call_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Provider Call Authorized",
+          "type": "boolean"
+        },
+        "replacement_constraints": {
+          "items": {
+            "$ref": "#/$defs/ExactRouteConstraint"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "title": "Replacement Constraints",
+          "type": "array"
+        },
+        "replacement_profile_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Replacement Profile Sha256",
+          "type": "string"
+        },
+        "reservation_policy_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Reservation Policy Sha256",
+          "type": "string"
+        },
+        "schema_version": {
+          "default": "1.0",
+          "enum": [
+            "1.0",
+            "1.1"
+          ],
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "security_requirements_relaxed": {
+          "const": false,
+          "default": false,
+          "title": "Security Requirements Relaxed",
+          "type": "boolean"
+        },
+        "serialized_authority": {
+          "const": false,
+          "default": false,
+          "title": "Serialized Authority",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "predecessor_raw_sha256",
+        "predecessor_plan_sha256",
+        "ancestry_evidence_sha256",
+        "predecessor_profile_sha256",
+        "replacement_profile_sha256",
+        "reservation_policy_sha256",
+        "predecessor_constraints",
+        "replacement_constraints",
+        "binding_sha256"
+      ],
+      "title": "CandidateSelectionPlanCostTransitionBinding",
+      "type": "object"
+    },
+    "CandidateSelectionPlanEndpointTrialBinding": {
+      "additionalProperties": false,
+      "description": "A single staged endpoint addition, never adoption or paid-run authority.",
+      "properties": {
+        "added_candidate_constraint": {
+          "$ref": "#/$defs/ExactRouteConstraint"
+        },
+        "artifact_kind": {
+          "const": "REPOSITORY_PINNED_CANDIDATE_ENDPOINT_TRIAL",
+          "default": "REPOSITORY_PINNED_CANDIDATE_ENDPOINT_TRIAL",
+          "title": "Artifact Kind",
+          "type": "string"
+        },
+        "binding_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Binding Sha256",
+          "type": "string"
+        },
+        "disposition": {
+          "const": "NONCREDITING_SMOKE_STAGING",
+          "default": "NONCREDITING_SMOKE_STAGING",
+          "title": "Disposition",
+          "type": "string"
+        },
+        "durable_runner_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Durable Runner Authorized",
+          "type": "boolean"
+        },
+        "operator_decision_id": {
+          "const": "OP-ENDPOINTTRIAL-2026-09-11",
+          "default": "OP-ENDPOINTTRIAL-2026-09-11",
+          "title": "Operator Decision Id",
+          "type": "string"
+        },
+        "plan_adoption_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Plan Adoption Authorized",
+          "type": "boolean"
+        },
+        "predecessor_plan_sha256": {
+          "const": "a868db571f4ced1cba9db7aa53d9a6b56b05c99bb465618d445ca940cd73313c",
+          "title": "Predecessor Plan Sha256",
+          "type": "string"
+        },
+        "predecessor_raw_sha256": {
+          "const": "7af8d0eeeade437767c965482c563dafa893ce76eee818333fd728daab7cdbb0",
+          "title": "Predecessor Raw Sha256",
+          "type": "string"
+        },
+        "provider_call_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Provider Call Authorized",
+          "type": "boolean"
+        },
+        "qualification_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Qualification Authorized",
+          "type": "boolean"
+        },
+        "retained_constraints": {
+          "items": {
+            "$ref": "#/$defs/ExactRouteConstraint"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "title": "Retained Constraints",
+          "type": "array"
+        },
+        "retained_profile_sha256": {
+          "const": "279f5050a7cd0dd3ce04f724d4987c239b740b7bfced1325e605e94537938a08",
+          "title": "Retained Profile Sha256",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "seal_publication_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Seal Publication Authorized",
+          "type": "boolean"
+        },
+        "serialized_authority": {
+          "const": false,
+          "default": false,
+          "title": "Serialized Authority",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "predecessor_raw_sha256",
+        "predecessor_plan_sha256",
+        "retained_profile_sha256",
+        "retained_constraints",
+        "added_candidate_constraint",
+        "binding_sha256"
+      ],
+      "title": "CandidateSelectionPlanEndpointTrialBinding",
+      "type": "object"
+    },
+    "CandidateSelectionPlanRoleRouteTransitionBinding": {
+      "additionalProperties": false,
+      "description": "Nonauthorizing three-role refresh from capability-verified unavailable ancestry.",
+      "properties": {
+        "ancestry_evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Ancestry Evidence Sha256",
+          "type": "string"
+        },
+        "artifact_kind": {
+          "const": "REPOSITORY_PINNED_SELECTION_PLAN_ROLE_ROUTE_TRANSITION",
+          "title": "Artifact Kind",
+          "type": "string"
+        },
+        "benchmark_authorized": {
+          "const": false,
+          "title": "Benchmark Authorized",
+          "type": "boolean"
+        },
+        "binding_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Binding Sha256",
+          "type": "string"
+        },
+        "constrained_discovery_required": {
+          "const": true,
+          "title": "Constrained Discovery Required",
+          "type": "boolean"
+        },
+        "endpoint_inventory_refresh_staged": {
+          "const": true,
+          "title": "Endpoint Inventory Refresh Staged",
+          "type": "boolean"
+        },
+        "matched_revocation_set_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Matched Revocation Set Sha256",
+          "type": "string"
+        },
+        "opaque_ancestry_capability_required": {
+          "const": true,
+          "title": "Opaque Ancestry Capability Required",
+          "type": "boolean"
+        },
+        "operator_decision_id": {
+          "const": "OP-COST-2026-09-09",
+          "title": "Operator Decision Id",
+          "type": "string"
+        },
+        "predecessor_judge_constraint_sha256s": {
+          "items": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "maxItems": 17,
+          "minItems": 2,
+          "title": "Predecessor Judge Constraint Sha256S",
+          "type": "array"
+        },
+        "price_cap_profile_decision": {
+          "const": "RETAIN_EXACT_PREDECESSOR_V1",
+          "title": "Price Cap Profile Decision",
+          "type": "string"
+        },
+        "price_cap_profile_upgrade_authorized": {
+          "const": false,
+          "title": "Price Cap Profile Upgrade Authorized",
+          "type": "boolean"
+        },
+        "production_selection_authorized": {
+          "const": false,
+          "title": "Production Selection Authorized",
+          "type": "boolean"
+        },
+        "provider_call_authorized": {
+          "const": false,
+          "title": "Provider Call Authorized",
+          "type": "boolean"
+        },
+        "qualification_authorized": {
+          "const": false,
+          "title": "Qualification Authorized",
+          "type": "boolean"
+        },
+        "release_authorized": {
+          "const": false,
+          "title": "Release Authorized",
+          "type": "boolean"
+        },
+        "retained_primary_judge_model_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+          "title": "Retained Primary Judge Model Id",
+          "type": "string"
+        },
+        "retained_replay_judge_model_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+          "title": "Retained Replay Judge Model Id",
+          "type": "string"
+        },
+        "retained_route_predicate_profile_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Retained Route Predicate Profile Sha256",
+          "type": "string"
+        },
+        "revocation_entry_sha256s": {
+          "items": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "title": "Revocation Entry Sha256S",
+          "type": "array"
+        },
+        "route_refreshes": {
+          "items": {
+            "$ref": "#/$defs/CandidateSelectionRoleRouteRefresh"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "title": "Route Refreshes",
+          "type": "array"
+        },
+        "runner_authority_authorized": {
+          "const": false,
+          "title": "Runner Authority Authorized",
+          "type": "boolean"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "seal_publication_authorized": {
+          "const": false,
+          "title": "Seal Publication Authorized",
+          "type": "boolean"
+        },
+        "selected_ancestor_plan_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Selected Ancestor Plan Sha256",
+          "type": "string"
+        },
+        "selected_ancestor_raw_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Selected Ancestor Raw Sha256",
+          "type": "string"
+        },
+        "selected_ancestor_role_assignment_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Selected Ancestor Role Assignment Sha256",
+          "type": "string"
+        },
+        "serialized_authority": {
+          "const": false,
+          "title": "Serialized Authority",
+          "type": "boolean"
+        },
+        "source_egress_authorized": {
+          "const": false,
+          "title": "Source Egress Authorized",
+          "type": "boolean"
+        },
+        "unavailable_predecessor_plan_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Unavailable Predecessor Plan Sha256",
+          "type": "string"
+        },
+        "unavailable_predecessor_raw_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Unavailable Predecessor Raw Sha256",
+          "type": "string"
+        },
+        "unavailable_state_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Unavailable State Sha256",
+          "type": "string"
+        },
+        "withdrawn_candidate_constraint_sha256s": {
+          "items": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "title": "Withdrawn Candidate Constraint Sha256S",
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema_version",
+        "artifact_kind",
+        "operator_decision_id",
+        "selected_ancestor_raw_sha256",
+        "selected_ancestor_plan_sha256",
+        "unavailable_predecessor_raw_sha256",
+        "unavailable_predecessor_plan_sha256",
+        "unavailable_state_sha256",
+        "matched_revocation_set_sha256",
+        "ancestry_evidence_sha256",
+        "revocation_entry_sha256s",
+        "withdrawn_candidate_constraint_sha256s",
+        "selected_ancestor_role_assignment_sha256",
+        "retained_route_predicate_profile_sha256",
+        "predecessor_judge_constraint_sha256s",
+        "retained_primary_judge_model_id",
+        "retained_replay_judge_model_id",
+        "route_refreshes",
+        "price_cap_profile_decision",
+        "opaque_ancestry_capability_required",
+        "endpoint_inventory_refresh_staged",
+        "constrained_discovery_required",
+        "price_cap_profile_upgrade_authorized",
+        "provider_call_authorized",
+        "source_egress_authorized",
+        "qualification_authorized",
+        "production_selection_authorized",
+        "runner_authority_authorized",
+        "benchmark_authorized",
+        "seal_publication_authorized",
+        "release_authorized",
+        "serialized_authority",
+        "binding_sha256"
+      ],
+      "title": "CandidateSelectionPlanRoleRouteTransitionBinding",
+      "type": "object"
+    },
+    "CandidateSelectionRoleRouteRefresh": {
+      "additionalProperties": false,
+      "description": "One role's unverified inventory change and exact replacement constraint.",
+      "properties": {
+        "inventory_refresh": {
+          "$ref": "#/$defs/CandidateSelectionEndpointInventoryRefresh"
+        },
+        "replacement_constraint": {
+          "$ref": "#/$defs/ExactRouteConstraint"
+        },
+        "role": {
+          "$ref": "#/$defs/ExactRouteRole"
+        }
+      },
+      "required": [
+        "role",
+        "inventory_refresh",
+        "replacement_constraint"
+      ],
+      "title": "CandidateSelectionRoleRouteRefresh",
+      "type": "object"
+    },
     "CandidateSelectionSourceBinding": {
       "additionalProperties": false,
       "description": "Exact bytes for one operator-staged, explicitly unverified input.",
@@ -648,6 +1153,119 @@
       "title": "ExactRouteRole",
       "type": "string"
     },
+    "LegacyUncertainCostAllowance": {
+      "additionalProperties": false,
+      "description": "Explicit operator relaxation for two exact rows, with no general carry mechanism.",
+      "properties": {
+        "allowance_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Allowance Sha256",
+          "type": "string"
+        },
+        "entries": {
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "$ref": "#/$defs/LegacyUncertainCostEntry"
+            },
+            {
+              "$ref": "#/$defs/LegacyUncertainCostEntry"
+            }
+          ],
+          "title": "Entries",
+          "type": "array"
+        },
+        "operator_decision_id": {
+          "const": "OP-COSTLEGACY-2026-09-11",
+          "default": "OP-COSTLEGACY-2026-09-11",
+          "title": "Operator Decision Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "entries",
+        "allowance_sha256"
+      ],
+      "title": "LegacyUncertainCostAllowance",
+      "type": "object"
+    },
+    "LegacyUncertainCostEntry": {
+      "additionalProperties": false,
+      "description": "Bind every immutable identity and retained liability field of one approved row.",
+      "properties": {
+        "accounted_cost_usd_exact": {
+          "enum": [
+            "0.18105",
+            "0.05225616"
+          ],
+          "title": "Accounted Cost Usd Exact",
+          "type": "string"
+        },
+        "actual_cost_usd": {
+          "default": null,
+          "title": "Actual Cost Usd",
+          "type": "null"
+        },
+        "created_at": {
+          "maxLength": 32,
+          "minLength": 25,
+          "title": "Created At",
+          "type": "string"
+        },
+        "release_reason": {
+          "default": null,
+          "title": "Release Reason",
+          "type": "null"
+        },
+        "request_id": {
+          "pattern": "^authrunner\\.smoke\\.(?:r17\\.judge\\.replay|r2\\.candidate\\.primary):[0-9a-f]{64}$",
+          "title": "Request Id",
+          "type": "string"
+        },
+        "reservation_id": {
+          "pattern": "^[0-9a-f]{32}$",
+          "title": "Reservation Id",
+          "type": "string"
+        },
+        "reserved_usd_exact": {
+          "enum": [
+            "0.18105",
+            "0.05225616"
+          ],
+          "title": "Reserved Usd Exact",
+          "type": "string"
+        },
+        "status": {
+          "const": "uncertain_accounted",
+          "default": "uncertain_accounted",
+          "title": "Status",
+          "type": "string"
+        },
+        "updated_at": {
+          "maxLength": 32,
+          "minLength": 25,
+          "title": "Updated At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "request_id",
+        "reservation_id",
+        "created_at",
+        "updated_at",
+        "reserved_usd_exact",
+        "accounted_cost_usd_exact"
+      ],
+      "title": "LegacyUncertainCostEntry",
+      "type": "object"
+    },
     "ProviderPriceCapAlgorithm": {
       "enum": [
         "MMAUDIT_OPENROUTER_MAX_PRICE_CEILING_V1",
@@ -656,6 +1274,141 @@
       ],
       "title": "ProviderPriceCapAlgorithm",
       "type": "string"
+    },
+    "RouteCostReservationPolicy": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "schema_version": {
+                "const": "1.0"
+              }
+            }
+          },
+          "then": {
+            "not": {
+              "required": [
+                "legacy_uncertain_allowance"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "schema_version": {
+                "const": "1.1"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "legacy_uncertain_allowance": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "legacy_uncertain_allowance"
+            ]
+          }
+        }
+      ],
+      "description": "An explicit cost-only relaxation, never inferred from endpoint metadata.",
+      "properties": {
+        "automatic_ceiling_increase": {
+          "const": false,
+          "default": false,
+          "title": "Automatic Ceiling Increase",
+          "type": "boolean"
+        },
+        "enforcement_basis": {
+          "const": "MMAUDIT_OPERATOR_RESERVE_THEN_RECONCILE_V1",
+          "default": "MMAUDIT_OPERATOR_RESERVE_THEN_RECONCILE_V1",
+          "title": "Enforcement Basis",
+          "type": "string"
+        },
+        "ledger_ceiling_usd_exact": {
+          "default": "250",
+          "maxLength": 49,
+          "pattern": "^(?:0|[1-9][0-9]{0,11})(?:\\.[0-9]{0,35}[1-9])?$",
+          "title": "Ledger Ceiling Usd Exact",
+          "type": "string"
+        },
+        "legacy_uncertain_allowance": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LegacyUncertainCostAllowance"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "maximum_request_bytes": {
+          "default": 4000000,
+          "maximum": 64000000,
+          "minimum": 1024,
+          "title": "Maximum Request Bytes",
+          "type": "integer"
+        },
+        "operator_decision_id": {
+          "const": "OP-COST-2026-09-09",
+          "default": "OP-COST-2026-09-09",
+          "title": "Operator Decision Id",
+          "type": "string"
+        },
+        "policy_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Policy Sha256",
+          "type": "string"
+        },
+        "provider_enforced_total_ceiling": {
+          "const": false,
+          "default": false,
+          "title": "Provider Enforced Total Ceiling",
+          "type": "boolean"
+        },
+        "require_actual_billed_cost": {
+          "const": true,
+          "default": true,
+          "title": "Require Actual Billed Cost",
+          "type": "boolean"
+        },
+        "reservation_overrun_blocks_new_work": {
+          "const": true,
+          "default": true,
+          "title": "Reservation Overrun Blocks New Work",
+          "type": "boolean"
+        },
+        "schema_version": {
+          "default": "1.0",
+          "enum": [
+            "1.0",
+            "1.1"
+          ],
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "uncappable_rate_multiplier": {
+          "const": "2",
+          "default": "2",
+          "title": "Uncappable Rate Multiplier",
+          "type": "string"
+        },
+        "unknown_billing_blocks_new_work": {
+          "const": true,
+          "default": true,
+          "title": "Unknown Billing Blocks New Work",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "policy_sha256"
+      ],
+      "title": "RouteCostReservationPolicy",
+      "type": "object"
     },
     "RoutePredicateDisposition": {
       "enum": [
@@ -697,13 +1450,238 @@
         "REGISTRY_SELECTION_HASH_CUSTODY",
         "REGISTRY_CONSTRAINT_HASH_CUSTODY",
         "EMPIRICAL_SCHEMA_CONFORMANCE",
-        "TOKEN_DETAIL_REPORTING_CONVENTION"
+        "TOKEN_DETAIL_REPORTING_CONVENTION",
+        "RESERVATION_PRICING_AVAILABLE",
+        "PROVIDER_CAPPED_SUBSET_BOUND"
       ],
       "title": "RoutePredicateId",
       "type": "string"
     },
     "RoutePredicateProfile": {
       "additionalProperties": false,
+      "allOf": [
+        {
+          "else": {
+            "not": {
+              "required": [
+                "operator_reservation_policy"
+              ]
+            },
+            "properties": {
+              "predicate_ids": {
+                "prefixItems": [
+                  {
+                    "const": "EXACT_MODEL_IDENTITY"
+                  },
+                  {
+                    "const": "EXACT_PROVIDER_ENDPOINT"
+                  },
+                  {
+                    "const": "PROVIDER_DISPLAY_NAME_INJECTIVITY"
+                  },
+                  {
+                    "const": "OPERATIONAL_STATUS"
+                  },
+                  {
+                    "const": "ZDR_ELIGIBILITY"
+                  },
+                  {
+                    "const": "EMITS_MAX_TOKENS"
+                  },
+                  {
+                    "const": "EMITS_TEMPERATURE"
+                  },
+                  {
+                    "const": "EMITS_RESPONSE_FORMAT"
+                  },
+                  {
+                    "const": "EMITS_REASONING"
+                  },
+                  {
+                    "const": "MODEL_STRUCTURED_OUTPUT_MARKER"
+                  },
+                  {
+                    "const": "ENDPOINT_STRUCTURED_OUTPUT_MARKER"
+                  },
+                  {
+                    "const": "NATIVE_STRUCTURED_OUTPUT_MODE"
+                  },
+                  {
+                    "const": "SINGLETON_EXACT_ROUTE"
+                  },
+                  {
+                    "const": "AUTOMATIC_FALLBACK_DISABLED"
+                  },
+                  {
+                    "const": "REASONING_POLICY_BINDING"
+                  },
+                  {
+                    "const": "REASONING_CONTROL_BINDING"
+                  },
+                  {
+                    "const": "REASONING_CONTROL_VALUES"
+                  },
+                  {
+                    "const": "REASONING_EFFORT_SUPPORT"
+                  },
+                  {
+                    "const": "PROMPT_CAPACITY_ENVELOPE"
+                  },
+                  {
+                    "const": "OUTPUT_CAPACITY_ENVELOPE"
+                  },
+                  {
+                    "const": "CONTEXT_CAPACITY_ENVELOPE"
+                  },
+                  {
+                    "const": "METADATA_COMPLETION_CAPACITY"
+                  },
+                  {
+                    "const": "PRICE_CAP_EXPRESSIBILITY"
+                  },
+                  {
+                    "const": "PRICE_CAP_NO_WEAKER"
+                  },
+                  {
+                    "const": "FROZEN_LIVE_EQUIVALENCE"
+                  },
+                  {
+                    "const": "REGISTRY_SELECTION_HASH_CUSTODY"
+                  },
+                  {
+                    "const": "REGISTRY_CONSTRAINT_HASH_CUSTODY"
+                  },
+                  {
+                    "const": "EMPIRICAL_SCHEMA_CONFORMANCE"
+                  },
+                  {
+                    "const": "TOKEN_DETAIL_REPORTING_CONVENTION"
+                  }
+                ]
+              }
+            }
+          },
+          "if": {
+            "properties": {
+              "schema_version": {
+                "const": "1.3"
+              }
+            },
+            "required": [
+              "schema_version"
+            ]
+          },
+          "then": {
+            "not": {
+              "required": [
+                "price_component_unit_envelopes"
+              ]
+            },
+            "properties": {
+              "operator_reservation_policy": {
+                "type": "object"
+              },
+              "predicate_ids": {
+                "prefixItems": [
+                  {
+                    "const": "EXACT_MODEL_IDENTITY"
+                  },
+                  {
+                    "const": "EXACT_PROVIDER_ENDPOINT"
+                  },
+                  {
+                    "const": "PROVIDER_DISPLAY_NAME_INJECTIVITY"
+                  },
+                  {
+                    "const": "OPERATIONAL_STATUS"
+                  },
+                  {
+                    "const": "ZDR_ELIGIBILITY"
+                  },
+                  {
+                    "const": "EMITS_MAX_TOKENS"
+                  },
+                  {
+                    "const": "EMITS_TEMPERATURE"
+                  },
+                  {
+                    "const": "EMITS_RESPONSE_FORMAT"
+                  },
+                  {
+                    "const": "EMITS_REASONING"
+                  },
+                  {
+                    "const": "MODEL_STRUCTURED_OUTPUT_MARKER"
+                  },
+                  {
+                    "const": "ENDPOINT_STRUCTURED_OUTPUT_MARKER"
+                  },
+                  {
+                    "const": "NATIVE_STRUCTURED_OUTPUT_MODE"
+                  },
+                  {
+                    "const": "SINGLETON_EXACT_ROUTE"
+                  },
+                  {
+                    "const": "AUTOMATIC_FALLBACK_DISABLED"
+                  },
+                  {
+                    "const": "REASONING_POLICY_BINDING"
+                  },
+                  {
+                    "const": "REASONING_CONTROL_BINDING"
+                  },
+                  {
+                    "const": "REASONING_CONTROL_VALUES"
+                  },
+                  {
+                    "const": "REASONING_EFFORT_SUPPORT"
+                  },
+                  {
+                    "const": "PROMPT_CAPACITY_ENVELOPE"
+                  },
+                  {
+                    "const": "OUTPUT_CAPACITY_ENVELOPE"
+                  },
+                  {
+                    "const": "CONTEXT_CAPACITY_ENVELOPE"
+                  },
+                  {
+                    "const": "METADATA_COMPLETION_CAPACITY"
+                  },
+                  {
+                    "const": "RESERVATION_PRICING_AVAILABLE"
+                  },
+                  {
+                    "const": "PROVIDER_CAPPED_SUBSET_BOUND"
+                  },
+                  {
+                    "const": "FROZEN_LIVE_EQUIVALENCE"
+                  },
+                  {
+                    "const": "REGISTRY_SELECTION_HASH_CUSTODY"
+                  },
+                  {
+                    "const": "REGISTRY_CONSTRAINT_HASH_CUSTODY"
+                  },
+                  {
+                    "const": "EMPIRICAL_SCHEMA_CONFORMANCE"
+                  },
+                  {
+                    "const": "TOKEN_DETAIL_REPORTING_CONVENTION"
+                  }
+                ]
+              },
+              "price_cap_algorithm": {
+                "const": "MMAUDIT_OPENROUTER_MAX_PRICE_CEILING_V1"
+              }
+            },
+            "required": [
+              "operator_reservation_policy"
+            ]
+          }
+        }
+      ],
       "description": "Shared requirements for every exact AUTHRUNNER route.",
       "properties": {
         "accepted_operational_status": {
@@ -744,6 +1722,17 @@
           "const": "structured_outputs",
           "title": "Native Capability Marker",
           "type": "string"
+        },
+        "operator_reservation_policy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RouteCostReservationPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "predicate_ids": {
           "items": {
@@ -890,7 +1879,8 @@
           "enum": [
             "1.0",
             "1.1",
-            "1.2"
+            "1.2",
+            "1.3"
           ],
           "title": "Schema Version",
           "type": "string"
@@ -1152,10 +2142,264 @@
           "ancestry_transition_binding"
         ]
       }
+    },
+    {
+      "else": {
+        "not": {
+          "required": [
+            "ancestry_route_transition_binding"
+          ]
+        }
+      },
+      "if": {
+        "properties": {
+          "schema_version": {
+            "const": "1.9"
+          }
+        },
+        "required": [
+          "schema_version"
+        ]
+      },
+      "then": {
+        "properties": {
+          "ancestry_route_transition_binding": {
+            "not": {
+              "type": "null"
+            }
+          },
+          "authenticated_runner_selection": {
+            "properties": {
+              "route_predicate_profile": {
+                "properties": {
+                  "price_cap_algorithm": {
+                    "const": "MMAUDIT_OPENROUTER_MAX_PRICE_CEILING_V1"
+                  },
+                  "price_component_unit_envelopes": {
+                    "type": "null"
+                  },
+                  "schema_version": {
+                    "const": "1.0"
+                  }
+                },
+                "required": [
+                  "schema_version",
+                  "price_cap_algorithm"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "route_predicate_profile"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "authenticated_runner_selection",
+          "ancestry_route_transition_binding"
+        ]
+      }
+    },
+    {
+      "else": {
+        "not": {
+          "required": [
+            "operator_cost_transition_binding"
+          ]
+        }
+      },
+      "if": {
+        "properties": {
+          "schema_version": {
+            "enum": [
+              "1.10",
+              "1.11"
+            ]
+          }
+        },
+        "required": [
+          "schema_version"
+        ]
+      },
+      "then": {
+        "properties": {
+          "authenticated_runner_selection": {
+            "properties": {
+              "route_predicate_profile": {
+                "properties": {
+                  "schema_version": {
+                    "const": "1.3"
+                  }
+                }
+              }
+            },
+            "type": "object"
+          },
+          "operator_cost_transition_binding": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "operator_cost_transition_binding",
+          "authenticated_runner_selection"
+        ]
+      }
+    },
+    {
+      "else": {
+        "properties": {
+          "authenticated_runner_selection": {
+            "properties": {
+              "route_predicate_profile": {
+                "not": {
+                  "required": [
+                    "operator_reservation_policy"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "if": {
+        "properties": {
+          "schema_version": {
+            "enum": [
+              "1.10",
+              "1.11",
+              "1.12"
+            ]
+          }
+        },
+        "required": [
+          "schema_version"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "schema_version": {
+            "const": "1.10"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "authenticated_runner_selection": {
+            "properties": {
+              "route_predicate_profile": {
+                "properties": {
+                  "operator_reservation_policy": {
+                    "properties": {
+                      "schema_version": {
+                        "const": "1.0"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "operator_cost_transition_binding": {
+            "properties": {
+              "schema_version": {
+                "const": "1.0"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "schema_version": {
+            "const": "1.11"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "authenticated_runner_selection": {
+            "properties": {
+              "route_predicate_profile": {
+                "properties": {
+                  "operator_reservation_policy": {
+                    "properties": {
+                      "schema_version": {
+                        "const": "1.1"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "operator_cost_transition_binding": {
+            "properties": {
+              "schema_version": {
+                "const": "1.1"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "else": {
+        "not": {
+          "required": [
+            "operator_endpoint_trial_binding"
+          ]
+        }
+      },
+      "if": {
+        "properties": {
+          "schema_version": {
+            "const": "1.12"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "authenticated_runner_selection": {
+            "properties": {
+              "route_predicate_profile": {
+                "properties": {
+                  "schema_version": {
+                    "const": "1.3"
+                  }
+                }
+              }
+            },
+            "type": "object"
+          },
+          "operator_endpoint_trial_binding": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "operator_endpoint_trial_binding",
+          "authenticated_runner_selection"
+        ]
+      }
     }
   ],
   "description": "Self-hashed operator-staged seed with only literal-false authority flags.",
   "properties": {
+    "ancestry_route_transition_binding": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CandidateSelectionPlanRoleRouteTransitionBinding"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
     "ancestry_transition_binding": {
       "anyOf": [
         {
@@ -1239,6 +2483,28 @@
       "title": "Objective Sha256",
       "type": "string"
     },
+    "operator_cost_transition_binding": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CandidateSelectionPlanCostTransitionBinding"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "operator_endpoint_trial_binding": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CandidateSelectionPlanEndpointTrialBinding"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
     "plan_sha256": {
       "pattern": "^[0-9a-f]{64}$",
       "title": "Plan Sha256",
@@ -1298,7 +2564,11 @@
         "1.5",
         "1.6",
         "1.7",
-        "1.8"
+        "1.8",
+        "1.9",
+        "1.10",
+        "1.11",
+        "1.12"
       ],
       "title": "Schema Version",
       "type": "string"

@@ -1,0 +1,1335 @@
+{
+  "additional_profiled_resume_samples_per_case": 1,
+  "attribution": [
+    {
+      "case": "generic-open",
+      "fresh_guard_calls": 13436,
+      "fresh_input_guard_cumulative_ns": 45171931475,
+      "fresh_schema_inventory_cumulative_ns": 128735253059,
+      "guard_cumulative_ns": 193127214516,
+      "guard_share_of_profile_wall_percent": 91.0632,
+      "inclusive_times_must_not_be_added": true
+    },
+    {
+      "case": "mixed-specialist",
+      "fresh_guard_calls": 26507,
+      "fresh_input_guard_cumulative_ns": 90220762459,
+      "fresh_schema_inventory_cumulative_ns": 254885947068,
+      "guard_cumulative_ns": 383391154759,
+      "guard_share_of_profile_wall_percent": 87.8066,
+      "inclusive_times_must_not_be_added": true
+    }
+  ],
+  "captured_output": {
+    "bytes": 29548,
+    "capture_kind": "EXEC_COMMAND_WRITE_STDIN_DECODED_OUTPUT_CHUNKS",
+    "expected_synthetic_truncation_log_lines": 22,
+    "json_records": 14,
+    "path": "/private/tmp/mmaudit-pipeline-replay.4vl45T/pipeline-replay-captured-output.json",
+    "phase_parsing_normalization": "CRLF_TO_LF; original decoded chunks are preserved in the capture",
+    "sha256": "7ee045829913fc0ceba968209438bbecc642f39eafd0879d0fe2bcc5a93df903"
+  },
+  "cases": [
+    {
+      "case": {
+        "expected_children": 14,
+        "expected_depth": 3,
+        "fully_covered": true,
+        "name": "generic-open",
+        "pattern": "OPEN",
+        "pipeline": true,
+        "request_limit": 15,
+        "role": "whole_protocol_review:0",
+        "sources": 9
+      },
+      "fresh_pipeline": {
+        "cpu_ns": {
+          "maximum": 211400293000,
+          "median": 211400293000,
+          "minimum": 211400293000
+        },
+        "samples": [
+          {
+            "cpu_ns": 211400293000,
+            "wall_ns": 214077027375
+          }
+        ],
+        "wall_ns": {
+          "maximum": 214077027375,
+          "median": 214077027375,
+          "minimum": 214077027375
+        }
+      },
+      "full_original_resume": {
+        "cpu_ns": {
+          "maximum": 65717593000,
+          "median": 65090267000,
+          "minimum": 65051919000
+        },
+        "samples": [
+          {
+            "cpu_ns": 65717593000,
+            "wall_ns": 66391626084
+          },
+          {
+            "cpu_ns": 65090267000,
+            "wall_ns": 65746968542
+          },
+          {
+            "cpu_ns": 65051919000,
+            "wall_ns": 65704229417
+          }
+        ],
+        "separate_profile": {
+          "cpu_ns": 211272901000,
+          "included_in_unprofiled_samples": false,
+          "inclusive_times_overlap": true,
+          "main_thread_only": true,
+          "rows": [
+            {
+              "cumulative_ns": 212079746374,
+              "file": "tests/integration/test_pipeline.py",
+              "function": "_run",
+              "line": 1406,
+              "primitive_calls": 2,
+              "self_ns": 113000,
+              "total_calls": 2
+            },
+            {
+              "cumulative_ns": 211826933500,
+              "file": "src/mmaudit/orchestration/pipeline.py",
+              "function": "run",
+              "line": 3900,
+              "primitive_calls": 2,
+              "self_ns": 1088877,
+              "total_calls": 2
+            },
+            {
+              "cumulative_ns": 211825720708,
+              "file": "src/mmaudit/orchestration/pipeline.py",
+              "function": "_run_with_provider",
+              "line": 3966,
+              "primitive_calls": 2,
+              "self_ns": 4491859,
+              "total_calls": 2
+            },
+            {
+              "cumulative_ns": 193127214516,
+              "file": "src/mmaudit/models/truncation.py",
+              "function": "implementation_is_pristine",
+              "line": 2827,
+              "primitive_calls": 13436,
+              "self_ns": 341488814,
+              "total_calls": 13436
+            },
+            {
+              "cumulative_ns": 158395932847,
+              "file": ".venv/lib/python3.13/site-packages/pydantic/main.py",
+              "function": "model_validate_json",
+              "line": 742,
+              "primitive_calls": 18073,
+              "self_ns": 12445512,
+              "total_calls": 38535
+            },
+            {
+              "cumulative_ns": 158390110649,
+              "file": "~",
+              "function": "<method 'validate_json' of 'pydantic_core._pydantic_core.SchemaValidator' objects>",
+              "line": 0,
+              "primitive_calls": 18073,
+              "self_ns": 921448507,
+              "total_calls": 41811
+            },
+            {
+              "cumulative_ns": 143217069916,
+              "file": "<external>/base_events.py",
+              "function": "_run_once",
+              "line": 1981,
+              "primitive_calls": 2,
+              "self_ns": 8959,
+              "total_calls": 2
+            },
+            {
+              "cumulative_ns": 143217025416,
+              "file": "<external>/events.py",
+              "function": "_run",
+              "line": 87,
+              "primitive_calls": 5,
+              "self_ns": 2290,
+              "total_calls": 5
+            },
+            {
+              "cumulative_ns": 143217023126,
+              "file": "~",
+              "function": "<method 'run' of '_contextvars.Context' objects>",
+              "line": 0,
+              "primitive_calls": 5,
+              "self_ns": 5001,
+              "total_calls": 5
+            },
+            {
+              "cumulative_ns": 143217016333,
+              "file": "scripts/measure_pipeline_replay_scaling.py",
+              "function": "_main",
+              "line": 20,
+              "primitive_calls": 1,
+              "self_ns": 750,
+              "total_calls": 1
+            },
+            {
+              "cumulative_ns": 143217015583,
+              "file": "tests/pipeline_replay_scaling_support.py",
+              "function": "measure_original_pipeline_replay",
+              "line": 206,
+              "primitive_calls": 1,
+              "self_ns": 3333,
+              "total_calls": 1
+            },
+            {
+              "cumulative_ns": 143217012250,
+              "file": "tests/integration/test_unresolved_recovery_tree_pipeline.py",
+              "function": "test_automatic_unresolved_tree_preserves_original_scope_costs_roles_and_resume",
+              "line": 165,
+              "primitive_calls": 1,
+              "self_ns": 250,
+              "total_calls": 1
+            },
+            {
+              "cumulative_ns": 84722592187,
+              "file": ".venv/lib/python3.13/site-packages/pydantic/json_schema.py",
+              "function": "generate_inner",
+              "line": 450,
+              "primitive_calls": 403088,
+              "self_ns": 10186799967,
+              "total_calls": 9341332
+            },
+            {
+              "cumulative_ns": 45171931475,
+              "file": "src/mmaudit/models/truncation.py",
+              "function": "_candidate_review_schema_input_guard",
+              "line": 1719,
+              "primitive_calls": 13436,
+              "self_ns": 22589406213,
+              "total_calls": 13436
+            },
+            {
+              "cumulative_ns": 14167941784,
+              "file": ".venv/lib/python3.13/site-packages/pydantic/json_schema.py",
+              "function": "mode",
+              "line": 319,
+              "primitive_calls": 33199320,
+              "self_ns": 5837344325,
+              "total_calls": 33199320
+            },
+            {
+              "cumulative_ns": 13935297454,
+              "file": "src/mmaudit/models/truncation.py",
+              "function": "inputs_are_current",
+              "line": 1771,
+              "primitive_calls": 13436,
+              "self_ns": 6112477921,
+              "total_calls": 13436
+            },
+            {
+              "cumulative_ns": 13794245784,
+              "file": "~",
+              "function": "<built-in method builtins.any>",
+              "line": 0,
+              "primitive_calls": 22546385,
+              "self_ns": 5908553086,
+              "total_calls": 22577722
+            },
+            {
+              "cumulative_ns": 12807102032,
+              "file": "src/mmaudit/models/truncation.py",
+              "function": "_plain_schema_definitions",
+              "line": 1594,
+              "primitive_calls": 13436,
+              "self_ns": 5548410143,
+              "total_calls": 13436
+            },
+            {
+              "cumulative_ns": 11399017818,
+              "file": "~",
+              "function": "<method 'extend' of 'list' objects>",
+              "line": 0,
+              "primitive_calls": 22390949,
+              "self_ns": 8334387417,
+              "total_calls": 22390949
+            },
+            {
+              "cumulative_ns": 11254931120,
+              "file": "~",
+              "function": "<built-in method builtins.isinstance>",
+              "line": 0,
+              "primitive_calls": 179469402,
+              "self_ns": 8490941287,
+              "total_calls": 179469430
+            },
+            {
+              "cumulative_ns": 10442349021,
+              "file": ".venv/lib/python3.13/site-packages/pydantic/json_schema.py",
+              "function": "remap_json_schema",
+              "line": 202,
+              "primitive_calls": 215000,
+              "self_ns": 6888066854,
+              "total_calls": 21238276
+            },
+            {
+              "cumulative_ns": 8339542956,
+              "file": "src/mmaudit/models/truncation.py",
+              "function": "normalize",
+              "line": 1702,
+              "primitive_calls": 13436,
+              "self_ns": 5776054604,
+              "total_calls": 22075348
+            },
+            {
+              "cumulative_ns": 7406922200,
+              "file": ".venv/lib/python3.13/site-packages/pydantic/json_schema.py",
+              "function": "_sort_recursive",
+              "line": 604,
+              "primitive_calls": 456880,
+              "self_ns": 5345670265,
+              "total_calls": 21559368
+            },
+            {
+              "cumulative_ns": 5957535762,
+              "file": "~",
+              "function": "<method 'get' of 'dict' objects>",
+              "line": 0,
+              "primitive_calls": 102711078,
+              "self_ns": 5957535762,
+              "total_calls": 102711078
+            }
+          ],
+          "selected_functions": [
+            {
+              "cumulative_ns": 128735253059,
+              "direct_callers": [
+                {
+                  "cumulative_ns": 128735253059,
+                  "file": "src/mmaudit/models/truncation.py",
+                  "function": "implementation_is_pristine",
+                  "line": 2827,
+                  "primitive_calls": 13436,
+                  "self_ns": 37424341,
+                  "total_calls": 13436
+                }
+              ],
+              "file": "src/mmaudit/models/truncation.py",
+              "function": "_candidate_review_schema_inventory_sha256",
+              "line": 1690,
+              "primitive_calls": 13436,
+              "self_ns": 37424341,
+              "total_calls": 13436
+            },
+            {
+              "cumulative_ns": 45171931475,
+              "direct_callers": [
+                {
+                  "cumulative_ns": 45171931475,
+                  "file": "src/mmaudit/models/truncation.py",
+                  "function": "implementation_is_pristine",
+                  "line": 2827,
+                  "primitive_calls": 13436,
+                  "self_ns": 22589406213,
+                  "total_calls": 13436
+                }
+              ],
+              "file": "src/mmaudit/models/truncation.py",
+              "function": "_candidate_review_schema_input_guard",
+              "line": 1719,
+              "primitive_calls": 13436,
+              "self_ns": 22589406213,
+              "total_calls": 13436
+            },
+            {
+              "cumulative_ns": 193127214516,
+              "direct_callers": [
+                {
+                  "cumulative_ns": 1275058960,
+                  "file": "src/mmaudit/models/scheduler.py",
+                  "function": "build",
+                  "line": 4179,
+                  "primitive_calls": 90,
+                  "self_ns": 2259544,
+                  "total_calls": 90
+                },
+                {
+                  "cumulative_ns": 3834369305,
+                  "file": "src/mmaudit/models/scheduler.py",
+                  "function": "completion_evidence_is_redacted_and_exact",
+                  "line": 4440,
+                  "primitive_calls": 270,
+                  "self_ns": 6959588,
+                  "total_calls": 270
+                },
+                {
+                  "cumulative_ns": 426127041,
+                  "file": "src/mmaudit/models/scheduler.py",
+                  "function": "build",
+                  "line": 4866,
+                  "primitive_calls": 30,
+                  "self_ns": 750209,
+                  "total_calls": 30
+                },
+                {
+                  "cumulative_ns": 2224665003,
+                  "file": "src/mmaudit/models/scheduler.py",
+                  "function": "attempt_is_redacted_and_exact",
+                  "line": 5111,
+                  "primitive_calls": 157,
+                  "self_ns": 4036189,
+                  "total_calls": 157
+                },
+                {
+                  "cumulative_ns": 2195813505,
+                  "file": "src/mmaudit/models/scheduler.py",
+                  "function": "require_unchanged",
+                  "line": 8032,
+                  "primitive_calls": 150,
+                  "self_ns": 3929240,
+                  "total_calls": 150
+                },
+                {
+                  "cumulative_ns": 25594238393,
+                  "file": "src/mmaudit/models/schemas.py",
+                  "function": "exact_surface_set_role_and_hashes_are_consistent",
+                  "line": 3708,
+                  "primitive_calls": 1767,
+                  "self_ns": 44728259,
+                  "total_calls": 1767
+                },
+                {
+                  "cumulative_ns": 45107753288,
+                  "file": "src/mmaudit/models/truncation.py",
+                  "function": "evidence_is_coherent_and_self_hashed",
+                  "line": 429,
+                  "primitive_calls": 3139,
+                  "self_ns": 80485788,
+                  "total_calls": 3139
+                },
+                {
+                  "cumulative_ns": 51353789571,
+                  "file": "src/mmaudit/models/truncation.py",
+                  "function": "evidence_is_coherent_and_self_hashed",
+                  "line": 804,
+                  "primitive_calls": 3594,
+                  "self_ns": 90625523,
+                  "total_calls": 3594
+                },
+                {
+                  "cumulative_ns": 20983082926,
+                  "file": "src/mmaudit/models/truncation.py",
+                  "function": "evidence_is_coherent_and_self_hashed",
+                  "line": 894,
+                  "primitive_calls": 1466,
+                  "self_ns": 37470388,
+                  "total_calls": 1466
+                },
+                {
+                  "cumulative_ns": 39858740357,
+                  "file": "src/mmaudit/models/truncation.py",
+                  "function": "frame_candidate_review_batch",
+                  "line": 1188,
+                  "primitive_calls": 2754,
+                  "self_ns": 69729502,
+                  "total_calls": 2754
+                },
+                {
+                  "cumulative_ns": 160045541,
+                  "file": "src/mmaudit/orchestration/scheduler.py",
+                  "function": "_validate_state",
+                  "line": 9884,
+                  "primitive_calls": 11,
+                  "self_ns": 281669,
+                  "total_calls": 11
+                },
+                {
+                  "cumulative_ns": 56946584,
+                  "file": "src/mmaudit/orchestration/scheduler_runtime.py",
+                  "function": "scheduler_response_normalizer_sha256",
+                  "line": 513,
+                  "primitive_calls": 4,
+                  "self_ns": 116164,
+                  "total_calls": 4
+                },
+                {
+                  "cumulative_ns": 56584042,
+                  "file": "src/mmaudit/orchestration/scheduler_runtime.py",
+                  "function": "model_task",
+                  "line": 1291,
+                  "primitive_calls": 4,
+                  "self_ns": 116751,
+                  "total_calls": 4
+                }
+              ],
+              "file": "src/mmaudit/models/truncation.py",
+              "function": "implementation_is_pristine",
+              "line": 2827,
+              "primitive_calls": 13436,
+              "self_ns": 341488814,
+              "total_calls": 13436
+            },
+            {
+              "cumulative_ns": 50203984500,
+              "direct_callers": [
+                {
+                  "cumulative_ns": 50203984500,
+                  "file": "src/mmaudit/orchestration/pipeline.py",
+                  "function": "_run_with_provider",
+                  "line": 3966,
+                  "primitive_calls": 1,
+                  "self_ns": 1691503,
+                  "total_calls": 1
+                }
+              ],
+              "file": "src/mmaudit/orchestration/pipeline.py",
+              "function": "_write_artifacts",
+              "line": 14694,
+              "primitive_calls": 1,
+              "self_ns": 1691503,
+              "total_calls": 1
+            },
+            {
+              "cumulative_ns": 13909042,
+              "direct_callers": [
+                {
+                  "cumulative_ns": 13909042,
+                  "file": "src/mmaudit/orchestration/pipeline.py",
+                  "function": "_run_with_provider",
+                  "line": 3966,
+                  "primitive_calls": 1,
+                  "self_ns": 17876,
+                  "total_calls": 1
+                }
+              ],
+              "file": "src/mmaudit/orchestration/pipeline.py",
+              "function": "_load_exact_resume_privacy_evidence",
+              "line": 15291,
+              "primitive_calls": 1,
+              "self_ns": 17876,
+              "total_calls": 1
+            },
+            {
+              "cumulative_ns": 1784750,
+              "direct_callers": [
+                {
+                  "cumulative_ns": 1784750,
+                  "file": "src/mmaudit/orchestration/scheduler.py",
+                  "function": "_refresh_journal_head_checkpoint",
+                  "line": 7525,
+                  "primitive_calls": 1,
+                  "self_ns": 60404,
+                  "total_calls": 1
+                }
+              ],
+              "file": "src/mmaudit/orchestration/scheduler.py",
+              "function": "_require_incremental_durable_snapshot",
+              "line": 7758,
+              "primitive_calls": 1,
+              "self_ns": 60404,
+              "total_calls": 1
+            },
+            {
+              "cumulative_ns": 41948111541,
+              "direct_callers": [
+                {
+                  "cumulative_ns": 6990624834,
+                  "file": "src/mmaudit/orchestration/scheduler.py",
+                  "function": "journal_evidence",
+                  "line": 6445,
+                  "primitive_calls": 3,
+                  "self_ns": 1411253,
+                  "total_calls": 3
+                },
+                {
+                  "cumulative_ns": 9315510000,
+                  "file": "src/mmaudit/orchestration/scheduler.py",
+                  "function": "artifact",
+                  "line": 8525,
+                  "primitive_calls": 4,
+                  "self_ns": 1896873,
+                  "total_calls": 4
+                },
+                {
+                  "cumulative_ns": 25641976707,
+                  "file": "src/mmaudit/orchestration/scheduler.py",
+                  "function": "_validate_state",
+                  "line": 9884,
+                  "primitive_calls": 11,
+                  "self_ns": 4996414,
+                  "total_calls": 11
+                }
+              ],
+              "file": "src/mmaudit/orchestration/scheduler.py",
+              "function": "_build_journal_evidence",
+              "line": 7793,
+              "primitive_calls": 18,
+              "self_ns": 8304540,
+              "total_calls": 18
+            },
+            {
+              "cumulative_ns": 140878667,
+              "direct_callers": [
+                {
+                  "cumulative_ns": 59396084,
+                  "file": "src/mmaudit/orchestration/scheduler.py",
+                  "function": "journal_evidence",
+                  "line": 6445,
+                  "primitive_calls": 3,
+                  "self_ns": 79251,
+                  "total_calls": 3
+                },
+                {
+                  "cumulative_ns": 81482583,
+                  "file": "src/mmaudit/orchestration/scheduler.py",
+                  "function": "artifact",
+                  "line": 8525,
+                  "primitive_calls": 4,
+                  "self_ns": 109251,
+                  "total_calls": 4
+                }
+              ],
+              "file": "src/mmaudit/orchestration/scheduler.py",
+              "function": "_require_durable_snapshot",
+              "line": 9876,
+              "primitive_calls": 7,
+              "self_ns": 188502,
+              "total_calls": 7
+            },
+            {
+              "cumulative_ns": 57152666000,
+              "direct_callers": [
+                {
+                  "cumulative_ns": 57152666000,
+                  "file": "src/mmaudit/orchestration/scheduler.py",
+                  "function": "invoke",
+                  "line": 11143,
+                  "primitive_calls": 1,
+                  "self_ns": 3229085,
+                  "total_calls": 1
+                }
+              ],
+              "file": "src/mmaudit/orchestration/scheduler.py",
+              "function": "_resume_scheduler_journal_impl",
+              "line": 10439,
+              "primitive_calls": 1,
+              "self_ns": 3229085,
+              "total_calls": 1
+            }
+          ],
+          "wall_ns": 212080407625
+        },
+        "wall_ns": {
+          "maximum": 66391626084,
+          "median": 65746968542,
+          "minimum": 65704229417
+        }
+      },
+      "new_resume_dispatches": 0,
+      "original_entry_values_sha256": "92a4f52655eefde89880a55fc456bc1825db4bd05052f3c7650683bac320b001",
+      "original_file_bytes": 1519994,
+      "original_file_count": 103,
+      "original_files_costs_findings_roles_unchanged": true,
+      "original_regression_assertions_passed": true,
+      "promotion_or_completion_credit": false,
+      "real_provider_calls": 0,
+      "runtime_optimization_applied": false,
+      "schema_version": "1.0",
+      "scope": "SYNTHETIC_FULL_PIPELINE_ORIGINAL_REPLAY_NO_PROVIDER",
+      "synthetic_ledger_sha256": "798a81b756f8466504d436ca6801285722be97d087e9e341105e58077f403750",
+      "throughput_claim": false,
+      "verification_outside_timing": true
+    },
+    {
+      "case": {
+        "expected_children": 30,
+        "expected_depth": 4,
+        "fully_covered": true,
+        "name": "mixed-specialist",
+        "pattern": "MIXED",
+        "pipeline": true,
+        "request_limit": 31,
+        "role": "specialist:false_negative_hunter",
+        "sources": 33
+      },
+      "fresh_pipeline": {
+        "cpu_ns": {
+          "maximum": 834606978000,
+          "median": 834606978000,
+          "minimum": 834606978000
+        },
+        "samples": [
+          {
+            "cpu_ns": 834606978000,
+            "wall_ns": 841180849166
+          }
+        ],
+        "wall_ns": {
+          "maximum": 841180849166,
+          "median": 841180849166,
+          "minimum": 841180849166
+        }
+      },
+      "full_original_resume": {
+        "cpu_ns": {
+          "maximum": 137268668000,
+          "median": 135831579000,
+          "minimum": 135543575000
+        },
+        "samples": [
+          {
+            "cpu_ns": 135543575000,
+            "wall_ns": 136471651375
+          },
+          {
+            "cpu_ns": 137268668000,
+            "wall_ns": 138207916875
+          },
+          {
+            "cpu_ns": 135831579000,
+            "wall_ns": 136757529583
+          }
+        ],
+        "separate_profile": {
+          "cpu_ns": 435458549000,
+          "included_in_unprofiled_samples": false,
+          "inclusive_times_overlap": true,
+          "main_thread_only": true,
+          "rows": [
+            {
+              "cumulative_ns": 436630346250,
+              "file": "tests/integration/test_pipeline.py",
+              "function": "_run",
+              "line": 1406,
+              "primitive_calls": 2,
+              "self_ns": 118875,
+              "total_calls": 2
+            },
+            {
+              "cumulative_ns": 436366334083,
+              "file": "src/mmaudit/orchestration/pipeline.py",
+              "function": "run",
+              "line": 3900,
+              "primitive_calls": 2,
+              "self_ns": 2110502,
+              "total_calls": 2
+            },
+            {
+              "cumulative_ns": 436364068333,
+              "file": "src/mmaudit/orchestration/pipeline.py",
+              "function": "_run_with_provider",
+              "line": 3966,
+              "primitive_calls": 2,
+              "self_ns": 9361600,
+              "total_calls": 2
+            },
+            {
+              "cumulative_ns": 383391154759,
+              "file": "src/mmaudit/models/truncation.py",
+              "function": "implementation_is_pristine",
+              "line": 2827,
+              "primitive_calls": 26507,
+              "self_ns": 676140817,
+              "total_calls": 26507
+            },
+            {
+              "cumulative_ns": 331922463312,
+              "file": ".venv/lib/python3.13/site-packages/pydantic/main.py",
+              "function": "model_validate_json",
+              "line": 742,
+              "primitive_calls": 35736,
+              "self_ns": 25922311,
+              "total_calls": 78493
+            },
+            {
+              "cumulative_ns": 331910726449,
+              "file": "~",
+              "function": "<method 'validate_json' of 'pydantic_core._pydantic_core.SchemaValidator' objects>",
+              "line": 0,
+              "primitive_calls": 35736,
+              "self_ns": 2396102183,
+              "total_calls": 85513
+            },
+            {
+              "cumulative_ns": 296846484500,
+              "file": "<external>/base_events.py",
+              "function": "_run_once",
+              "line": 1981,
+              "primitive_calls": 2,
+              "self_ns": 11871,
+              "total_calls": 2
+            },
+            {
+              "cumulative_ns": 296846433959,
+              "file": "<external>/events.py",
+              "function": "_run",
+              "line": 87,
+              "primitive_calls": 6,
+              "self_ns": 3042,
+              "total_calls": 6
+            },
+            {
+              "cumulative_ns": 296846430917,
+              "file": "~",
+              "function": "<method 'run' of '_contextvars.Context' objects>",
+              "line": 0,
+              "primitive_calls": 6,
+              "self_ns": 6416,
+              "total_calls": 6
+            },
+            {
+              "cumulative_ns": 296846422333,
+              "file": "scripts/measure_pipeline_replay_scaling.py",
+              "function": "_main",
+              "line": 20,
+              "primitive_calls": 1,
+              "self_ns": 708,
+              "total_calls": 1
+            },
+            {
+              "cumulative_ns": 296846421625,
+              "file": "tests/pipeline_replay_scaling_support.py",
+              "function": "measure_original_pipeline_replay",
+              "line": 206,
+              "primitive_calls": 1,
+              "self_ns": 3792,
+              "total_calls": 1
+            },
+            {
+              "cumulative_ns": 296846417833,
+              "file": "tests/integration/test_unresolved_recovery_tree_pipeline.py",
+              "function": "test_automatic_unresolved_tree_preserves_original_scope_costs_roles_and_resume",
+              "line": 165,
+              "primitive_calls": 1,
+              "self_ns": 333,
+              "total_calls": 1
+            },
+            {
+              "cumulative_ns": 167421826552,
+              "file": ".venv/lib/python3.13/site-packages/pydantic/json_schema.py",
+              "function": "generate_inner",
+              "line": 450,
+              "primitive_calls": 795220,
+              "self_ns": 20253597388,
+              "total_calls": 18426505
+            },
+            {
+              "cumulative_ns": 90220762459,
+              "file": "src/mmaudit/models/truncation.py",
+              "function": "_candidate_review_schema_input_guard",
+              "line": 1719,
+              "primitive_calls": 26507,
+              "self_ns": 45091664765,
+              "total_calls": 26507
+            },
+            {
+              "cumulative_ns": 35154669936,
+              "file": "~",
+              "function": "<built-in method builtins.any>",
+              "line": 0,
+              "primitive_calls": 45335011,
+              "self_ns": 13388385382,
+              "total_calls": 45392372
+            },
+            {
+              "cumulative_ns": 27928012395,
+              "file": ".venv/lib/python3.13/site-packages/pydantic/json_schema.py",
+              "function": "mode",
+              "line": 319,
+              "primitive_calls": 65487790,
+              "self_ns": 11500611682,
+              "total_calls": 65487790
+            },
+            {
+              "cumulative_ns": 27734869333,
+              "file": "src/mmaudit/models/truncation.py",
+              "function": "inputs_are_current",
+              "line": 1771,
+              "primitive_calls": 26507,
+              "self_ns": 12157546328,
+              "total_calls": 26507
+            },
+            {
+              "cumulative_ns": 25453992731,
+              "file": "src/mmaudit/models/truncation.py",
+              "function": "_plain_schema_definitions",
+              "line": 1594,
+              "primitive_calls": 26507,
+              "self_ns": 11062734885,
+              "total_calls": 26507
+            },
+            {
+              "cumulative_ns": 22695089657,
+              "file": "~",
+              "function": "<built-in method builtins.isinstance>",
+              "line": 0,
+              "primitive_calls": 358768881,
+              "self_ns": 17096213209,
+              "total_calls": 358768909
+            },
+            {
+              "cumulative_ns": 22326066261,
+              "file": "~",
+              "function": "<method 'extend' of 'list' objects>",
+              "line": 0,
+              "primitive_calls": 44178330,
+              "self_ns": 16243099245,
+              "total_calls": 44178330
+            },
+            {
+              "cumulative_ns": 20804334243,
+              "file": ".venv/lib/python3.13/site-packages/pydantic/json_schema.py",
+              "function": "remap_json_schema",
+              "line": 202,
+              "primitive_calls": 424142,
+              "self_ns": 13767170071,
+              "total_calls": 41883093
+            },
+            {
+              "cumulative_ns": 16501028959,
+              "file": "src/mmaudit/models/truncation.py",
+              "function": "normalize",
+              "line": 1702,
+              "primitive_calls": 26507,
+              "self_ns": 11436208501,
+              "total_calls": 43551001
+            },
+            {
+              "cumulative_ns": 14765847187,
+              "file": ".venv/lib/python3.13/site-packages/pydantic/json_schema.py",
+              "function": "_sort_recursive",
+              "line": 604,
+              "primitive_calls": 901308,
+              "self_ns": 10697177132,
+              "total_calls": 42527258
+            },
+            {
+              "cumulative_ns": 11905413684,
+              "file": "~",
+              "function": "<method 'get' of 'dict' objects>",
+              "line": 0,
+              "primitive_calls": 205768543,
+              "self_ns": 11905413684,
+              "total_calls": 205768543
+            }
+          ],
+          "selected_functions": [
+            {
+              "cumulative_ns": 254885947068,
+              "direct_callers": [
+                {
+                  "cumulative_ns": 254885947068,
+                  "file": "src/mmaudit/models/truncation.py",
+                  "function": "implementation_is_pristine",
+                  "line": 2827,
+                  "primitive_calls": 26507,
+                  "self_ns": 74732773,
+                  "total_calls": 26507
+                }
+              ],
+              "file": "src/mmaudit/models/truncation.py",
+              "function": "_candidate_review_schema_inventory_sha256",
+              "line": 1690,
+              "primitive_calls": 26507,
+              "self_ns": 74732773,
+              "total_calls": 26507
+            },
+            {
+              "cumulative_ns": 90220762459,
+              "direct_callers": [
+                {
+                  "cumulative_ns": 90220762459,
+                  "file": "src/mmaudit/models/truncation.py",
+                  "function": "implementation_is_pristine",
+                  "line": 2827,
+                  "primitive_calls": 26507,
+                  "self_ns": 45091664765,
+                  "total_calls": 26507
+                }
+              ],
+              "file": "src/mmaudit/models/truncation.py",
+              "function": "_candidate_review_schema_input_guard",
+              "line": 1719,
+              "primitive_calls": 26507,
+              "self_ns": 45091664765,
+              "total_calls": 26507
+            },
+            {
+              "cumulative_ns": 383391154759,
+              "direct_callers": [
+                {
+                  "cumulative_ns": 1704626080,
+                  "file": "src/mmaudit/models/scheduler.py",
+                  "function": "build",
+                  "line": 4179,
+                  "primitive_calls": 120,
+                  "self_ns": 3096968,
+                  "total_calls": 120
+                },
+                {
+                  "cumulative_ns": 5536027045,
+                  "file": "src/mmaudit/models/scheduler.py",
+                  "function": "completion_evidence_is_redacted_and_exact",
+                  "line": 4440,
+                  "primitive_calls": 376,
+                  "self_ns": 9640550,
+                  "total_calls": 376
+                },
+                {
+                  "cumulative_ns": 425556916,
+                  "file": "src/mmaudit/models/scheduler.py",
+                  "function": "build",
+                  "line": 4866,
+                  "primitive_calls": 30,
+                  "self_ns": 773590,
+                  "total_calls": 30
+                },
+                {
+                  "cumulative_ns": 3583343999,
+                  "file": "src/mmaudit/models/scheduler.py",
+                  "function": "attempt_is_redacted_and_exact",
+                  "line": 5111,
+                  "primitive_calls": 237,
+                  "self_ns": 6271432,
+                  "total_calls": 237
+                },
+                {
+                  "cumulative_ns": 4538563750,
+                  "file": "src/mmaudit/models/scheduler.py",
+                  "function": "require_unchanged",
+                  "line": 8032,
+                  "primitive_calls": 310,
+                  "self_ns": 8359233,
+                  "total_calls": 310
+                },
+                {
+                  "cumulative_ns": 48964259587,
+                  "file": "src/mmaudit/models/schemas.py",
+                  "function": "exact_surface_set_role_and_hashes_are_consistent",
+                  "line": 3708,
+                  "primitive_calls": 3396,
+                  "self_ns": 85788612,
+                  "total_calls": 3396
+                },
+                {
+                  "cumulative_ns": 97288526079,
+                  "file": "src/mmaudit/models/truncation.py",
+                  "function": "evidence_is_coherent_and_self_hashed",
+                  "line": 429,
+                  "primitive_calls": 6743,
+                  "self_ns": 173549211,
+                  "total_calls": 6743
+                },
+                {
+                  "cumulative_ns": 99814706770,
+                  "file": "src/mmaudit/models/truncation.py",
+                  "function": "evidence_is_coherent_and_self_hashed",
+                  "line": 804,
+                  "primitive_calls": 6872,
+                  "self_ns": 174378585,
+                  "total_calls": 6872
+                },
+                {
+                  "cumulative_ns": 45472271679,
+                  "file": "src/mmaudit/models/truncation.py",
+                  "function": "evidence_is_coherent_and_self_hashed",
+                  "line": 894,
+                  "primitive_calls": 3162,
+                  "self_ns": 81341352,
+                  "total_calls": 3162
+                },
+                {
+                  "cumulative_ns": 75759023813,
+                  "file": "src/mmaudit/models/truncation.py",
+                  "function": "frame_candidate_review_batch",
+                  "line": 1188,
+                  "primitive_calls": 5240,
+                  "self_ns": 132376661,
+                  "total_calls": 5240
+                },
+                {
+                  "cumulative_ns": 161824459,
+                  "file": "src/mmaudit/orchestration/scheduler.py",
+                  "function": "_validate_state",
+                  "line": 9884,
+                  "primitive_calls": 11,
+                  "self_ns": 313587,
+                  "total_calls": 11
+                },
+                {
+                  "cumulative_ns": 71513374,
+                  "file": "src/mmaudit/orchestration/scheduler_runtime.py",
+                  "function": "scheduler_response_normalizer_sha256",
+                  "line": 513,
+                  "primitive_calls": 5,
+                  "self_ns": 126831,
+                  "total_calls": 5
+                },
+                {
+                  "cumulative_ns": 70911208,
+                  "file": "src/mmaudit/orchestration/scheduler_runtime.py",
+                  "function": "model_task",
+                  "line": 1291,
+                  "primitive_calls": 5,
+                  "self_ns": 124205,
+                  "total_calls": 5
+                }
+              ],
+              "file": "src/mmaudit/models/truncation.py",
+              "function": "implementation_is_pristine",
+              "line": 2827,
+              "primitive_calls": 26507,
+              "self_ns": 676140817,
+              "total_calls": 26507
+            },
+            {
+              "cumulative_ns": 103428869916,
+              "direct_callers": [
+                {
+                  "cumulative_ns": 103428869916,
+                  "file": "src/mmaudit/orchestration/pipeline.py",
+                  "function": "_run_with_provider",
+                  "line": 3966,
+                  "primitive_calls": 1,
+                  "self_ns": 2556278,
+                  "total_calls": 1
+                }
+              ],
+              "file": "src/mmaudit/orchestration/pipeline.py",
+              "function": "_write_artifacts",
+              "line": 14694,
+              "primitive_calls": 1,
+              "self_ns": 2556278,
+              "total_calls": 1
+            },
+            {
+              "cumulative_ns": 20718750,
+              "direct_callers": [
+                {
+                  "cumulative_ns": 20718750,
+                  "file": "src/mmaudit/orchestration/pipeline.py",
+                  "function": "_run_with_provider",
+                  "line": 3966,
+                  "primitive_calls": 1,
+                  "self_ns": 17003,
+                  "total_calls": 1
+                }
+              ],
+              "file": "src/mmaudit/orchestration/pipeline.py",
+              "function": "_load_exact_resume_privacy_evidence",
+              "line": 15291,
+              "primitive_calls": 1,
+              "self_ns": 17003,
+              "total_calls": 1
+            },
+            {
+              "cumulative_ns": 3008709,
+              "direct_callers": [
+                {
+                  "cumulative_ns": 3008709,
+                  "file": "src/mmaudit/orchestration/scheduler.py",
+                  "function": "_refresh_journal_head_checkpoint",
+                  "line": 7525,
+                  "primitive_calls": 1,
+                  "self_ns": 97490,
+                  "total_calls": 1
+                }
+              ],
+              "file": "src/mmaudit/orchestration/scheduler.py",
+              "function": "_require_incremental_durable_snapshot",
+              "line": 7758,
+              "primitive_calls": 1,
+              "self_ns": 97490,
+              "total_calls": 1
+            },
+            {
+              "cumulative_ns": 81393397165,
+              "direct_callers": [
+                {
+                  "cumulative_ns": 13485682125,
+                  "file": "src/mmaudit/orchestration/scheduler.py",
+                  "function": "journal_evidence",
+                  "line": 6445,
+                  "primitive_calls": 3,
+                  "self_ns": 3975124,
+                  "total_calls": 3
+                },
+                {
+                  "cumulative_ns": 18104317291,
+                  "file": "src/mmaudit/orchestration/scheduler.py",
+                  "function": "artifact",
+                  "line": 8525,
+                  "primitive_calls": 4,
+                  "self_ns": 5441957,
+                  "total_calls": 4
+                },
+                {
+                  "cumulative_ns": 49803397749,
+                  "file": "src/mmaudit/orchestration/scheduler.py",
+                  "function": "_validate_state",
+                  "line": 9884,
+                  "primitive_calls": 11,
+                  "self_ns": 14280457,
+                  "total_calls": 11
+                }
+              ],
+              "file": "src/mmaudit/orchestration/scheduler.py",
+              "function": "_build_journal_evidence",
+              "line": 7793,
+              "primitive_calls": 18,
+              "self_ns": 23697538,
+              "total_calls": 18
+            },
+            {
+              "cumulative_ns": 238358459,
+              "direct_callers": [
+                {
+                  "cumulative_ns": 102693417,
+                  "file": "src/mmaudit/orchestration/scheduler.py",
+                  "function": "journal_evidence",
+                  "line": 6445,
+                  "primitive_calls": 3,
+                  "self_ns": 142667,
+                  "total_calls": 3
+                },
+                {
+                  "cumulative_ns": 135665042,
+                  "file": "src/mmaudit/orchestration/scheduler.py",
+                  "function": "artifact",
+                  "line": 8525,
+                  "primitive_calls": 4,
+                  "self_ns": 183583,
+                  "total_calls": 4
+                }
+              ],
+              "file": "src/mmaudit/orchestration/scheduler.py",
+              "function": "_require_durable_snapshot",
+              "line": 9876,
+              "primitive_calls": 7,
+              "self_ns": 326250,
+              "total_calls": 7
+            },
+            {
+              "cumulative_ns": 116076194500,
+              "direct_callers": [
+                {
+                  "cumulative_ns": 116076194500,
+                  "file": "src/mmaudit/orchestration/scheduler.py",
+                  "function": "invoke",
+                  "line": 11143,
+                  "primitive_calls": 1,
+                  "self_ns": 8143415,
+                  "total_calls": 1
+                }
+              ],
+              "file": "src/mmaudit/orchestration/scheduler.py",
+              "function": "_resume_scheduler_journal_impl",
+              "line": 10439,
+              "primitive_calls": 1,
+              "self_ns": 8143415,
+              "total_calls": 1
+            }
+          ],
+          "wall_ns": 436631478917
+        },
+        "wall_ns": {
+          "maximum": 138207916875,
+          "median": 136757529583,
+          "minimum": 136471651375
+        }
+      },
+      "new_resume_dispatches": 0,
+      "original_entry_values_sha256": "4ded7e1ef9b23e742c672f965e65d9d767157d4a7a4eb7e8bca9edab60ee0989",
+      "original_file_bytes": 4143677,
+      "original_file_count": 174,
+      "original_files_costs_findings_roles_unchanged": true,
+      "original_regression_assertions_passed": true,
+      "promotion_or_completion_credit": false,
+      "real_provider_calls": 0,
+      "runtime_optimization_applied": false,
+      "schema_version": "1.0",
+      "scope": "SYNTHETIC_FULL_PIPELINE_ORIGINAL_REPLAY_NO_PROVIDER",
+      "synthetic_ledger_sha256": "afcf3994a5acbd95f7af642c62a9ae076fc16eca815453f1c9e46f70b3772127",
+      "throughput_claim": false,
+      "verification_outside_timing": true
+    }
+  ],
+  "command": "env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin TMPDIR=/private/tmp PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src MMAUDIT_RUN_REAL_PROVIDER_TESTS=0 MMAUDIT_SECRETS_ENV_FILE= .venv/bin/python -m scripts.measure_pipeline_replay_scaling --workspace /private/tmp/mmaudit-pipeline-replay.4vl45T",
+  "cpu_heavy_validation_running_during_measurement": false,
+  "environment": {
+    "architecture": "arm64",
+    "isolated_host": false,
+    "platform": "Darwin",
+    "pydantic": "2.13.4",
+    "pydantic_core": "2.46.4",
+    "pytest": "8.4.2",
+    "python": "3.13.15",
+    "python_312_runtime_verified": false
+  },
+  "experiment": "pipeline-replay-scaling-v1",
+  "fresh_pipeline_samples_per_case": 1,
+  "limitations": [
+    "Synthetic original full AuditPipeline workloads using existing test-only model selection and MockTransport, not genuine or qualified audits.",
+    "Only one fresh construction observation per case; the two cases differ in source count, tree depth, role and response pattern and do not establish a single-variable scaling law.",
+    "One nonisolated host; wall/CPU differences do not identify a host-load cause or establish production throughput.",
+    "cProfile covers the main thread only, has material overhead, and has overlapping inclusive function/caller times. Coroutine activations are not provider-request counts.",
+    "Verification runs outside measured operations. Synthetic accounted costs are not provider bills.",
+    "No Python 3.12 dependency/runtime acceptance, qualification, lineage, seal or release result."
+  ],
+  "native_session_id": 89405,
+  "native_terminal_chunk_id": "4ef858",
+  "native_terminal_exit_code": 0,
+  "new_resume_dispatches": 0,
+  "new_tooling_tests": 21,
+  "next_bounded_action": "Optimize repeated fresh per-call schema-inventory construction against the unchanged reference, without cross-call authority caching, skipped guard calls or weakened input/custody checks; repeat the same two-case original-pipeline experiment after source acceptance.",
+  "production_source_changed": false,
+  "qualification_or_release_evidence": false,
+  "real_provider_calls": 0,
+  "record_kind": "NONQUALIFYING_LOCAL_OBSERVATION",
+  "recorded_at": "2026-09-12T14:15:26Z",
+  "runtime_optimization_applied": false,
+  "schema_version": "1.0",
+  "scope": "SYNTHETIC_FULL_PIPELINE_ORIGINAL_REPLAY_NO_PROVIDER",
+  "serial_execution": true,
+  "source_snapshot": {
+    "added_input_sha256s": {
+      "scripts/measure_pipeline_replay_scaling.py": "27e92e96fbd699707897faf6784c103cb0ff04a5b8a4610a48269c68f7246cb6",
+      "tests/fixtures/pipeline_replay_scaling/cases.json": "2a04278786b632f0950740ce06ce8b14e7faf874f456d17617e1cced903110db",
+      "tests/integration/test_pipeline_replay_scaling_files.py": "4a4fec03d82f19b953b50b59f237a8cad88edfd8a8c57e93a18df40ff00e9154",
+      "tests/pipeline_replay_scaling_support.py": "b8af7893d9c3414472091d1b45f9b6a58692fd7b8e10195697f03af72ffe6a6b",
+      "tests/unit/test_pipeline_replay_scaling.py": "e485d29fbe4805d26f5103c477ec24a1b223c89ee368179ad3b8e5d5fdc0d9d0"
+    },
+    "changed_input_sha256s": {},
+    "input_count": 1223,
+    "input_map_sha256": "8637cbcefda6418ab2cbbaac08a25f5b6b27185b3cf37ee8bbadf3645f215f47",
+    "kind": "full-original-pipeline-replay-measurement",
+    "manifest_path": "/private/tmp/mmaudit-pipeline-replay.4vl45T/pipeline-replay-inputs.json",
+    "manifest_sha256": "56678d02b4021566c347e5744fa0c473206cb2b0eb6d023db1c8a92c3cfcb272",
+    "previous_freeze_path": "/private/tmp/mmaudit-unresolved-tree.bzYhOv/unresolved-tree-inputs-v2.json",
+    "previous_freeze_sha256": "c1ef6c9d44e6d9686a4841a1641b8f39c3c2c0ad92f4877d955ac6979d76187d",
+    "production_inputs_unchanged": true,
+    "python_file_count": 1020,
+    "schema_version": "1.0",
+    "unchanged_autonomy_inventory_sha256": "a2f919844563091d652a4bb9ff88a568820cfe407d2489f9ee4e44962b0f8195",
+    "unchanged_logical_gate_count": 35,
+    "unchanged_previous_input_count": 1218,
+    "unchanged_schema_count": 172
+  },
+  "test_only_model_plan_override": true,
+  "throughput_claim": false,
+  "tooling_test_receipts": {
+    "files-final.xml": {
+      "count": 1,
+      "sha256": "bb8e73a809191cb4321e6206f9263423298fd6664b4de1b44bcd9174d6da6259"
+    },
+    "unit-final.xml": {
+      "count": 52,
+      "sha256": "e7f8b63349e284f42d9d60ee322b8e3f2f270541f8361f4a8f4c70e55f71f84f"
+    }
+  },
+  "tooling_tests_passed": 53,
+  "unprofiled_resume_samples_per_case": 3
+}

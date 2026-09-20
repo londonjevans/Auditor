@@ -135,10 +135,11 @@ def synthetic_refresh_runtime(
     qualified_pricing: dict[str, Any] | None = None,
     previous_pricing: dict[str, Any] | None = None,
     current_pricing: dict[str, Any] | None = None,
+    native_high_reasoning: bool = False,
 ) -> SyntheticRefreshRuntime:
     """Issue coherent refresh and bounded-pricing authorities without provider I/O."""
 
-    config, model_ids, roots = _runtime_config()
+    config, model_ids, roots = _runtime_config(native_high_reasoning=native_high_reasoning)
     qualified_price_map = dict(_PRICING if qualified_pricing is None else qualified_pricing)
     registry = _candidate_registry(
         config=config,
@@ -146,6 +147,7 @@ def synthetic_refresh_runtime(
         roots=roots,
         created_at=BASE_TIME - timedelta(hours=2),
         pricing=qualified_price_map,
+        native_high_reasoning=native_high_reasoning,
     )
     technical = synthetic_production_qualification(
         config,
@@ -225,6 +227,7 @@ def synthetic_refresh_runtime_for_authorities(
     audit_selection: VerifiedAuditModelSelection,
     verified_at: datetime,
     current_pricing: dict[str, Any] | None = None,
+    token_capacity: tuple[int, int, int] | None = None,
 ) -> SyntheticRefreshRuntime:
     """Issue exact CURRENT refresh custody for already-resolved synthetic authorities."""
 
@@ -233,6 +236,7 @@ def synthetic_refresh_runtime_for_authorities(
         technical=technical_qualification,
         current_at=verified_at,
         current_pricing=current_pricing,
+        token_capacity=token_capacity,
     )
     evidence, guard = resolve_verified_audit_model_refresh_guard(
         history=history,
@@ -319,6 +323,8 @@ def bind_usage_to_refresh_runtime(
 def bind_usage_to_refresh_pricing_runtime(
     record: UsageRecord,
     runtime: SyntheticRefreshRuntime,
+    *,
+    planned_maximum_units: dict[str, int] | None = None,
 ) -> UsageRecord:
     """Attach exact non-authorizing refreshed prices and per-attempt cost bounds."""
 
@@ -351,7 +357,13 @@ def bind_usage_to_refresh_pricing_runtime(
                 cost_bound_pricing[field] = _canonical_decimal(current)
             else:
                 cost_bound_pricing[field] = _canonical_decimal(current)
-    maximum_units = {field: 1_000_000_000 for field in cost_bound_pricing}
+    maximum_units = (
+        {field: 1_000_000_000 for field in cost_bound_pricing}
+        if planned_maximum_units is None
+        else dict(planned_maximum_units)
+    )
+    if set(maximum_units) != set(cost_bound_pricing):
+        raise ValueError("synthetic cost plan must bound every priced component")
     provisional_bound = EndpointRequestCostBound.from_endpoint_pricing(
         exact_model_id=record.requested_model,
         provider_endpoint=route.approved_provider_endpoint,
@@ -496,8 +508,14 @@ def _registry_with_extra_unselected_candidate(registry: CandidateRegistry) -> Ca
     )
 
 
-def _runtime_config() -> tuple[AuditConfig, tuple[str, ...], tuple[str, ...]]:
+def _runtime_config(
+    *,
+    native_high_reasoning: bool = False,
+) -> tuple[AuditConfig, tuple[str, ...], tuple[str, ...]]:
     data = base_config_data()
+    if native_high_reasoning:
+        data["execution"]["max_output_tokens_per_request"] = 4096
+        data["models"]["reasoning"] = {"effort": "high", "reserved_tokens": 4096}
     base_ids = tuple(MODEL_IDS.values())
     extra_ids = (
         "golf/glacier-secure",
@@ -531,7 +549,10 @@ def _candidate_registry(
     provider_endpoint: str | None = None,
     provider_name: str = "Synthetic Provider",
     pricing: dict[str, Any] | None = None,
+    native_high_reasoning: bool = False,
+    token_capacity: tuple[int, int, int] | None = None,
 ) -> CandidateRegistry:
+    context_tokens, prompt_tokens, completion_tokens = token_capacity or (100_000, 91_808, 8_192)
     roles = (*ALL_MODEL_ROLES, *tuple(sorted(config.models.specialists)))
     approved_roles = tuple(sorted({*roles, "falsifier", "whole_protocol_review"}))
     configured_roots = {
@@ -582,13 +603,17 @@ def _candidate_registry(
                 output_capability_sha256=_sha(["output", model_id]),
                 model_metadata_snapshot_sha256=_sha(["metadata", model_id]),
                 pricing_snapshot_sha256=pricing_sha256,
-                context_size=100_000,
-                max_prompt_tokens=91_808,
+                context_size=context_tokens,
+                max_prompt_tokens=prompt_tokens,
                 max_prompt_tokens_source="metadata",
-                output_limit=8_192,
+                output_limit=completion_tokens,
                 output_limit_source="metadata",
                 structured_output_supported=True,
-                structured_output_mode=StructuredOutputMode.JSON_OBJECT,
+                structured_output_mode=(
+                    StructuredOutputMode.NATIVE_JSON_SCHEMA
+                    if native_high_reasoning
+                    else StructuredOutputMode.JSON_OBJECT
+                ),
                 reasoning_supported=True,
                 zdr_eligible=True,
                 data_collection_deny_eligible=True,
@@ -614,17 +639,20 @@ def _history(
     current_at: datetime,
     previous_pricing: dict[str, Any] | None = None,
     current_pricing: dict[str, Any] | None = None,
+    token_capacity: tuple[int, int, int] | None = None,
 ) -> ValidatedModelRefreshHistory:
     previous_at = current_at - timedelta(hours=1)
     previous_source, previous_snapshot = _source_snapshot(
         registry,
         previous_at,
         pricing=previous_pricing,
+        token_capacity=token_capacity,
     )
     current_source, current_snapshot = _source_snapshot(
         registry,
         current_at,
         pricing=current_pricing,
+        token_capacity=token_capacity,
     )
     selected_routes = tuple(
         SelectedModelRoute(
@@ -697,13 +725,23 @@ def _source_snapshot(
     retrieved_at: datetime,
     *,
     pricing: dict[str, Any] | None = None,
+    token_capacity: tuple[int, int, int] | None = None,
 ) -> tuple[ModelRefreshSourceEvidence, ModelRefreshSnapshot]:
-    catalog = [_catalog_model(candidate.exact_model_id) for candidate in registry.candidates]
+    catalog = [
+        _catalog_model(
+            candidate.exact_model_id,
+            output_mode=candidate.structured_output_mode,
+            token_capacity=token_capacity,
+        )
+        for candidate in registry.candidates
+    ]
     endpoints = [
         _endpoint(
             candidate.exact_model_id,
             candidate.approved_provider_endpoint,
             pricing=pricing,
+            output_mode=candidate.structured_output_mode,
+            token_capacity=token_capacity,
         )
         for candidate in registry.candidates
     ]
@@ -714,6 +752,8 @@ def _source_snapshot(
                 candidate.exact_model_id,
                 candidate.approved_provider_endpoint,
                 pricing=pricing,
+                output_mode=candidate.structured_output_mode,
+                token_capacity=token_capacity,
             ),
         )
         for candidate in registry.candidates
@@ -732,16 +772,22 @@ def _source_snapshot(
     )
 
 
-def _catalog_model(model_id: str) -> dict[str, Any]:
+def _catalog_model(
+    model_id: str,
+    *,
+    output_mode: StructuredOutputMode = StructuredOutputMode.JSON_OBJECT,
+    token_capacity: tuple[int, int, int] | None = None,
+) -> dict[str, Any]:
+    context_tokens, _, completion_tokens = token_capacity or (100_000, 91_808, 8_192)
     return {
         "id": model_id,
         "canonical_slug": model_id,
-        "context_length": 100_000,
+        "context_length": context_tokens,
         "top_provider": {
-            "context_length": 100_000,
-            "max_completion_tokens": 8_192,
+            "context_length": context_tokens,
+            "max_completion_tokens": completion_tokens,
         },
-        "supported_parameters": list(_PARAMETERS),
+        **_output_metadata(output_mode),
     }
 
 
@@ -750,18 +796,30 @@ def _endpoint(
     endpoint: str,
     *,
     pricing: dict[str, Any] | None = None,
+    output_mode: StructuredOutputMode = StructuredOutputMode.JSON_OBJECT,
+    token_capacity: tuple[int, int, int] | None = None,
 ) -> dict[str, Any]:
+    context_tokens, prompt_tokens, completion_tokens = token_capacity or (100_000, 91_808, 8_192)
     return {
         "model_id": model_id,
         "slug": endpoint,
         "provider_name": "Synthetic Provider",
         "status": 0,
-        "context_length": 100_000,
-        "max_prompt_tokens": 91_808,
-        "max_completion_tokens": 8_192,
-        "supported_parameters": list(_PARAMETERS),
+        "context_length": context_tokens,
+        "max_prompt_tokens": prompt_tokens,
+        "max_completion_tokens": completion_tokens,
+        **_output_metadata(output_mode),
         "pricing": dict(_PRICING if pricing is None else pricing),
     }
+
+
+def _output_metadata(output_mode: StructuredOutputMode) -> dict[str, Any]:
+    if output_mode is StructuredOutputMode.NATIVE_JSON_SCHEMA:
+        return {
+            "supported_parameters": sorted([*_PARAMETERS, "structured_outputs"]),
+            "reasoning": {"supported_efforts": ["high"]},
+        }
+    return {"supported_parameters": list(_PARAMETERS)}
 
 
 def _endpoint_envelope(model_id: str, endpoint: dict[str, Any]) -> dict[str, Any]:

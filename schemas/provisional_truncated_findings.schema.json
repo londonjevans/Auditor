@@ -1,0 +1,1071 @@
+{
+  "$defs": {
+    "ActorEconomicExposureKind": {
+      "enum": [
+        "fee_revenue",
+        "protocol_failure_loss"
+      ],
+      "title": "ActorEconomicExposureKind",
+      "type": "string"
+    },
+    "ActorHarmedPartyDisposition": {
+      "enum": [
+        "identified",
+        "not_applicable",
+        "unresolved"
+      ],
+      "title": "ActorHarmedPartyDisposition",
+      "type": "string"
+    },
+    "ActorModelApplicability": {
+      "description": "Whether a finding's mechanism depends on privileged actor conduct.",
+      "enum": [
+        "privileged_actor_required",
+        "no_privileged_actor_required",
+        "unstated"
+      ],
+      "title": "ActorModelApplicability",
+      "type": "string"
+    },
+    "CandidateActorContext": {
+      "additionalProperties": false,
+      "description": "One finding's explicit actor assumptions; never an assertion of role ownership.",
+      "properties": {
+        "action_against_stated_interest": {
+          "title": "Action Against Stated Interest",
+          "type": "boolean"
+        },
+        "harmed_party_disposition": {
+          "$ref": "#/$defs/ActorHarmedPartyDisposition"
+        },
+        "harmed_party_id": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z][a-z0-9._:-]{0,159}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Harmed Party Id"
+        },
+        "misconduct_required": {
+          "title": "Misconduct Required",
+          "type": "boolean"
+        },
+        "ordinary_legitimate_behavior": {
+          "title": "Ordinary Legitimate Behavior",
+          "type": "boolean"
+        },
+        "permission": {
+          "anyOf": [
+            {
+              "maxLength": 2000,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Permission"
+        },
+        "plausibility_evidence_reference_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Plausibility Evidence Reference Ids",
+          "type": "array"
+        },
+        "plausibility_rationale": {
+          "anyOf": [
+            {
+              "maxLength": 2000,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Plausibility Rationale"
+        },
+        "privileged_action_required": {
+          "title": "Privileged Action Required",
+          "type": "boolean"
+        },
+        "relevant_constraint_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Relevant Constraint Ids",
+          "type": "array"
+        },
+        "relevant_economic_exposures": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ActorEconomicExposureKind"
+          },
+          "maxItems": 2,
+          "title": "Relevant Economic Exposures",
+          "type": "array"
+        },
+        "required_concentrated_role_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Required Concentrated Role Ids",
+          "type": "array"
+        },
+        "role_id": {
+          "pattern": "^[a-z][a-z0-9._:-]{0,159}$",
+          "title": "Role Id",
+          "type": "string"
+        },
+        "severity_basis": {
+          "const": "code_mechanism_only",
+          "title": "Severity Basis",
+          "type": "string"
+        },
+        "stated_interest": {
+          "anyOf": [
+            {
+              "maxLength": 2000,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stated Interest"
+        }
+      },
+      "required": [
+        "role_id",
+        "severity_basis",
+        "harmed_party_disposition",
+        "privileged_action_required",
+        "misconduct_required",
+        "ordinary_legitimate_behavior",
+        "action_against_stated_interest"
+      ],
+      "title": "CandidateActorContext",
+      "type": "object"
+    },
+    "CandidateFinding": {
+      "additionalProperties": false,
+      "description": "Finding proposed by an analysis role before independent verification.",
+      "properties": {
+        "actor_context": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CandidateActorContext"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "actor_model_applicability": {
+          "$ref": "#/$defs/ActorModelApplicability",
+          "default": "unstated"
+        },
+        "attack_path": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Attack Path",
+          "type": "array"
+        },
+        "candidate_id": {
+          "minLength": 1,
+          "title": "Candidate Id",
+          "type": "string"
+        },
+        "compensating_controls": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Compensating Controls",
+          "type": "array"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "cwe": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Cwe",
+          "type": "array"
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/Evidence"
+          },
+          "minItems": 1,
+          "title": "Evidence",
+          "type": "array"
+        },
+        "execution_provenance": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InvariantExecutionCandidateProvenance"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "false_positive_conditions": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "False Positive Conditions",
+          "type": "array"
+        },
+        "impact": {
+          "minLength": 1,
+          "title": "Impact",
+          "type": "string"
+        },
+        "locations": {
+          "items": {
+            "$ref": "#/$defs/Location"
+          },
+          "minItems": 1,
+          "title": "Locations",
+          "type": "array"
+        },
+        "model_family": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Model Family"
+        },
+        "model_votes": {
+          "items": {
+            "$ref": "#/$defs/ModelVote"
+          },
+          "title": "Model Votes",
+          "type": "array"
+        },
+        "origin_kind": {
+          "$ref": "#/$defs/CandidateOriginKind",
+          "default": "model_review"
+        },
+        "owasp": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Owasp",
+          "type": "array"
+        },
+        "preconditions": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Preconditions",
+          "type": "array"
+        },
+        "recommendation": {
+          "minLength": 1,
+          "title": "Recommendation",
+          "type": "string"
+        },
+        "role": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Role"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        },
+        "sink": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceSink"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceSink"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "summary": {
+          "minLength": 1,
+          "title": "Summary",
+          "type": "string"
+        },
+        "title": {
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "verification_test": {
+          "$ref": "#/$defs/VerificationTest"
+        }
+      },
+      "required": [
+        "candidate_id",
+        "title",
+        "severity",
+        "confidence",
+        "summary",
+        "impact",
+        "preconditions",
+        "locations",
+        "attack_path",
+        "evidence",
+        "false_positive_conditions",
+        "recommendation",
+        "verification_test",
+        "role",
+        "model_family"
+      ],
+      "title": "CandidateFinding",
+      "type": "object"
+    },
+    "CandidateOriginKind": {
+      "description": "Trusted origin of a candidate before consensus and adjudication.",
+      "enum": [
+        "model_review",
+        "deterministic_execution"
+      ],
+      "title": "CandidateOriginKind",
+      "type": "string"
+    },
+    "CandidateReviewAcceptedFrame": {
+      "additionalProperties": false,
+      "description": "Hash-only custody for one exact retained frame byte range.",
+      "properties": {
+        "byte_end": {
+          "exclusiveMinimum": 0,
+          "maximum": 4000000,
+          "title": "Byte End",
+          "type": "integer"
+        },
+        "byte_start": {
+          "minimum": 11,
+          "title": "Byte Start",
+          "type": "integer"
+        },
+        "frame_bytes": {
+          "maximum": 512000,
+          "minimum": 2,
+          "title": "Frame Bytes",
+          "type": "integer"
+        },
+        "frame_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Frame Sha256",
+          "type": "string"
+        },
+        "normalized_value_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Normalized Value Sha256",
+          "type": "string"
+        },
+        "phase": {
+          "$ref": "#/$defs/CandidateReviewFramePhase"
+        },
+        "record_id": {
+          "anyOf": [
+            {
+              "maxLength": 500,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Record Id"
+        },
+        "sequence": {
+          "maximum": 11004,
+          "minimum": 0,
+          "title": "Sequence",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "sequence",
+        "phase",
+        "byte_start",
+        "byte_end",
+        "frame_bytes",
+        "frame_sha256",
+        "normalized_value_sha256"
+      ],
+      "title": "CandidateReviewAcceptedFrame",
+      "type": "object"
+    },
+    "CandidateReviewChannelState": {
+      "description": "Independent validation state for one recovery channel.",
+      "enum": [
+        "NOT_STARTED",
+        "OPEN",
+        "COMPLETE",
+        "INVALID"
+      ],
+      "title": "CandidateReviewChannelState",
+      "type": "string"
+    },
+    "CandidateReviewFramePhase": {
+      "description": "Ordered phase names in the candidate-review framed wire document.",
+      "enum": [
+        "BEGIN",
+        "FINDING",
+        "FINDINGS_END",
+        "SURFACE_REVIEW",
+        "SURFACE_REVIEWS_END",
+        "SUMMARY",
+        "END"
+      ],
+      "title": "CandidateReviewFramePhase",
+      "type": "string"
+    },
+    "Evidence": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "fingerprint": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Fingerprint"
+        },
+        "rule_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rule Id"
+        },
+        "source": {
+          "title": "Source",
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "model",
+            "scanner",
+            "execution",
+            "reproduction",
+            "formal",
+            "repository"
+          ],
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "source",
+        "description"
+      ],
+      "title": "Evidence",
+      "type": "object"
+    },
+    "InvariantExecutionCandidateProvenance": {
+      "additionalProperties": false,
+      "description": "Self-hashed origin evidence for one replayed deterministic counterexample.",
+      "properties": {
+        "attempts": {
+          "maximum": 10,
+          "minimum": 2,
+          "title": "Attempts",
+          "type": "integer"
+        },
+        "compiler_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Compiler Sha256",
+          "type": "string"
+        },
+        "compiler_version": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Compiler Version",
+          "type": "string"
+        },
+        "executable_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Executable Sha256",
+          "type": "string"
+        },
+        "execution_evidence": {
+          "const": "real",
+          "default": "real",
+          "title": "Execution Evidence",
+          "type": "string"
+        },
+        "execution_observation_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Execution Observation Sha256",
+          "type": "string"
+        },
+        "execution_result_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Execution Result Sha256",
+          "type": "string"
+        },
+        "harness_name": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Harness Name",
+          "type": "string"
+        },
+        "harness_spec_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Harness Spec Sha256",
+          "type": "string"
+        },
+        "invariant_evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Invariant Evidence Sha256",
+          "type": "string"
+        },
+        "invariant_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Invariant Id",
+          "type": "string"
+        },
+        "isolation_attestation_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Isolation Attestation Sha256",
+          "type": "string"
+        },
+        "isolation_backend": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Isolation Backend",
+          "type": "string"
+        },
+        "minimized": {
+          "title": "Minimized",
+          "type": "boolean"
+        },
+        "producer": {
+          "const": "foundry_invariant",
+          "default": "foundry_invariant",
+          "title": "Producer",
+          "type": "string"
+        },
+        "property_corpus_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Property Corpus Sha256",
+          "type": "string"
+        },
+        "property_hashes": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 10000,
+          "minItems": 1,
+          "title": "Property Hashes",
+          "type": "array"
+        },
+        "property_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 10000,
+          "minItems": 1,
+          "title": "Property Ids",
+          "type": "array"
+        },
+        "provenance_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Provenance Sha256",
+          "type": "string"
+        },
+        "replay_confirmed": {
+          "const": true,
+          "default": true,
+          "title": "Replay Confirmed",
+          "type": "boolean"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "source_locations": {
+          "items": {
+            "$ref": "#/$defs/Location"
+          },
+          "maxItems": 100,
+          "minItems": 1,
+          "title": "Source Locations",
+          "type": "array"
+        },
+        "source_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Sha256",
+          "type": "string"
+        },
+        "successful_attempts": {
+          "maximum": 10,
+          "minimum": 2,
+          "title": "Successful Attempts",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "invariant_id",
+        "invariant_evidence_sha256",
+        "harness_name",
+        "harness_spec_sha256",
+        "property_corpus_sha256",
+        "property_ids",
+        "property_hashes",
+        "execution_result_sha256",
+        "execution_observation_sha256",
+        "executable_sha256",
+        "source_sha256",
+        "compiler_version",
+        "compiler_sha256",
+        "isolation_backend",
+        "isolation_attestation_sha256",
+        "attempts",
+        "successful_attempts",
+        "minimized",
+        "source_locations",
+        "provenance_sha256"
+      ],
+      "title": "InvariantExecutionCandidateProvenance",
+      "type": "object"
+    },
+    "Location": {
+      "additionalProperties": false,
+      "properties": {
+        "content_hash": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Content Hash"
+        },
+        "end_line": {
+          "minimum": 1,
+          "title": "End Line",
+          "type": "integer"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "start_line": {
+          "minimum": 1,
+          "title": "Start Line",
+          "type": "integer"
+        },
+        "symbol": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Symbol"
+        }
+      },
+      "required": [
+        "path",
+        "start_line",
+        "end_line"
+      ],
+      "title": "Location",
+      "type": "object"
+    },
+    "ModelVote": {
+      "additionalProperties": false,
+      "properties": {
+        "family": {
+          "title": "Family",
+          "type": "string"
+        },
+        "rationale": {
+          "default": "",
+          "title": "Rationale",
+          "type": "string"
+        },
+        "requested_model": {
+          "title": "Requested Model",
+          "type": "string"
+        },
+        "returned_model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Returned Model"
+        },
+        "role": {
+          "title": "Role",
+          "type": "string"
+        },
+        "verdict": {
+          "title": "Verdict",
+          "type": "string"
+        }
+      },
+      "required": [
+        "role",
+        "requested_model",
+        "family",
+        "verdict"
+      ],
+      "title": "ModelVote",
+      "type": "object"
+    },
+    "ProvisionalFindingRecord": {
+      "additionalProperties": false,
+      "description": "One complete proposed finding and its original accepted frame coordinate.",
+      "properties": {
+        "candidate": {
+          "$ref": "#/$defs/CandidateFinding"
+        },
+        "retained_frame": {
+          "$ref": "#/$defs/CandidateReviewAcceptedFrame"
+        }
+      },
+      "required": [
+        "candidate",
+        "retained_frame"
+      ],
+      "title": "ProvisionalFindingRecord",
+      "type": "object"
+    },
+    "ProvisionalFindingSource": {
+      "additionalProperties": false,
+      "description": "A request-scoped inventory, not an accepted candidate batch or review.",
+      "properties": {
+        "algorithm_version": {
+          "enum": [
+            "mmaudit.seven-pass-scheduler.v1",
+            "mmaudit.seven-pass-scheduler.v2"
+          ],
+          "title": "Algorithm Version",
+          "type": "string"
+        },
+        "declared_finding_count": {
+          "maximum": 1000,
+          "minimum": 1,
+          "title": "Declared Finding Count",
+          "type": "integer"
+        },
+        "findings_state": {
+          "$ref": "#/$defs/CandidateReviewChannelState"
+        },
+        "original_response_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Original Response Sha256",
+          "type": "string"
+        },
+        "records": {
+          "items": {
+            "$ref": "#/$defs/ProvisionalFindingRecord"
+          },
+          "maxItems": 1000,
+          "minItems": 1,
+          "title": "Records",
+          "type": "array"
+        },
+        "request_id": {
+          "pattern": "^scheduler-(?:recovery-)?request-[0-9a-f]{64}$",
+          "title": "Request Id",
+          "type": "string"
+        },
+        "request_role": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Request Role",
+          "type": "string"
+        },
+        "source_entry_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Entry Sha256",
+          "type": "string"
+        },
+        "source_kind": {
+          "enum": [
+            "scheduler_parent",
+            "recovery_child"
+          ],
+          "title": "Source Kind",
+          "type": "string"
+        },
+        "summary_state": {
+          "$ref": "#/$defs/CandidateReviewChannelState"
+        },
+        "surface_reviews_state": {
+          "$ref": "#/$defs/CandidateReviewChannelState"
+        },
+        "task_id": {
+          "pattern": "^scheduler-(?:recovery-)?task-[0-9a-f]{64}$",
+          "title": "Task Id",
+          "type": "string"
+        },
+        "truncation_projection_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Truncation Projection Sha256",
+          "type": "string"
+        },
+        "usage_record_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Usage Record Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_kind",
+        "source_entry_sha256",
+        "task_id",
+        "request_id",
+        "request_role",
+        "usage_record_sha256",
+        "original_response_sha256",
+        "truncation_projection_sha256",
+        "algorithm_version",
+        "findings_state",
+        "surface_reviews_state",
+        "summary_state",
+        "declared_finding_count",
+        "records"
+      ],
+      "title": "ProvisionalFindingSource",
+      "type": "object"
+    },
+    "Severity": {
+      "enum": [
+        "informational",
+        "low",
+        "medium",
+        "high",
+        "critical"
+      ],
+      "title": "Severity",
+      "type": "string"
+    },
+    "SourceSink": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "line": {
+          "minimum": 1,
+          "title": "Line",
+          "type": "integer"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        }
+      },
+      "required": [
+        "description",
+        "path",
+        "line"
+      ],
+      "title": "SourceSink",
+      "type": "object"
+    },
+    "VerificationTest": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "safe": {
+          "default": true,
+          "title": "Safe",
+          "type": "boolean"
+        },
+        "type": {
+          "const": "local",
+          "default": "local",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "description"
+      ],
+      "title": "VerificationTest",
+      "type": "object"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/provisional_truncated_findings.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Lossless report inventory; serialized data never authorizes finding or audit credit.",
+  "properties": {
+    "campaign_id": {
+      "pattern": "^scheduler-campaign-[0-9a-f]{64}$",
+      "title": "Campaign Id",
+      "type": "string"
+    },
+    "completion_authorized": {
+      "const": false,
+      "title": "Completion Authorized",
+      "type": "boolean"
+    },
+    "coverage_credit_authorized": {
+      "const": false,
+      "title": "Coverage Credit Authorized",
+      "type": "boolean"
+    },
+    "evidence_authority": {
+      "const": "comparison_required",
+      "default": "comparison_required",
+      "title": "Evidence Authority",
+      "type": "string"
+    },
+    "inventory_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Inventory Sha256",
+      "type": "string"
+    },
+    "journal_evidence_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Journal Evidence Sha256",
+      "type": "string"
+    },
+    "manifest_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Manifest Sha256",
+      "type": "string"
+    },
+    "retained_finding_count": {
+      "maximum": 100000,
+      "minimum": 1,
+      "title": "Retained Finding Count",
+      "type": "integer"
+    },
+    "review_credit_authorized": {
+      "const": false,
+      "title": "Review Credit Authorized",
+      "type": "boolean"
+    },
+    "scheduler_artifact_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Scheduler Artifact Sha256",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "sources": {
+      "items": {
+        "$ref": "#/$defs/ProvisionalFindingSource"
+      },
+      "maxItems": 100000,
+      "minItems": 1,
+      "title": "Sources",
+      "type": "array"
+    },
+    "validated_finding_authorized": {
+      "const": false,
+      "title": "Validated Finding Authorized",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "campaign_id",
+    "manifest_sha256",
+    "journal_evidence_sha256",
+    "scheduler_artifact_sha256",
+    "sources",
+    "retained_finding_count",
+    "review_credit_authorized",
+    "coverage_credit_authorized",
+    "validated_finding_authorized",
+    "completion_authorized",
+    "inventory_sha256"
+  ],
+  "title": "ProvisionalFindingInventory",
+  "type": "object"
+}

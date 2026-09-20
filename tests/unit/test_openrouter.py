@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import gzip
 import hashlib
+import inspect
 import json
 import ssl
 import sys
@@ -797,6 +798,7 @@ async def _dispatch_mock_smoke_request(
     certification: bool = False,
     persistent_cost_ledger: AtomicCostLedger | None = None,
     reasoning: OpenRouterReasoning | None = None,
+    reasoning_policy: ReasoningPolicyArtifact | None = None,
     observed_requests: list[httpx.Request] | None = None,
 ) -> tuple[
     OpenRouterClient,
@@ -859,7 +861,8 @@ async def _dispatch_mock_smoke_request(
         ),
         qualification_routing=(),
         budget=budget,
-        reasoning=reasoning,
+        reasoning=reasoning if reasoning_policy is None else None,
+        reasoning_policy=reasoning_policy,
     )
     policy = (
         effective_privacy_policy
@@ -1333,7 +1336,7 @@ async def _assert_v3_smoke_receipt_cutoff(
             ),
         ),
         (
-            "TOKEN_PLAN_ROUTING",
+            "TOKEN_PLAN_ROUTING:PLAN_MISSING",
             provisional.model_copy(
                 update={
                     "routing": {
@@ -4290,7 +4293,11 @@ def test_receipt_authority_function_code_retarget_is_not_pristine(
     def changed(*_args: object, **_kwargs: object) -> bool:
         return True
 
-    function.__code__ = changed.__code__.replace(co_freevars=original_code.co_freevars)
+    async def changed_async(*_args: object, **_kwargs: object) -> bool:
+        return True
+
+    replacement = changed_async if inspect.iscoroutinefunction(function) else changed
+    function.__code__ = replacement.__code__.replace(co_freevars=original_code.co_freevars)
     try:
         assert not openrouter_module._openrouter_client_callables_are_pristine()
     finally:

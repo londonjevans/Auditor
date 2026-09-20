@@ -185,6 +185,7 @@ def _rebuild(prepared: PreparedDevelopmentCorpusJudgment) -> PreparedDevelopment
         run_id=plan.run_id,
         maximum_completion_tokens=plan.maximum_completion_tokens,
         maximum_run_seconds=plan.maximum_run_seconds,
+        source_custody=prepared.source_custody,
     )
     if rebuilt != prepared:
         raise DevelopmentCorpusJudgmentError(

@@ -1,0 +1,18 @@
+{
+  "schema_version": "1.0",
+  "scope": "SYNTHETIC_INPUT_EDGE_IDENTITIES_NO_PROVIDER",
+  "cases": [
+    {"id": "unchanged-shared-cycle", "mutation": "unchanged", "accepted": true},
+    {"id": "mapping-value-identity", "mutation": "mapping_value", "accepted": false},
+    {"id": "equal-key-different-identity", "mutation": "mapping_key", "accepted": false},
+    {"id": "mapping-insertion-order", "mutation": "mapping_order", "accepted": false},
+    {"id": "mapping-size", "mutation": "mapping_size", "accepted": false},
+    {"id": "sequence-value-identity", "mutation": "sequence_value", "accepted": false},
+    {"id": "sequence-size", "mutation": "sequence_size", "accepted": false},
+    {"id": "mutable-child-of-tuple", "mutation": "tuple_child", "accepted": false},
+    {"id": "equal-detached-mapping", "mutation": "detached_mapping", "accepted": false},
+    {"id": "equal-detached-alias", "mutation": "detached_alias", "accepted": false},
+    {"id": "same-objects-same-order", "mutation": "same_objects", "accepted": true},
+    {"id": "restored-point-in-time-edges", "mutation": "restored", "accepted": true}
+  ]
+}

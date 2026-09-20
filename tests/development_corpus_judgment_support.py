@@ -52,14 +52,16 @@ def pure_candidate(
     source_files=None,
     policy=None,
     endpoint_snapshot=None,
+    prepared=None,
 ):
     """Construct typed model-only evidence; durable integrations execute their own candidate."""
 
-    prepared = corpus_case(
-        source_files=selected_sources(count) if source_files is None else source_files,
-        policy=selected_policy() if policy is None else policy,
-        **({"endpoint_snapshot": endpoint_snapshot} if endpoint_snapshot is not None else {}),
-    )
+    if prepared is None:
+        prepared = corpus_case(
+            source_files=selected_sources(count) if source_files is None else source_files,
+            policy=selected_policy() if policy is None else policy,
+            **({"endpoint_snapshot": endpoint_snapshot} if endpoint_snapshot is not None else {}),
+        )
     total = len(prepared.shards)
     observed_count = total if observed_count is None else observed_count
     counts = (claims,) * total if isinstance(claims, int) else claims
@@ -114,9 +116,11 @@ def pure_candidate(
         accounting=tuple(accounting),
         unobserved_shard_ids=tuple(s.shard_id for s in prepared.shards[observed_count:]),
         completed_shard_count=observed_count,
-        selected_primary_line_count=sum(s.line_count for s in prepared.plan.manifest.sources),
+        selected_primary_line_count=sum(
+            s.line_count for s in prepared.plan.manifest.primary_sources
+        ),
         primary_lines_with_observed_responses=sum(
-            s.line_count for s in prepared.plan.manifest.sources[:observed_count]
+            s.line_count for s in prepared.plan.manifest.primary_sources[:observed_count]
         ),
         candidate_claim_count=sum(counts[:observed_count]),
         total_accounted_cost_usd=Decimal("0.01") * observed_count,

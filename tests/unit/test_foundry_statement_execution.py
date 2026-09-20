@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import re
+import subprocess
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -41,11 +42,17 @@ from mmaudit.scanners.foundry import (
     _PrivateArtifactUsage,
     _write_repository_suite_manifest,
 )
+from mmaudit.scanners.foundry_inventory import FoundryInventoryLimits, FoundrySourceInput
 from mmaudit.scanners.foundry_inventory_runner import (
+    FoundryCompilerInputSnapshot,
     FoundryInventoryInvalidError,
     FoundryInventoryOverflowError,
     FoundryInventoryTimeoutError,
 )
+from mmaudit.scanners.foundry_statement_producer import FoundryStatementCoverageProcessObservation
+from mmaudit.scanners.solc_capture import SolcCaptureSession, prepare_solc_capture
+from mmaudit.solidity import solc_capture_worker as capture_worker
+from tests.unit.test_solc_capture import _capture
 
 HASH_A = "a" * 64
 HASH_B = "b" * 64
@@ -381,6 +388,7 @@ def _install_process(
     stderr: bytes = b"",
     return_code: int = 0,
     starts: list[list[str]] | None = None,
+    capture: Callable[[], int] | None = None,
 ) -> None:
     # Keep byte payload names separate from the subprocess stream parameters.
     output_bytes = stdout
@@ -395,17 +403,18 @@ def _install_process(
     ) -> _CompletedProcess:
         if starts is not None:
             starts.append(list(command))
+        capture_status = 0 if capture is None else capture()
         return _CompletedProcess(
             command,
             stdout=stdout,
             stderr=stderr,
-            return_code=return_code,
+            return_code=return_code if return_code else capture_status,
             stdout_bytes=output_bytes,
             stderr_bytes=error_bytes,
             **kwargs,
         )
 
-    monkeypatch.setattr(foundry_module.subprocess, "Popen", patched_popen)
+    monkeypatch.setattr(subprocess, "Popen", patched_popen)
 
 
 def _execute(
@@ -419,22 +428,88 @@ def _execute(
     max_output_bytes: int = 1_000_000,
     max_output_entries: int = 100,
     process_starts: list[list[str]] | None = None,
-) -> tuple[object, _PrivateArtifactUsage, _Backend]:
+    retain_capture: bool = True,
+    change_capture: Callable[[SolcCaptureSession], None] | None = None,
+) -> tuple[FoundryStatementCoverageProcessObservation, _PrivateArtifactUsage, _Backend]:
     descriptor = _descriptor()
     private_dir = tmp_path / "private"
     workspace = private_dir / "workspace"
     workspace.mkdir(parents=True)
+    source = b"// Synthetic non-deployable compiler-source control.\nabstract contract Control {}\n"
+    source_path = workspace / descriptor.path
+    source_path.parent.mkdir(parents=True)
+    source_path.write_bytes(source)
+    snapshots = (
+        FoundryCompilerInputSnapshot(
+            ".",
+            b"{}",
+            (b"{}",),
+            (FoundrySourceInput(descriptor.path, source, hashlib.sha256(source).hexdigest()),),
+            FoundryInventoryLimits(),
+        ),
+    )
     executable = tmp_path / "forge"
     compiler = tmp_path / "solc"
     executable.write_bytes(b"synthetic forge identity")
     compiler.write_bytes(b"synthetic solc identity")
+    executable.chmod(0o700)
+    compiler.chmod(0o700)
     backend = _Backend()
+    prepared: list[SolcCaptureSession] = []
+
+    def retain_prepared[**P](
+        prepare: Callable[P, SolcCaptureSession],
+    ) -> Callable[P, SolcCaptureSession]:
+        def retain(*args: P.args, **kwargs: P.kwargs) -> SolcCaptureSession:
+            session = prepare(*args, **kwargs)
+            prepared.append(session)
+            return session
+
+        return retain
+
+    monkeypatch.setattr(
+        foundry_module, "prepare_solc_capture", retain_prepared(prepare_solc_capture)
+    )
+    monkeypatch.setattr(
+        capture_worker,
+        "isolated_runtime_flags",
+        lambda: {
+            "isolated": 1,
+            "ignore_environment": 1,
+            "no_site": 1,
+            "dont_write_bytecode": 1,
+        },
+    )
+
+    def emit_capture() -> int:
+        if not retain_capture:
+            return 0
+        session = prepared[0]
+        launch_plan_path = session.helper_root.parent / "launch.json"
+        plan_raw = launch_plan_path.read_bytes()
+        plan = json.loads(plan_raw)
+        capture_worker.write_bytes(
+            Path(plan["receipt_path"]),
+            json.dumps(
+                {
+                    "launch_plan_sha256": hashlib.sha256(plan_raw).hexdigest(),
+                    "runtime": json.loads(capture_worker.runtime_observation(plan)),
+                }
+            ).encode(),
+        )
+        assert _capture(session, monkeypatch, argv=["--version"])[0] == 0
+        code, _ = _capture(session, monkeypatch)
+        if change_capture is not None:
+            change_capture(session)
+        return code
+
     _install_process(
         monkeypatch,
         stdout=stdout,
         stderr=stderr,
         return_code=return_code,
         starts=process_starts,
+        capture=emit_capture,
     )
 
     observation, usage = _execute_foundry_statement_coverage(
@@ -443,8 +518,10 @@ def _execute(
         private_dir=private_dir,
         output_index=0,
         executable_path=executable,
+        executable_sha256=hashlib.sha256(executable.read_bytes()).hexdigest(),
         compiler_path=compiler,
         compiler_sha256=hashlib.sha256(compiler.read_bytes()).hexdigest(),
+        compiler_inputs=snapshots,
         rpc_url="http://127.0.0.1:8545",
         rpc_port=8_545,
         fork=_fork(),
@@ -529,10 +606,19 @@ def test_statement_coverage_execution_seals_exact_streams_and_private_tree(
 
     assert len(backend.wrapped_commands) == 1
     actual = backend.wrapped_commands[0]
-    assert actual[0] == str(tmp_path / "forge")
-    assert actual[actual.index("--fork-url") + 1] == "http://127.0.0.1:8545"
-    assert "[REDACTED_LOOPBACK_FORK_RPC]" not in actual
-    assert not any("PINNED_SOLC_SHA256" in argument for argument in actual)
+    assert actual[1] == "-IBS"
+    plan = json.loads((Path(actual[2]).parent / "launch.json").read_bytes())
+    inner = plan["command"]
+    assert inner[0] == str(tmp_path / "private/trusted-inputs/coverage-forge")
+    assert inner[inner.index("--fork-url") + 1] == "http://127.0.0.1:8545"
+    assert "[REDACTED_LOOPBACK_FORK_RPC]" not in inner
+    assert not any("PINNED_SOLC_SHA256" in argument for argument in inner)
+    assert len(observation.compiler_transcripts) == 2
+    assert b"Synthetic non-deployable" in observation.compiler_transcripts[1].stdin
+    assert all(
+        r.evidence_authority == "UNATTESTED_COMPILER_TRANSCRIPT"
+        for r in observation.compiler_transcripts
+    )
 
 
 @pytest.mark.parametrize(
@@ -595,8 +681,26 @@ def test_statement_coverage_execution_rechecks_deadline_immediately_before_spawn
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     process_starts: list[list[str]] = []
-    observed_times = iter((10.0, 10.0, 12.0))
-    monkeypatch.setattr(foundry_module.time, "monotonic", lambda: next(observed_times))
+    expired = False
+    original_wrap = _Backend.wrap
+
+    def expire_at_wrap(
+        self: _Backend,
+        command: list[str],
+        *,
+        workspace: Path,
+        private_dir: Path,
+        rpc_port: int,
+    ) -> list[str]:
+        nonlocal expired
+        result = original_wrap(
+            self, command, workspace=workspace, private_dir=private_dir, rpc_port=rpc_port
+        )
+        expired = True
+        return result
+
+    monkeypatch.setattr(_Backend, "wrap", expire_at_wrap)
+    monkeypatch.setattr(time, "monotonic", lambda: 12.0 if expired else 10.0)
 
     with pytest.raises(FoundryInventoryTimeoutError, match="shared per-test deadline"):
         _execute(
@@ -652,6 +756,38 @@ def test_combined_private_artifact_usage_sums_and_hashes_ordered_trees() -> None
     assert reversed_usage.artifact_sha256 != combined.artifact_sha256
     with pytest.raises(ValueError, match="at least one tree"):
         _combined_private_artifact_usage()
+
+
+def test_statement_coverage_refuses_forge_success_without_original_compiler_capture(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with pytest.raises(FoundryInventoryInvalidError, match="failed validation"):
+        _execute(tmp_path, monkeypatch, stdout=_debug_output(_descriptor()), retain_capture=False)
+
+
+@pytest.mark.parametrize(
+    "boundary", ["source", "compiler_output", "helper", "failed_tail", "receipt"]
+)
+def test_statement_coverage_refuses_compiler_custody_drift_after_success(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    boundary: str,
+) -> None:
+    def change(session: SolcCaptureSession) -> None:
+        if boundary == "failed_tail":
+            (session.root / "refused.json").write_text('{"failure_kind":"ValueError"}')
+            return
+        path = {
+            "source": session.workspace / session.sources[0].path,
+            "compiler_output": session.root / "calls/0001/stdout.bin",
+            "helper": session.helper_root / "worker.py",
+            "receipt": session.root.parent / "launch-receipt.json",
+        }[boundary]
+        path.write_bytes(path.read_bytes() + b" ")
+
+    with pytest.raises(FoundryInventoryInvalidError, match="failed validation"):
+        _execute(tmp_path, monkeypatch, stdout=_debug_output(_descriptor()), change_capture=change)
 
 
 def test_statement_coverage_command_signature_is_regex_anchored() -> None:

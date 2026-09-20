@@ -1,0 +1,244 @@
+{
+  "$defs": {
+    "CalendarJournalPreparation": {
+      "additionalProperties": false,
+      "description": "Exact serialized request context; construction conveys no dispatch authority.",
+      "properties": {
+        "body_hex": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Body Hex",
+          "type": "string"
+        },
+        "calendar_origin": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Calendar Origin",
+          "type": "string"
+        },
+        "commitment_hex": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Commitment Hex",
+          "type": "string"
+        },
+        "file_convention": {
+          "const": "SHA256_BINARY_SUBJECT_DIGEST_V1",
+          "default": "SHA256_BINARY_SUBJECT_DIGEST_V1",
+          "title": "File Convention",
+          "type": "string"
+        },
+        "file_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "File Sha256",
+          "type": "string"
+        },
+        "headers": {
+          "items": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "type": "array"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "title": "Headers",
+          "type": "array"
+        },
+        "method": {
+          "const": "POST",
+          "default": "POST",
+          "title": "Method",
+          "type": "string"
+        },
+        "nonce_hex": {
+          "pattern": "^[0-9a-f]{32}$",
+          "title": "Nonce Hex",
+          "type": "string"
+        },
+        "phase": {
+          "$ref": "#/$defs/PublicationPhase"
+        },
+        "preparation_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Preparation Sha256",
+          "type": "string"
+        },
+        "relative_path": {
+          "const": "digest",
+          "default": "digest",
+          "title": "Relative Path",
+          "type": "string"
+        },
+        "subject_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Subject Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "subject_sha256",
+        "phase",
+        "file_sha256",
+        "nonce_hex",
+        "calendar_origin",
+        "headers",
+        "commitment_hex",
+        "body_hex",
+        "preparation_sha256"
+      ],
+      "title": "CalendarJournalPreparation",
+      "type": "object"
+    },
+    "ManifestFileBinding": {
+      "additionalProperties": false,
+      "description": "Hash and size for one normalized source or run-artifact path.",
+      "properties": {
+        "path": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "size": {
+          "minimum": 0,
+          "title": "Size",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "path",
+        "sha256",
+        "size"
+      ],
+      "title": "ManifestFileBinding",
+      "type": "object"
+    },
+    "PublicationPhase": {
+      "enum": [
+        "POPULATION_REGISTRATION",
+        "MEASURED_POPULATION"
+      ],
+      "type": "string"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/calibration_calendar_publication_binding.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Pinned private recovery descriptor, not native or external publication authority.",
+  "properties": {
+    "artifact_kind": {
+      "const": "CALIBRATION_CALENDAR_PUBLICATION",
+      "default": "CALIBRATION_CALENDAR_PUBLICATION",
+      "title": "Artifact Kind",
+      "type": "string"
+    },
+    "calendar_directory": {
+      "const": "calendar",
+      "default": "calendar",
+      "title": "Calendar Directory",
+      "type": "string"
+    },
+    "external_comparison_required": {
+      "const": true,
+      "default": true,
+      "title": "External Comparison Required",
+      "type": "boolean"
+    },
+    "external_publication_verified": {
+      "const": false,
+      "default": false,
+      "title": "External Publication Verified",
+      "type": "boolean"
+    },
+    "model_qualification_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Model Qualification Authorized",
+      "type": "boolean"
+    },
+    "policy_adoption_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Policy Adoption Authorized",
+      "type": "boolean"
+    },
+    "pre_dispatch_anchoring_verified": {
+      "const": false,
+      "default": false,
+      "title": "Pre Dispatch Anchoring Verified",
+      "type": "boolean"
+    },
+    "preparation": {
+      "$ref": "#/$defs/CalendarJournalPreparation"
+    },
+    "provider_call_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Provider Call Authorized",
+      "type": "boolean"
+    },
+    "publication_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Publication Sha256",
+      "type": "string"
+    },
+    "registration_event_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Registration Event Sha256",
+      "type": "string"
+    },
+    "registration_publication_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Registration Publication Sha256"
+    },
+    "release_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Release Authorized",
+      "type": "boolean"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "serialized_authority": {
+      "const": false,
+      "default": false,
+      "title": "Serialized Authority",
+      "type": "boolean"
+    },
+    "subject_file": {
+      "$ref": "#/$defs/ManifestFileBinding"
+    }
+  },
+  "required": [
+    "subject_file",
+    "registration_event_sha256",
+    "registration_publication_sha256",
+    "preparation",
+    "publication_sha256"
+  ],
+  "title": "CalibrationCalendarPublicationBinding",
+  "type": "object"
+}

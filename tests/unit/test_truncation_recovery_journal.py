@@ -138,12 +138,14 @@ def _digest(label: str) -> str:
     return hashlib.sha256(label.encode()).hexdigest()
 
 
-def _requested_surfaces() -> tuple[
+def _requested_surfaces(
+    count: int = 4,
+) -> tuple[
     SchedulerTruncationRecoveryRequestedSurfaceManifest,
     tuple[ModelSurfaceReviewRecord, ...],
 ]:
     pairs: list[tuple[ModelSurfaceReviewRequest, ModelSurfaceReviewRecord]] = []
-    for index in range(4):
+    for index in range(count):
         subject_id = f"synthetic-root-surface-{index}"
         request = ModelSurfaceReviewRequest(
             surface_id=ModelSurfaceReviewRequest.calculate_surface_id(
@@ -256,19 +258,21 @@ def _resources(
     parent_attempts: int = 1,
     parent_tokens: int = 5,
     parent_cost: str = "0",
+    child_reserved_usd_exact: str = "0.1",
+    child_completion_tokens: int = 100,
 ) -> TruncationRecoveryResourceBudget:
     return TruncationRecoveryResourceBudget.build(
         campaign_cap_usd_exact=campaign_cap_usd_exact,
         accounted_usd_before_parent_exact=accounted_before,
         parent_accounted_cost_usd_exact=parent_cost,
-        child_reserved_usd_exact="0.1",
+        child_reserved_usd_exact=child_reserved_usd_exact,
         recovery_requests_consumed=recovery_requests_consumed,
         provider_attempts_before_parent=attempts_before,
         parent_provider_attempts=parent_attempts,
         child_provider_attempts=1,
         completion_tokens_before_parent=tokens_before,
         parent_completion_tokens=parent_tokens,
-        child_completion_tokens=100,
+        child_completion_tokens=child_completion_tokens,
     )
 
 
@@ -406,6 +410,7 @@ def _journal_with_truncated_parent(
     parent_cost_usd_exact: str = "0",
     parent_role: str | None = None,
     atomic_ledger: AtomicCostLedger | None = None,
+    source_count: int = 4,
 ) -> tuple[
     SchedulerJournal,
     TruncationRecoveryPlan,
@@ -426,7 +431,7 @@ def _journal_with_truncated_parent(
         cost_ledger_baseline=baseline,
     )
     _complete_recovery_orientation(journal)
-    surface_manifest, surfaces = _requested_surfaces()
+    surface_manifest, surfaces = _requested_surfaces(source_count)
     if parent_role is not None:
         surfaces = tuple(
             ModelSurfaceReviewRecord.model_validate(
@@ -1055,6 +1060,7 @@ def _success_custody(
     execution_evidence: ExecutionEvidenceKind = ExecutionEvidenceKind.MOCK,
     request_role: str | None = None,
     exact_model_id: str | None = None,
+    findings: tuple[CandidateFinding, ...] = (),
 ) -> tuple[
     UsageRecord,
     CandidateReviewNormalizationEvidence,
@@ -1075,7 +1081,7 @@ def _success_custody(
     }
     requests = tuple(requests_by_id[surface_id] for surface_id in child.surface_ids)
     batch = CandidateReviewBatch(
-        findings=[],
+        findings=findings,
         surface_reviews=tuple(records_by_id[surface_id] for surface_id in child.surface_ids),
     )
     normalized_batch, normalization = normalize_candidate_review_document(
@@ -1127,6 +1133,7 @@ def _truncated_custody(
     activation: SchedulerTruncationRecoveryChildActivation,
     surfaces: tuple[ModelSurfaceReviewRecord, ...],
     findings: tuple[CandidateFinding, ...] = (),
+    retained_count: int = 0,
 ) -> tuple[
     UsageRecord,
     CandidateReviewTruncatedEnvelopeEvidence,
@@ -1134,7 +1141,7 @@ def _truncated_custody(
 ]:
     records_by_id = {record.surface_id: record for record in surfaces}
     child_records = tuple(records_by_id[surface_id] for surface_id in child.surface_ids)
-    projection = _projection(child_records, retained_count=0, findings=findings)
+    projection = _projection(child_records, retained_count=retained_count, findings=findings)
     assert activation.requested_model is not None
     model_id = activation.requested_model
     provider_name = "Synthetic Provider"
@@ -1194,7 +1201,7 @@ def _nested_plan_for_typed_truncated_child(
         truncation_projection_sha256=projection.evidence_sha256,
         requested_surface_manifest_sha256=child.requested_surface_manifest_sha256,
         requested_surface_ids=child.surface_ids,
-        retained_surface_ids=(),
+        retained_surface_ids=tuple(record.surface_id for record in projection.surface_reviews),
         channel_bindings=_placeholder_channels(projection),
         current_depth=child.depth,
         parent_path=child.path,
@@ -2619,10 +2626,11 @@ def test_nested_family_requires_other_root_child_typed_success_before_mutation(
     journal.close()
 
 
-def test_nested_family_rejects_specialist_root_before_mutation(tmp_path: Path) -> None:
+def test_nested_family_retains_exact_specialist_root_without_credit(tmp_path: Path) -> None:
     journal, plan, projection, surfaces, surface_manifest = _journal_with_truncated_parent(
         tmp_path / "recursive-family-specialist",
         request_limit_maximum=5,
+        typed_parent_attempt=True,
         parent_role="specialist:access_control",
     )
     root = journal.open_truncation_recovery_family(
@@ -2679,14 +2687,16 @@ def test_nested_family_rejects_specialist_root_before_mutation(tmp_path: Path) -
     )
 
     before = journal.truncation_recovery_entries
-    with pytest.raises(ValueError, match="differs from its truncated child"):
-        journal.open_truncation_recovery_family(
-            recovery_plan=nested_plan,
-            truncation_projection=nested_projection,
-            requested_surface_manifest=surface_manifest,
-        )
-    assert journal.truncation_recovery_entries == before
-    assert journal.truncation_recovery_families == (root,)
+    nested = journal.open_truncation_recovery_family(
+        recovery_plan=nested_plan,
+        truncation_projection=nested_projection,
+        requested_surface_manifest=surface_manifest,
+    )
+    assert journal.truncation_recovery_entries == (*before, nested)
+    assert journal.truncation_recovery_families == (root, nested)
+    assert nested.parent_family_id == root.family_id
+    assert nested.request_limit_binding == root.request_limit_binding
+    assert all(not request.review_credit_authorized for request in journal.recovery_model_requests)
     journal.close()
 
 

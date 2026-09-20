@@ -21,6 +21,8 @@ from mmaudit.benchmark.development_corpus_resume import (
 )
 from mmaudit.models.development_audit import _AuditArtifact
 from mmaudit.models.development_corpus import (
+    DEVELOPMENT_CORPUS_CLAIM_PATTERN,
+    MAX_DEVELOPMENT_CORPUS_CLAIMS,
     DevelopmentCorpusPlan,
     DevelopmentCorpusShardObservation,
 )
@@ -33,7 +35,7 @@ MAX_DEVELOPMENT_CORPUS_CONTROL_MEASUREMENT_BYTES = 128_000_000
 _SHA = r"^[0-9a-f]{64}$"
 _ID = r"^[a-z][a-z0-9-]{0,63}$"
 _REQUEST = r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$"
-_CLAIM = r"^file-00(?:0[1-9]|[1-5][0-9]|6[0-4]):(?:0[1-9]|1[0-6])$"
+_CLAIM = DEVELOPMENT_CORPUS_CLAIM_PATTERN
 type _Category = Literal["access_control", "accounting", "reservation", "pause", "other"]
 type DevelopmentCorpusControlSource = Annotated[
     DevelopmentCorpusBenchmarkScore | DevelopmentCorpusResumeBenchmarkScore,
@@ -67,18 +69,18 @@ class DevelopmentCorpusControlSummary(_DevelopmentModel):
     """Location coverage and asserted-violation coverage have separate sets and shared denominators."""
 
     quality_scope: Literal["COMPLETE_OBSERVATIONS", "INCOMPLETE_OBSERVATIONS"]
-    total_claim_count: int = Field(ge=0, le=1024)
-    invariant_claim_count: int = Field(ge=0, le=1024)
-    advisory_claim_count: int = Field(ge=0, le=1024)
-    ambiguous_claim_count: int = Field(ge=0, le=1024)
-    unmatched_claim_count: int = Field(ge=0, le=1024)
-    duplicate_location_count: int = Field(ge=0, le=1024)
-    duplicate_assertion_count: int = Field(ge=0, le=1024)
-    guarded_invariant_claim_count: int = Field(ge=0, le=1024)
-    guarded_advisory_claim_count: int = Field(ge=0, le=1024)
-    matched_category_agreement_count: int = Field(ge=0, le=1024)
-    matched_category_disagreement_count: int = Field(ge=0, le=1024)
-    matched_category_unreported_count: int = Field(ge=0, le=1024)
+    total_claim_count: int = Field(ge=0, le=MAX_DEVELOPMENT_CORPUS_CLAIMS)
+    invariant_claim_count: int = Field(ge=0, le=MAX_DEVELOPMENT_CORPUS_CLAIMS)
+    advisory_claim_count: int = Field(ge=0, le=MAX_DEVELOPMENT_CORPUS_CLAIMS)
+    ambiguous_claim_count: int = Field(ge=0, le=MAX_DEVELOPMENT_CORPUS_CLAIMS)
+    unmatched_claim_count: int = Field(ge=0, le=MAX_DEVELOPMENT_CORPUS_CLAIMS)
+    duplicate_location_count: int = Field(ge=0, le=MAX_DEVELOPMENT_CORPUS_CLAIMS)
+    duplicate_assertion_count: int = Field(ge=0, le=MAX_DEVELOPMENT_CORPUS_CLAIMS)
+    guarded_invariant_claim_count: int = Field(ge=0, le=MAX_DEVELOPMENT_CORPUS_CLAIMS)
+    guarded_advisory_claim_count: int = Field(ge=0, le=MAX_DEVELOPMENT_CORPUS_CLAIMS)
+    matched_category_agreement_count: int = Field(ge=0, le=MAX_DEVELOPMENT_CORPUS_CLAIMS)
+    matched_category_disagreement_count: int = Field(ge=0, le=MAX_DEVELOPMENT_CORPUS_CLAIMS)
+    matched_category_unreported_count: int = Field(ge=0, le=MAX_DEVELOPMENT_CORPUS_CLAIMS)
     expected_root_ids: tuple[str, ...] = Field(max_length=1024)
     located_root_ids: tuple[str, ...] = Field(max_length=1024)
     invariant_asserted_root_ids: tuple[str, ...] = Field(max_length=1024)
@@ -379,7 +381,9 @@ class DevelopmentCorpusControlMeasurement(_AuditArtifact):
     source_score: DevelopmentCorpusControlSource
     source_score_sha256: str = Field(pattern=_SHA)
     source_scope: Literal["ORIGINAL_FIRST_ATTEMPT", "CUMULATIVE_RECORDED_ATTEMPTS"]
-    claims: tuple[DevelopmentCorpusControlClaim, ...] = Field(max_length=1024)
+    claims: tuple[DevelopmentCorpusControlClaim, ...] = Field(
+        max_length=MAX_DEVELOPMENT_CORPUS_CLAIMS
+    )
     summary: DevelopmentCorpusControlSummary
     measurement_sha256: str = Field(pattern=_SHA)
 

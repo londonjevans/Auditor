@@ -1,0 +1,143 @@
+{
+  "$defs": {
+    "ManifestFileBinding": {
+      "additionalProperties": false,
+      "description": "Hash and size for one normalized source or run-artifact path.",
+      "properties": {
+        "path": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "size": {
+          "minimum": 0,
+          "title": "Size",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "path",
+        "sha256",
+        "size"
+      ],
+      "title": "ManifestFileBinding",
+      "type": "object"
+    },
+    "RetainedMutationCompilerProject": {
+      "additionalProperties": false,
+      "properties": {
+        "build_info": {
+          "items": {
+            "$ref": "#/$defs/ManifestFileBinding"
+          },
+          "maxItems": 1000,
+          "minItems": 1,
+          "title": "Build Info",
+          "type": "array"
+        },
+        "forge_list": {
+          "$ref": "#/$defs/ManifestFileBinding"
+        },
+        "parser_limits": {
+          "$ref": "#/$defs/ManifestFileBinding"
+        },
+        "project_root": {
+          "title": "Project Root",
+          "type": "string"
+        },
+        "sources": {
+          "items": {
+            "$ref": "#/$defs/ManifestFileBinding"
+          },
+          "maxItems": 100000,
+          "minItems": 1,
+          "title": "Sources",
+          "type": "array"
+        }
+      },
+      "required": [
+        "project_root",
+        "forge_list",
+        "parser_limits",
+        "build_info",
+        "sources"
+      ],
+      "title": "RetainedMutationCompilerProject",
+      "type": "object"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/retained_mutation_compiler_inputs.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Original writer values and exact file index, not authenticated execution evidence.",
+  "properties": {
+    "accounted_output_bytes": {
+      "maximum": 500000000,
+      "minimum": 0,
+      "title": "Accounted Output Bytes",
+      "type": "integer"
+    },
+    "artifact_kind": {
+      "const": "retained_mutation_compiler_inputs",
+      "default": "retained_mutation_compiler_inputs",
+      "title": "Artifact Kind",
+      "type": "string"
+    },
+    "evidence": {
+      "$ref": "#/$defs/ManifestFileBinding"
+    },
+    "evidence_authority": {
+      "const": "COLLECTED_UNATTESTED",
+      "default": "COLLECTED_UNATTESTED",
+      "title": "Evidence Authority",
+      "type": "string"
+    },
+    "execution_validated": {
+      "const": false,
+      "default": false,
+      "title": "Execution Validated",
+      "type": "boolean"
+    },
+    "generated_artifact_bytes": {
+      "maximum": 4000000000,
+      "minimum": 0,
+      "title": "Generated Artifact Bytes",
+      "type": "integer"
+    },
+    "projects": {
+      "items": {
+        "$ref": "#/$defs/RetainedMutationCompilerProject"
+      },
+      "maxItems": 1000,
+      "minItems": 1,
+      "title": "Projects",
+      "type": "array"
+    },
+    "qualification_eligible": {
+      "const": false,
+      "default": false,
+      "title": "Qualification Eligible",
+      "type": "boolean"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "evidence",
+    "accounted_output_bytes",
+    "generated_artifact_bytes",
+    "projects"
+  ],
+  "title": "RetainedMutationCompilerManifest",
+  "type": "object"
+}

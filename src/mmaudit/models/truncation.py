@@ -12,17 +12,30 @@ import copy
 import hashlib
 import json
 import math
+from builtins import map as _SCHEMA_INPUT_MAP
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from functools import lru_cache
 from itertools import pairwise
+from operator import itemgetter
 from types import FunctionType
-from typing import Annotated, Any, Literal, Never
+from typing import Annotated, Any, Literal, Never, cast
 
 import pydantic.json_schema as _PYDANTIC_JSON_SCHEMA_MODULE
 import pydantic.main as _PYDANTIC_MAIN_MODULE
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic._internal import _core_utils as _PYDANTIC_CORE_UTILS_MODULE
+from pydantic._internal import _schema_generation_shared as _PYDANTIC_SCHEMA_SHARED_MODULE
+from pydantic._internal._core_utils import CoreSchemaOrField
+from pydantic.json_schema import (
+    CoreRef,
+    CoreSchemaOrFieldType,
+    DefsRef,
+    JsonRef,
+    JsonSchemaValue,
+    _DefinitionsRemapping,
+)
 
 from mmaudit.models.schemas import (
     CandidateFinding,
@@ -56,6 +69,14 @@ _JSON_PARSE_ARRAY = _JSON_DECODER_MODULE.JSONArray
 _JSON_PARSE_OBJECT = _JSON_DECODER_MODULE.JSONObject
 _JSON_SCANSTRING = _JSON_DECODER_MODULE.scanstring
 _MATH_ISFINITE = math.isfinite
+
+_SCHEMA_REMAPPING_MAX_DEFINITIONS = 256
+_SCHEMA_REMAPPING_MAX_ALIASES = 2_048
+_SCHEMA_REMAPPING_MAX_NODES = 50_000
+_SCHEMA_REMAPPING_MAX_DEPTH = 128
+_SCHEMA_REMAPPING_MAX_NAME_LENGTH = 1_024
+_SCHEMA_REMAPPING_REF_TEMPLATE = "#/$defs/{model}"
+_SCHEMA_DISPATCH_MAX_KEYS = 64
 
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
 _WIRE_PREFIX = '{"frames":['
@@ -1583,11 +1604,233 @@ def _strict_schema_sha256(model: type[BaseModel]) -> str:
     return _canonical_sha256(schema)
 
 
+def _plain_schema_definitions(definitions: dict[DefsRef, JsonSchemaValue]) -> bool:
+    """Bound a fresh, exact-JSON graph without invoking user equality or container methods."""
+
+    pending: list[tuple[Any, int]] = [(definitions, 0)]
+    remaining = _SCHEMA_REMAPPING_MAX_NODES - 1
+    while pending:
+        value, depth = pending.pop()
+        if depth > _SCHEMA_REMAPPING_MAX_DEPTH:
+            return False
+        kind = type(value)
+        if kind is dict:
+            if len(value) > remaining or any(type(key) is not str for key in value):
+                return False
+            remaining -= len(value)
+            pending.extend((child, depth + 1) for child in value.values())
+        elif kind is list:
+            if len(value) > remaining:
+                return False
+            remaining -= len(value)
+            pending.extend((child, depth + 1) for child in value)
+        elif kind is float:
+            if not _MATH_ISFINITE(value):
+                return False
+        elif value is not None and kind is not str and kind is not int and kind is not bool:
+            return False
+    return True
+
+
+def _collision_free_schema_remapping(
+    choices: dict[DefsRef, list[DefsRef]],
+    definitions: dict[DefsRef, JsonSchemaValue],
+    ref_template: str,
+) -> _DefinitionsRemapping | None:
+    """Prove disjoint aliases for this generation only; unsupported inputs retain the reference."""
+
+    if (
+        type(choices) is not dict
+        or type(definitions) is not dict
+        or type(ref_template) is not str
+        or ref_template != _SCHEMA_REMAPPING_REF_TEMPLATE
+        or len(definitions) > _SCHEMA_REMAPPING_MAX_DEFINITIONS
+        or len(choices) != len(definitions)
+        or any(type(key) is not str for key in choices)
+    ):
+        return None
+    seen: set[DefsRef] = set()
+    remaining_aliases = _SCHEMA_REMAPPING_MAX_ALIASES
+    defs_remapping: dict[DefsRef, DefsRef] = {}
+    json_remapping: dict[JsonRef, JsonRef] = {}
+    for original in definitions:
+        if type(original) is not str or original not in choices:
+            return None
+        alternatives = choices[original]
+        if (
+            type(alternatives) is not list
+            or not alternatives
+            or len(alternatives) > remaining_aliases
+        ):
+            return None
+        remaining_aliases -= len(alternatives)
+        for alias in alternatives:
+            if (
+                type(alias) is not str
+                or not alias
+                or len(alias) > _SCHEMA_REMAPPING_MAX_NAME_LENGTH
+                or alias in seen
+            ):
+                return None
+            seen.add(alias)
+        if original not in alternatives:
+            return None
+        first = alternatives[0]
+        defs_remapping[original] = first
+        target = JsonRef(f"#/$defs/{first}")
+        for alias in alternatives:
+            json_remapping[JsonRef(f"#/$defs/{alias}")] = target
+    if not _plain_schema_definitions(definitions):
+        return None
+    # Every alias has exactly one original definition, so reference deduplication
+    # cannot change its first choice. Disjoint groups make those choices fixed points.
+    # Preserve every intermediate alias, not merely the original and final names.
+    return _DefinitionsRemapping(defs_remapping, json_remapping)
+
+
+def _copy_plain_schema_for_hash(value: JsonSchemaValue) -> JsonSchemaValue | None:
+    """Copy bounded exact JSON per occurrence; unsupported graphs keep the reference sorter."""
+
+    if type(value) is not dict:
+        return None
+    remaining = _SCHEMA_REMAPPING_MAX_NODES - 1
+    if len(value) > remaining:
+        return None
+    remaining -= len(value)
+    result: JsonSchemaValue = {}
+    pending: list[tuple[Any, Any, int]] = [(value, result, 0)]
+    while pending:
+        original, destination, depth = pending.pop()
+        is_mapping = type(original) is dict
+        children = original.items() if is_mapping else enumerate(original)
+        for key, child in children:
+            if is_mapping and type(key) is not str:
+                return None
+            child_depth = depth + 1
+            if child_depth > _SCHEMA_REMAPPING_MAX_DEPTH:
+                return None
+            kind = type(child)
+            if kind is dict or kind is list:
+                # Reserve child slots before allocating or queuing their copied container.
+                # Count shared occurrences separately; no alias-preserving memo is equivalent.
+                if len(child) > remaining:
+                    return None
+                remaining -= len(child)
+                copied: Any = {} if kind is dict else [None] * len(child)
+                destination[key] = copied
+                pending.append((child, copied, child_depth))
+            elif kind is float:
+                if not _MATH_ISFINITE(child):
+                    return None
+                destination[key] = child
+            elif child is None or kind is str or kind is int or kind is bool:
+                destination[key] = child
+            else:
+                return None
+    return result
+
+
+def _candidate_review_direct_schema_dispatch(
+    schema: Any,
+) -> tuple[CoreSchemaOrFieldType, dict[str, Any] | None] | None:
+    """Select plain nodes only; unsupported shapes keep the reference, not a new limit."""
+
+    if (
+        type(schema) is not dict
+        or len(schema) > _SCHEMA_DISPATCH_MAX_KEYS
+        or any(type(key) is not str for key in schema)
+        or "ref" in schema
+        or "serialization" in schema
+    ):
+        return None
+    kind = schema.get("type")
+    if type(kind) is not str:
+        return None
+    metadata = schema.get("metadata", {})
+    if (
+        type(metadata) is not dict
+        or len(metadata) > 1
+        or any(type(key) is not str or key != "pydantic_js_updates" for key in metadata)
+    ):
+        return None
+    updates = metadata.get("pydantic_js_updates", {})
+    if (
+        type(updates) is not dict
+        or len(updates) > _SCHEMA_DISPATCH_MAX_KEYS
+        or any(type(key) is not str for key in updates)
+    ):
+        return None
+    # The reference decides whether to wrap updates before generating children, but
+    # reads that same dictionary after generation. Do not copy or retest it later.
+    return cast(CoreSchemaOrFieldType, kind), updates if updates else None
+
+
+class _CandidateReviewJsonSchemaGenerator(_PYDANTIC_JSON_SCHEMA_MODULE.GenerateJsonSchema):
+    """Generate fresh schemas with bounded, reference-equivalent local shortcuts."""
+
+    def generate_inner(self, schema: CoreSchemaOrField) -> JsonSchemaValue:
+        # Caller subclasses can customize dispatch/properties; preserve their reference path.
+        selected = (
+            _candidate_review_direct_schema_dispatch(schema)
+            if (
+                type(self) is _CandidateReviewJsonSchemaGenerator
+                or type(self) is _CandidateReviewHashJsonSchemaGenerator
+            )
+            else None
+        )
+        if selected is None:
+            return _PYDANTIC_JSON_SCHEMA_MODULE.GenerateJsonSchema.generate_inner(self, schema)
+        kind, updates = selected
+        method = self._schema_type_to_method.get(kind)
+        if method is None:
+            return _PYDANTIC_JSON_SCHEMA_MODULE.GenerateJsonSchema.generate_inner(self, schema)
+        generated = method(schema)
+        if updates is not None:
+            generated = {**generated, **updates}
+        # A child callback can introduce a reference or change the node type. Match
+        # the reference's final classification, self-ref avoidance and invalid-def cleanup.
+        if _PYDANTIC_CORE_UTILS_MODULE.is_core_schema(schema) and "ref" in schema:
+            core_ref = CoreRef(cast(dict[str, Any], schema)["ref"])
+            defs_ref, ref_schema = self.get_cache_defs_ref_schema(core_ref)
+            # Keep the reference's two-argument call for callback-returned dict subclasses.
+            missing_ref = None
+            if generated.get("$ref", missing_ref) != JsonRef(ref_schema["$ref"]):
+                self.definitions[defs_ref] = generated
+                self._core_defs_invalid_for_json_schema.pop(defs_ref, None)
+            generated = ref_schema
+        return generated
+
+    def _build_definitions_remapping(self) -> _DefinitionsRemapping:
+        remapping = _collision_free_schema_remapping(
+            self._prioritized_defsref_choices, self.definitions, self.ref_template
+        )
+        if remapping is not None:
+            return remapping
+        return _PYDANTIC_JSON_SCHEMA_MODULE.GenerateJsonSchema._build_definitions_remapping(self)
+
+
+class _CandidateReviewHashJsonSchemaGenerator(_CandidateReviewJsonSchemaGenerator):
+    """Copy fresh hash-only schemas without sorting keys that canonical hashing sorts later."""
+
+    def sort(self, value: JsonSchemaValue, parent_key: str | None = None) -> JsonSchemaValue:
+        if type(self) is _CandidateReviewHashJsonSchemaGenerator and (
+            parent_key is None or type(parent_key) is str
+        ):
+            copied = _copy_plain_schema_for_hash(value)
+            if copied is not None:
+                return copied
+        # Caller subclasses and custom inputs retain all reference comparisons and callbacks.
+        return _PYDANTIC_JSON_SCHEMA_MODULE.GenerateJsonSchema.sort(
+            self, value, parent_key=parent_key
+        )
+
+
 def _candidate_review_schema_inventory_sha256(models: tuple[type[BaseModel], ...]) -> str:
     """Regenerate every root with shared definitions; retain no cross-call schema cache."""
 
     roots, definitions = _PYDANTIC_JSON_SCHEMA_MODULE.models_json_schema(
-        [(model, "validation") for model in models]
+        [(model, "validation") for model in models],
+        schema_generator=_CandidateReviewHashJsonSchemaGenerator,
     )
     inventory = {
         "roots": [roots[(model, "validation")] for model in models],
@@ -1622,6 +1865,7 @@ def _candidate_review_schema_input_guard(
     pending: list[Any] = list(models)
     seen: set[int] = set()
     remaining_edges = 50_000
+    edge_value = itemgetter(1)
     while pending:
         value = pending.pop()
         if id(value) in seen:
@@ -1635,7 +1879,8 @@ def _candidate_review_schema_input_guard(
             remaining_edges -= len(value)
             items = tuple(value.items())
             mappings.append((value, items))
-            pending.extend(child for _key, child in items)
+            # Traverse the captured pairs, never a later view of the mutable dictionary.
+            pending.extend(_SCHEMA_INPUT_MAP(edge_value, items))
         elif type(value) in (list, tuple):
             if len(value) > remaining_edges:
                 return None
@@ -1661,22 +1906,23 @@ def _candidate_review_schema_input_guard(
                 )
             )
             classes.append((value, attributes))
-            pending.extend(child for _name, child in attributes)
+            pending.extend(_SCHEMA_INPUT_MAP(edge_value, attributes))
 
     def inputs_are_current() -> bool:
         for mapping, items in mappings:
-            if len(mapping) != len(items) or any(
-                key is not expected_key or value is not expected_value
-                for (key, value), (expected_key, expected_value) in zip(
-                    mapping.items(), items, strict=True
-                )
-            ):
+            if len(mapping) != len(items):
                 return False
+            for (key, value), (expected_key, expected_value) in zip(
+                mapping.items(), items, strict=True
+            ):
+                if key is not expected_key or value is not expected_value:
+                    return False
         for sequence, children in sequences:
-            if len(sequence) != len(children) or any(
-                value is not expected for value, expected in zip(sequence, children, strict=True)
-            ):
+            if len(sequence) != len(children):
                 return False
+            for value, expected in zip(sequence, children, strict=True):
+                if value is not expected:
+                    return False
         for model, attributes in classes:
             for name, expected in attributes:
                 current = getattr(model, name, None)
@@ -2384,7 +2630,11 @@ def _seal_candidate_review_protocol_pristine_guard() -> Callable[[], bool]:
         "_COPY_DEEPCOPY",
         "_PYDANTIC_JSON_SCHEMA_MODULE",
         "_PYDANTIC_MAIN_MODULE",
+        "_PYDANTIC_CORE_UTILS_MODULE",
+        "_PYDANTIC_SCHEMA_SHARED_MODULE",
         "FunctionType",
+        "cast",
+        "CoreSchemaOrFieldType",
         "_HASHLIB_SHA256",
         "_JSON_DECODE_ERROR",
         "_JSON_DUMPS",
@@ -2408,6 +2658,8 @@ def _seal_candidate_review_protocol_pristine_guard() -> Callable[[], bool]:
         "_STRICT_FRAME_JSON_DECODE",
         "_CANONICAL_JSON_DUMPS",
         "pairwise",
+        "itemgetter",
+        "_SCHEMA_INPUT_MAP",
         "Mapping",
         "Sequence",
         "BaseModel",
@@ -2444,6 +2696,22 @@ def _seal_candidate_review_protocol_pristine_guard() -> Callable[[], bool]:
         "_strict_schema_sha256",
         "_candidate_review_schema_inventory_sha256",
         "_candidate_review_schema_input_guard",
+        "_plain_schema_definitions",
+        "_collision_free_schema_remapping",
+        "_candidate_review_direct_schema_dispatch",
+        "_CandidateReviewJsonSchemaGenerator",
+        "_copy_plain_schema_for_hash",
+        "_CandidateReviewHashJsonSchemaGenerator",
+        "_DefinitionsRemapping",
+        "JsonRef",
+        "CoreRef",
+        "_SCHEMA_DISPATCH_MAX_KEYS",
+        "_SCHEMA_REMAPPING_MAX_DEFINITIONS",
+        "_SCHEMA_REMAPPING_MAX_ALIASES",
+        "_SCHEMA_REMAPPING_MAX_NODES",
+        "_SCHEMA_REMAPPING_MAX_DEPTH",
+        "_SCHEMA_REMAPPING_MAX_NAME_LENGTH",
+        "_SCHEMA_REMAPPING_REF_TEMPLATE",
         "_canonical_sha256",
         "_bytes_sha256",
         "_reject_duplicate_pairs",
@@ -2493,7 +2761,57 @@ def _seal_candidate_review_protocol_pristine_guard() -> Callable[[], bool]:
     single_model_renderer = getattr(_PYDANTIC_MAIN_MODULE, "model_json_schema", None)
     if not isinstance(single_model_renderer, FunctionType):
         raise RuntimeError("candidate-review single-model schema renderer is unsupported")
+    mode_descriptor = vars(_PYDANTIC_JSON_SCHEMA_MODULE.GenerateJsonSchema)["mode"]
+    if type(mode_descriptor) is not property or not isinstance(mode_descriptor.fget, FunctionType):
+        raise RuntimeError("candidate-review schema mode descriptor is unsupported")
+    field_types = _PYDANTIC_CORE_UTILS_MODULE._CORE_SCHEMA_FIELD_TYPES
+    if type(field_types) is not set or any(type(value) is not str for value in field_types):
+        raise RuntimeError("candidate-review schema field classification is unsupported")
+    trusted_field_types = frozenset(field_types)
     trusted_dependency_attributes = (
+        (_PYDANTIC_JSON_SCHEMA_MODULE, "_core_utils", _PYDANTIC_CORE_UTILS_MODULE),
+        (
+            _PYDANTIC_JSON_SCHEMA_MODULE,
+            "_schema_generation_shared",
+            _PYDANTIC_SCHEMA_SHARED_MODULE,
+        ),
+        (_PYDANTIC_CORE_UTILS_MODULE, "_CORE_SCHEMA_FIELD_TYPES", field_types),
+        (
+            _PYDANTIC_CORE_UTILS_MODULE,
+            "is_core_schema",
+            _PYDANTIC_CORE_UTILS_MODULE.is_core_schema,
+        ),
+        (
+            _PYDANTIC_CORE_UTILS_MODULE,
+            "is_core_schema_field",
+            _PYDANTIC_CORE_UTILS_MODULE.is_core_schema_field,
+        ),
+        (
+            _PYDANTIC_SCHEMA_SHARED_MODULE,
+            "GenerateJsonSchemaHandler",
+            _PYDANTIC_SCHEMA_SHARED_MODULE.GenerateJsonSchemaHandler,
+        ),
+        (
+            _PYDANTIC_SCHEMA_SHARED_MODULE.GenerateJsonSchemaHandler,
+            "__init__",
+            _PYDANTIC_SCHEMA_SHARED_MODULE.GenerateJsonSchemaHandler.__init__,
+        ),
+        (
+            _PYDANTIC_SCHEMA_SHARED_MODULE.GenerateJsonSchemaHandler,
+            "__call__",
+            _PYDANTIC_SCHEMA_SHARED_MODULE.GenerateJsonSchemaHandler.__call__,
+        ),
+        (_PYDANTIC_JSON_SCHEMA_MODULE.GenerateJsonSchema, "mode", mode_descriptor),
+        (
+            _PYDANTIC_JSON_SCHEMA_MODULE.GenerateJsonSchema,
+            "generate_inner",
+            _PYDANTIC_JSON_SCHEMA_MODULE.GenerateJsonSchema.generate_inner,
+        ),
+        (
+            _PYDANTIC_JSON_SCHEMA_MODULE.GenerateJsonSchema,
+            "get_cache_defs_ref_schema",
+            _PYDANTIC_JSON_SCHEMA_MODULE.GenerateJsonSchema.get_cache_defs_ref_schema,
+        ),
         (
             _PYDANTIC_MAIN_MODULE,
             "model_json_schema",
@@ -2519,6 +2837,33 @@ def _seal_candidate_review_protocol_pristine_guard() -> Callable[[], bool]:
             "generate_definitions",
             _PYDANTIC_JSON_SCHEMA_MODULE.GenerateJsonSchema.generate_definitions,
         ),
+        (
+            _PYDANTIC_JSON_SCHEMA_MODULE.GenerateJsonSchema,
+            "sort",
+            _PYDANTIC_JSON_SCHEMA_MODULE.GenerateJsonSchema.sort,
+        ),
+        (
+            _PYDANTIC_JSON_SCHEMA_MODULE.GenerateJsonSchema,
+            "_sort_recursive",
+            _PYDANTIC_JSON_SCHEMA_MODULE.GenerateJsonSchema._sort_recursive,
+        ),
+        (
+            _PYDANTIC_JSON_SCHEMA_MODULE.GenerateJsonSchema,
+            "_build_definitions_remapping",
+            _PYDANTIC_JSON_SCHEMA_MODULE.GenerateJsonSchema._build_definitions_remapping,
+        ),
+        (_PYDANTIC_JSON_SCHEMA_MODULE, "_DefinitionsRemapping", _DefinitionsRemapping),
+        (_PYDANTIC_JSON_SCHEMA_MODULE, "JsonRef", JsonRef),
+        (_PYDANTIC_JSON_SCHEMA_MODULE, "CoreRef", CoreRef),
+        (_DefinitionsRemapping, "__init__", _DefinitionsRemapping.__init__),
+        (
+            _DefinitionsRemapping,
+            "from_prioritized_choices",
+            _DefinitionsRemapping.from_prioritized_choices,
+        ),
+        (_DefinitionsRemapping, "remap_defs_ref", _DefinitionsRemapping.remap_defs_ref),
+        (_DefinitionsRemapping, "remap_json_ref", _DefinitionsRemapping.remap_json_ref),
+        (_DefinitionsRemapping, "remap_json_schema", _DefinitionsRemapping.remap_json_schema),
         (copy, "deepcopy", _COPY_DEEPCOPY),
         (hashlib, "sha256", _HASHLIB_SHA256),
         (json, "JSONDecodeError", _JSON_DECODE_ERROR),
@@ -2578,9 +2923,32 @@ def _seal_candidate_review_protocol_pristine_guard() -> Callable[[], bool]:
     rendering_functions = (
         model_renderer,
         single_model_renderer,
+        cast,
+        mode_descriptor.fget,
+        _PYDANTIC_CORE_UTILS_MODULE.is_core_schema,
+        _PYDANTIC_CORE_UTILS_MODULE.is_core_schema_field,
+        _PYDANTIC_SCHEMA_SHARED_MODULE.GenerateJsonSchemaHandler.__init__,
+        _PYDANTIC_SCHEMA_SHARED_MODULE.GenerateJsonSchemaHandler.__call__,
+        _PYDANTIC_JSON_SCHEMA_MODULE.GenerateJsonSchema.generate_inner,
+        _PYDANTIC_JSON_SCHEMA_MODULE.GenerateJsonSchema.get_cache_defs_ref_schema,
         _PYDANTIC_JSON_SCHEMA_MODULE.models_json_schema,
         _PYDANTIC_JSON_SCHEMA_MODULE.GenerateJsonSchema.generate,
         _PYDANTIC_JSON_SCHEMA_MODULE.GenerateJsonSchema.generate_definitions,
+        _PYDANTIC_JSON_SCHEMA_MODULE.GenerateJsonSchema.sort,
+        _PYDANTIC_JSON_SCHEMA_MODULE.GenerateJsonSchema._sort_recursive,
+        _PYDANTIC_JSON_SCHEMA_MODULE.GenerateJsonSchema._build_definitions_remapping,
+        _DefinitionsRemapping.__init__,
+        _DefinitionsRemapping.from_prioritized_choices,
+        _DefinitionsRemapping.remap_defs_ref,
+        _DefinitionsRemapping.remap_json_ref,
+        _DefinitionsRemapping.remap_json_schema,
+        _plain_schema_definitions,
+        _collision_free_schema_remapping,
+        _candidate_review_direct_schema_dispatch,
+        _CandidateReviewJsonSchemaGenerator.generate_inner,
+        _CandidateReviewJsonSchemaGenerator._build_definitions_remapping,
+        _copy_plain_schema_for_hash,
+        _CandidateReviewHashJsonSchemaGenerator.sort,
     )
     rendering_states = tuple(
         (
@@ -2600,6 +2968,13 @@ def _seal_candidate_review_protocol_pristine_guard() -> Callable[[], bool]:
             descriptor_surface(model),
         )
         for model in models
+    )
+    generator_states = tuple(
+        (generator, tuple(vars(generator).items()), generator.__bases__)
+        for generator in (
+            _CandidateReviewJsonSchemaGenerator,
+            _CandidateReviewHashJsonSchemaGenerator,
+        )
     )
     trusted_schema_inventory = _candidate_review_schema_inventory_sha256
     trusted_schema_input_guard = _candidate_review_schema_input_guard
@@ -2633,6 +3008,10 @@ def _seal_candidate_review_protocol_pristine_guard() -> Callable[[], bool]:
             for module, name, trusted in trusted_dependency_attributes
         ):
             return False
+        if len(field_types) != len(trusted_field_types) or any(
+            type(value) is not str or value not in trusted_field_types for value in field_types
+        ):
+            return False
         if len(_FRAME_MODELS) != len(trusted_frame_models) or any(
             _FRAME_MODELS.get(phase) is not model for phase, model in trusted_frame_models
         ):
@@ -2640,6 +3019,14 @@ def _seal_candidate_review_protocol_pristine_guard() -> Callable[[], bool]:
         return not any(globals().get(name) is not value for name, value in trusted_constants)
 
     def model_inputs_are_current() -> bool:
+        for generator, attributes, bases in generator_states:
+            current_attributes = vars(generator)
+            if (
+                generator.__bases__ is not bases
+                or len(current_attributes) != len(attributes)
+                or any(current_attributes.get(name) is not value for name, value in attributes)
+            ):
+                return False
         for function, code, defaults, kwdefaults, keyword_items in rendering_states:
             current_keywords = function.__kwdefaults__
             if (

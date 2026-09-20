@@ -261,14 +261,14 @@ def test_raw_label_formatting_is_preserved_only_when_its_explicit_pin_matches():
     assert DevelopmentCorpusBenchmarkBinding.model_validate_json(other.model_dump_json()) == other
 
 
-def test_expanded_weight_ratio_covers_the_full_1024_critical_claim_bound():
+def test_expanded_weight_ratio_covers_the_full_4096_critical_claim_bound():
     ratio = DevelopmentCorpusMeasurementRatio(
-        numerator=10240, denominator=10240, state="OBSERVED", value=1.0
+        numerator=40960, denominator=40960, state="OBSERVED", value=1.0
     )
     assert ratio.value == 1
     with pytest.raises(ValueError):
         DevelopmentCorpusMeasurementRatio(
-            numerator=10241, denominator=10241, state="OBSERVED", value=1.0
+            numerator=40961, denominator=40961, state="OBSERVED", value=1.0
         )
 
 

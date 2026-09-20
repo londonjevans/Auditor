@@ -1,0 +1,38 @@
+{
+  "scope": "Synthetic pre-CONTEXTSRC retained version1.9 golden; not provider or real-audit evidence.",
+  "manifest_sha256": "e2ae39c04d19763116476b63948fb6d94d0d733457deebba31ca1586bb7dac4e",
+  "candidate_plan_sha256": "400c5bbdf6a92fbc195b5796b1ec6c013214b98a0c19595389eb0d59dcdcb9fe",
+  "ensemble_plan_sha256": "f7c95a52d1f8d052d96847aeb58f0a6b5e58057d4b261d06f3614de5124b0c54",
+  "requests": [
+    {
+      "shard_id": "file-0001",
+      "request_sha256": "62632473030c578b93a485ab1ee0c2921d5dc308852ad2811c3b2838b8946fc7",
+      "request_bytes": 45220
+    },
+    {
+      "shard_id": "file-0002",
+      "request_sha256": "efd2042d02b1f2d13c7297b7e2539fb45d6674939988a22be4b2aa9104ddeb0e",
+      "request_bytes": 45590
+    },
+    {
+      "shard_id": "file-0003",
+      "request_sha256": "f6678345ee906482f7569475a86067e69e8c3c2b20e6c244f4071ca498298d7f",
+      "request_bytes": 45236
+    },
+    {
+      "shard_id": "file-0004",
+      "request_sha256": "a237bd0c80214dbc040a44f23515be1b90107b14ebc7014c739f03e6d930cc4e",
+      "request_bytes": 45788
+    },
+    {
+      "shard_id": "file-0005",
+      "request_sha256": "c4e86638f08145d6ee46510526427804708c5db721ad528b0b4fe9b4907a1913",
+      "request_bytes": 45546
+    }
+  ],
+  "upstream_file_sha256s": {
+    "candidate/plan.json": "f478d3dadf9f0689c3ed39cbfb2121ac1316cefb9f4f53daca787aaed8b58bf6",
+    "candidate/sources.json": "f1738ad6f23834bdd61a8eb9597945672b996baf615da7860beefdb0b262203d",
+    "plan.json": "d37cda3624a1b928e4917e91327230105bf25014fe75ddb9ec0a823a67d91489"
+  }
+}

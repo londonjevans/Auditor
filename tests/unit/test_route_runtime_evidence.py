@@ -48,6 +48,7 @@ from mmaudit.models.route_constraints import (
     ProviderPriceCapAlgorithm,
     RouteConstraintError,
     RouteConstraintPurpose,
+    RouteCostReservationPolicy,
     RoutePredicateDisposition,
     RoutePredicateId,
     RoutePredicateProfile,
@@ -70,6 +71,7 @@ from mmaudit.models.route_runtime_evidence import (
     runtime_predicate_transition_reasons,
     verify_route_runtime_evidence,
 )
+from mmaudit.models.runtime import build_reasoning_policy
 from mmaudit.models.schemas import StructuredOutputEvidence, UsageRecord
 from mmaudit.models.token_planning import (
     RequestTokenPlan,
@@ -160,8 +162,10 @@ def _route_bound_model(model: CandidateModel, role: ExactRouteRole) -> Candidate
 
 def _route_bound_smoke_bundle(
     monkeypatch: pytest.MonkeyPatch,
+    *,
+    retry_policy: ModelRetryPolicy | None = None,
 ) -> AuthenticatedRunnerSmokeEvidenceBundle:
-    source = smoke_fixtures._sealed_current_smoke_bundle(monkeypatch)
+    source = smoke_fixtures._sealed_current_smoke_bundle(monkeypatch, retry_policy=retry_policy)
     runs = []
     for run in source.runs:
         judge_role = (
@@ -395,6 +399,7 @@ def _launch_bound_native_smoke_bundle(
     *,
     candidate_native: bool = True,
     observed_age: timedelta = timedelta(minutes=10),
+    operator_reservation: bool = False,
 ) -> tuple[
     AuthenticatedRunnerSmokeEvidenceBundle,
     tuple[_RouteSubject, ...],
@@ -402,9 +407,26 @@ def _launch_bound_native_smoke_bundle(
 ]:
     route_directory = tmp_path / "runtime-routes"
     route_directory.mkdir()
+    config = smoke_fixtures._smoke_config(config_factory)
+    profile = None
+    if operator_reservation:
+        reasoning = build_reasoning_policy(config)
+        role = reasoning.role_policy_for_request("model_benchmark")
+        profile = RoutePredicateProfile.build(
+            reasoning_policy_sha256=reasoning.artifact_sha256,
+            reasoning_role_profile_sha256=reasoning.role_profile.profile_sha256,
+            reasoning_role_binding_sha256=role.binding_sha256,
+            reasoning_control_profile_sha256=role.control.profile_sha256,
+            reserved_reasoning_tokens=4096,
+            minimum_prompt_tokens=65536,
+            required_output_tokens=4096,
+            minimum_context_tokens=73728,
+            operator_reservation_policy=RouteCostReservationPolicy.build(),
+        )
     launch = smoke_fixtures._launch(
-        config=smoke_fixtures._smoke_config(config_factory),
+        config=config,
         tmp_path=route_directory,
+        route_predicate_profile=profile,
     )
     raw_routes = (
         (
@@ -658,6 +680,56 @@ def _policy(*, maximum_age_days: int = 7) -> QualificationPolicy:
         maximum_validity_days=source.maximum_validity_days,
         maximum_benchmark_evidence_age_days=maximum_age_days,
     )
+
+
+@pytest.fixture
+def split_retry_runtime_artifact(monkeypatch: pytest.MonkeyPatch) -> RouteRuntimeEvidenceArtifact:
+    bundle = _route_bound_smoke_bundle(monkeypatch, retry_policy=smoke_fixtures._SMOKE_RETRY_POLICY)
+    assert bundle.schema_version == "1.3"
+    return build_route_runtime_evidence_artifact(
+        smoke_bundle=bundle, qualification_policy=_policy()
+    )
+
+
+def test_current_split_retry_bundle_has_an_exact_versioned_runtime_source(
+    split_retry_runtime_artifact: RouteRuntimeEvidenceArtifact,
+) -> None:
+    artifact = split_retry_runtime_artifact
+    assert artifact.schema_version == "1.1"
+    assert artifact.source_kind == "AUTHENTICATED_RUNNER_NONCREDITING_SMOKE_V1_3"
+    raw = route_runtime_evidence_bytes(artifact)
+    assert revalidate_route_runtime_evidence_bytes(raw) == artifact
+    assert not artifact.runner_custody_authorized and not artifact.campaign_admission_authorized
+    assert not artifact.model_qualification_authorized and not artifact.release_authorized
+
+
+@pytest.mark.parametrize(
+    "field", ("schema_version", "source_kind", "both", "provider_call_authorized")
+)
+def test_current_runtime_source_rejects_coherent_version_or_authority_relabel(
+    split_retry_runtime_artifact: RouteRuntimeEvidenceArtifact, field: str
+) -> None:
+    payload = split_retry_runtime_artifact.model_dump(mode="json", exclude={"artifact_sha256"})
+    if field in {"schema_version", "both"}:
+        payload["schema_version"] = "1.0"
+    if field in {"source_kind", "both"}:
+        payload["source_kind"] = "AUTHENTICATED_RUNNER_NONCREDITING_SMOKE_V1_2"
+    if field == "provider_call_authorized":
+        payload[field] = True
+    payload["artifact_sha256"] = canonical_sha256(payload)
+    with pytest.raises(ValidationError, match=r"exact version binding|no authority or credit"):
+        RouteRuntimeEvidenceArtifact.model_validate_json(json.dumps(payload))
+
+
+def test_legacy_runtime_artifact_retains_its_exact_source_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifact = build_route_runtime_evidence_artifact(
+        smoke_bundle=_route_bound_smoke_bundle(monkeypatch), qualification_policy=_policy()
+    )
+    assert artifact.schema_version == "1.0"
+    assert artifact.source_kind == "AUTHENTICATED_RUNNER_NONCREDITING_SMOKE_V1_2"
+    assert artifact.source_bundle.schema_version == "1.2"
 
 
 def _artifact(

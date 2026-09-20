@@ -18,6 +18,9 @@ from mmaudit.benchmark.development import (
 )
 from mmaudit.models.development_audit import _AuditArtifact
 from mmaudit.models.development_corpus import (
+    DEVELOPMENT_CORPUS_CLAIM_PATTERN,
+    MAX_DEVELOPMENT_CORPUS_CLAIMS,
+    MAX_DEVELOPMENT_CORPUS_FILES,
     MAX_DEVELOPMENT_CORPUS_RESULT_BYTES,
     DevelopmentCorpusManifest,
     DevelopmentCorpusObservation,
@@ -34,14 +37,14 @@ from mmaudit.repository.redaction import detect_secrets
 MAX_DEVELOPMENT_CORPUS_TRUTH_BYTES = 2_000_000
 MAX_DEVELOPMENT_CORPUS_SCORE_BYTES = 32_000_000
 _SHA = r"^[0-9a-f]{64}$"
-_CLAIM = r"^file-00(?:0[1-9]|[1-5][0-9]|6[0-4]):(?:0[1-9]|1[0-6])$"
+_CLAIM = DEVELOPMENT_CORPUS_CLAIM_PATTERN
 
 
 class DevelopmentCorpusTruthControl(DevelopmentTruthControl):
     origin: DevelopmentCorpusRootCauseReference
     required_origin_line: int = Field(ge=1, le=10_000)
     claim_sites: tuple[DevelopmentCorpusRootCauseReference, ...] = Field(
-        min_length=1, max_length=64
+        min_length=1, max_length=MAX_DEVELOPMENT_CORPUS_FILES
     )
 
 
@@ -143,8 +146,8 @@ def bind_development_corpus_benchmark(
 
 
 class DevelopmentCorpusMeasurementRatio(DevelopmentMeasurementRatio):
-    numerator: int = Field(ge=0, le=10_240)
-    denominator: int = Field(ge=0, le=10_240)
+    numerator: int = Field(ge=0, le=MAX_DEVELOPMENT_CORPUS_CLAIMS * 10)
+    denominator: int = Field(ge=0, le=MAX_DEVELOPMENT_CORPUS_CLAIMS * 10)
 
 
 def _ratio(
@@ -167,13 +170,13 @@ class DevelopmentCorpusClaimMeasurement(DevelopmentClaimMeasurement):
 
 
 class DevelopmentCorpusBenchmarkSummary(DevelopmentBenchmarkSummary):
-    total_claim_count: int = Field(ge=0, le=1024)
-    invariant_claim_count: int = Field(ge=0, le=1024)
-    advisory_claim_count: int = Field(ge=0, le=1024)
-    advisories_at_planted_sites_count: int = Field(ge=0, le=1024)
-    duplicate_claim_count: int = Field(ge=0, le=1024)
-    unmatched_invariant_claim_count: int = Field(ge=0, le=1024)
-    guarded_control_claim_count: int = Field(ge=0, le=1024)
+    total_claim_count: int = Field(ge=0, le=MAX_DEVELOPMENT_CORPUS_CLAIMS)
+    invariant_claim_count: int = Field(ge=0, le=MAX_DEVELOPMENT_CORPUS_CLAIMS)
+    advisory_claim_count: int = Field(ge=0, le=MAX_DEVELOPMENT_CORPUS_CLAIMS)
+    advisories_at_planted_sites_count: int = Field(ge=0, le=MAX_DEVELOPMENT_CORPUS_CLAIMS)
+    duplicate_claim_count: int = Field(ge=0, le=MAX_DEVELOPMENT_CORPUS_CLAIMS)
+    unmatched_invariant_claim_count: int = Field(ge=0, le=MAX_DEVELOPMENT_CORPUS_CLAIMS)
+    guarded_control_claim_count: int = Field(ge=0, le=MAX_DEVELOPMENT_CORPUS_CLAIMS)
     expected_root_ids: tuple[str, ...] = Field(max_length=1024)
     matched_root_ids: tuple[str, ...] = Field(max_length=1024)
     unmatched_expected_root_ids: tuple[str, ...] = Field(max_length=1024)
@@ -184,23 +187,23 @@ class DevelopmentCorpusBenchmarkSummary(DevelopmentBenchmarkSummary):
     all_claim_unique_root_fraction: DevelopmentCorpusMeasurementRatio
     severity_weighted_structural_precision: DevelopmentCorpusMeasurementRatio
     first_attempt_shard_completion: DevelopmentCorpusMeasurementRatio
-    unobserved_shard_ids: tuple[str, ...] = Field(max_length=64)
-    missing_accounting_shard_ids: tuple[str, ...] = Field(max_length=64)
-    unknown_actual_cost_shard_ids: tuple[str, ...] = Field(max_length=64)
-    missing_shard_runtime_ids: tuple[str, ...] = Field(max_length=64)
+    unobserved_shard_ids: tuple[str, ...] = Field(max_length=MAX_DEVELOPMENT_CORPUS_FILES)
+    missing_accounting_shard_ids: tuple[str, ...] = Field(max_length=MAX_DEVELOPMENT_CORPUS_FILES)
+    unknown_actual_cost_shard_ids: tuple[str, ...] = Field(max_length=MAX_DEVELOPMENT_CORPUS_FILES)
+    missing_shard_runtime_ids: tuple[str, ...] = Field(max_length=MAX_DEVELOPMENT_CORPUS_FILES)
 
 
 class DevelopmentCorpusClaimSummary(_DevelopmentModel):
     """Shared structural measurements, independent of first-attempt or cumulative accounting."""
 
     quality_scope: Literal["COMPLETE_OBSERVATIONS", "INCOMPLETE_OBSERVATIONS"]
-    total_claim_count: int = Field(ge=0, le=1024)
-    invariant_claim_count: int = Field(ge=0, le=1024)
-    advisory_claim_count: int = Field(ge=0, le=1024)
-    advisories_at_planted_sites_count: int = Field(ge=0, le=1024)
-    duplicate_claim_count: int = Field(ge=0, le=1024)
-    unmatched_invariant_claim_count: int = Field(ge=0, le=1024)
-    guarded_control_claim_count: int = Field(ge=0, le=1024)
+    total_claim_count: int = Field(ge=0, le=MAX_DEVELOPMENT_CORPUS_CLAIMS)
+    invariant_claim_count: int = Field(ge=0, le=MAX_DEVELOPMENT_CORPUS_CLAIMS)
+    advisory_claim_count: int = Field(ge=0, le=MAX_DEVELOPMENT_CORPUS_CLAIMS)
+    advisories_at_planted_sites_count: int = Field(ge=0, le=MAX_DEVELOPMENT_CORPUS_CLAIMS)
+    duplicate_claim_count: int = Field(ge=0, le=MAX_DEVELOPMENT_CORPUS_CLAIMS)
+    unmatched_invariant_claim_count: int = Field(ge=0, le=MAX_DEVELOPMENT_CORPUS_CLAIMS)
+    guarded_control_claim_count: int = Field(ge=0, le=MAX_DEVELOPMENT_CORPUS_CLAIMS)
     expected_root_ids: tuple[str, ...] = Field(max_length=1024)
     matched_root_ids: tuple[str, ...] = Field(max_length=1024)
     unmatched_expected_root_ids: tuple[str, ...] = Field(max_length=1024)
@@ -350,7 +353,9 @@ class DevelopmentCorpusBenchmarkScore(_AuditArtifact):
     binding: DevelopmentCorpusBenchmarkBinding
     observation: DevelopmentCorpusObservation
     observation_sha256: str = Field(pattern=_SHA)
-    claims: tuple[DevelopmentCorpusClaimMeasurement, ...] = Field(max_length=1024)
+    claims: tuple[DevelopmentCorpusClaimMeasurement, ...] = Field(
+        max_length=MAX_DEVELOPMENT_CORPUS_CLAIMS
+    )
     summary: DevelopmentCorpusBenchmarkSummary
 
     @model_validator(mode="after")

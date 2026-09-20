@@ -1,0 +1,9 @@
+{
+  "synthetic_only": true,
+  "description": "Independently assembled wire fixture; no real chain, publication or trusted height.",
+  "document_ascii": "mmaudit synthetic timestamp fixture - no chain authority",
+  "file_sha256": "a9ffbfedce90ff496d1238a006d7335855554a1838e2bd0b47d43917ba1ceead",
+  "root_hex": "a60610289af8fbe3e93b6ac083088b9f62305b1b9e7bd13d0415e3c0a44f0a3c",
+  "claimed_height": 321,
+  "proof_hex": "004f70656e54696d657374616d7073000050726f6f6600bf89e2e884e892940108a9ffbfedce90ff496d1238a006d7335855554a1838e2bd0b47d43917ba1ceeadf00f73796e7468657469632d6e6f6e636508f1077369626c696e6708000588960d73d7190102c102"
+}

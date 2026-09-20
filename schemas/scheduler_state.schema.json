@@ -3545,6 +3545,118 @@
       "title": "SchedulerTruncationRecoveryCostDisposition",
       "type": "string"
     },
+    "SchedulerTruncationRecoveryFullTreeBinding": {
+      "additionalProperties": false,
+      "description": "Bounded full-tree identities; only original journal replay proves their ancestry.",
+      "properties": {
+        "bridge_result_sha256s": {
+          "items": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "maxItems": 15,
+          "minItems": 1,
+          "title": "Bridge Result Sha256S",
+          "type": "array",
+          "uniqueItems": true
+        },
+        "child_result_sha256s": {
+          "items": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "maxItems": 32,
+          "minItems": 4,
+          "title": "Child Result Sha256S",
+          "type": "array",
+          "uniqueItems": true
+        },
+        "completion_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Completion Authorized",
+          "type": "boolean"
+        },
+        "coverage_credit_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Coverage Credit Authorized",
+          "type": "boolean"
+        },
+        "evidence_authority": {
+          "const": "comparison_required",
+          "default": "comparison_required",
+          "title": "Evidence Authority",
+          "type": "string"
+        },
+        "family_closure_sha256s": {
+          "items": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "maxItems": 16,
+          "minItems": 2,
+          "title": "Family Closure Sha256S",
+          "type": "array",
+          "uniqueItems": true
+        },
+        "family_root_sha256s": {
+          "items": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "maxItems": 16,
+          "minItems": 2,
+          "title": "Family Root Sha256S",
+          "type": "array",
+          "uniqueItems": true
+        },
+        "leaf_result_sha256s": {
+          "items": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "maxItems": 32,
+          "minItems": 3,
+          "title": "Leaf Result Sha256S",
+          "type": "array",
+          "uniqueItems": true
+        },
+        "provider_dispatch_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Provider Dispatch Authorized",
+          "type": "boolean"
+        },
+        "release_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Release Authorized",
+          "type": "boolean"
+        },
+        "review_credit_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Review Credit Authorized",
+          "type": "boolean"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "family_root_sha256s",
+        "family_closure_sha256s",
+        "child_result_sha256s",
+        "bridge_result_sha256s",
+        "leaf_result_sha256s"
+      ],
+      "title": "SchedulerTruncationRecoveryFullTreeBinding",
+      "type": "object"
+    },
     "SchedulerTruncationRecoveryModelRequestEvidence": {
       "additionalProperties": false,
       "allOf": [
@@ -3673,7 +3785,10 @@
           "if": {
             "properties": {
               "schema_version": {
-                "const": "1.2"
+                "enum": [
+                  "1.2",
+                  "1.4"
+                ]
               }
             },
             "required": [
@@ -4023,7 +4138,10 @@
                 "not": {
                   "properties": {
                     "schema_version": {
-                      "const": "1.2"
+                      "enum": [
+                        "1.2",
+                        "1.4"
+                      ]
                     }
                   },
                   "required": [
@@ -4047,6 +4165,81 @@
             "not": {
               "required": [
                 "promotion_entry_sha256"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "schema_version": {
+                "const": "1.4"
+              }
+            },
+            "required": [
+              "schema_version"
+            ]
+          },
+          "then": {
+            "else": {
+              "not": {
+                "required": [
+                  "specialist_accepted_outcome_sha256"
+                ]
+              }
+            },
+            "if": {
+              "properties": {
+                "terminal_status": {
+                  "const": "SUCCEEDED"
+                }
+              },
+              "required": [
+                "terminal_status"
+              ]
+            },
+            "properties": {
+              "role": {
+                "enum": [
+                  "specialist:access_control",
+                  "specialist:accounting_invariant",
+                  "specialist:amm_dex_liquidity",
+                  "specialist:cross_chain_bridge",
+                  "specialist:denial_of_service_griefing",
+                  "specialist:dependency_supply_chain",
+                  "specialist:economic_game_theory",
+                  "specialist:erc4626_vault",
+                  "specialist:false_negative_hunter",
+                  "specialist:formal_methods_property",
+                  "specialist:governance_timelock",
+                  "specialist:initialization_deployment",
+                  "specialist:lending_liquidation",
+                  "specialist:mev_ordering",
+                  "specialist:oracle_price_manipulation",
+                  "specialist:precision_rounding",
+                  "specialist:randomness_entropy_commit_reveal",
+                  "specialist:reentrancy_control_flow",
+                  "specialist:signature_permit_replay",
+                  "specialist:state_machine_lifecycle",
+                  "specialist:token_standard",
+                  "specialist:upgradeability_storage"
+                ]
+              }
+            },
+            "required": [
+              "role",
+              "terminal_status"
+            ],
+            "then": {
+              "properties": {
+                "specialist_accepted_outcome_sha256": {
+                  "not": {
+                    "type": "null"
+                  }
+                }
+              },
+              "required": [
+                "specialist_accepted_outcome_sha256"
               ]
             }
           }
@@ -4613,7 +4806,8 @@
             "1.0",
             "1.1",
             "1.2",
-            "1.3"
+            "1.3",
+            "1.4"
           ],
           "title": "Schema Version",
           "type": "string"
@@ -4819,6 +5013,37 @@
               "promoted_leaf_result_sha256s"
             ]
           }
+        },
+        {
+          "else": {
+            "not": {
+              "required": [
+                "full_tree_binding"
+              ]
+            }
+          },
+          "if": {
+            "properties": {
+              "schema_version": {
+                "const": "1.2"
+              }
+            },
+            "required": [
+              "schema_version"
+            ]
+          },
+          "then": {
+            "properties": {
+              "full_tree_binding": {
+                "not": {
+                  "type": "null"
+                }
+              }
+            },
+            "required": [
+              "full_tree_binding"
+            ]
+          }
         }
       ],
       "description": "Hash-only public binding to one private recovery promotion.",
@@ -4867,6 +5092,17 @@
           "default": "comparison_required",
           "title": "Evidence Authority",
           "type": "string"
+        },
+        "full_tree_binding": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SchedulerTruncationRecoveryFullTreeBinding"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "nested_child_result_sha256s": {
           "anyOf": [
@@ -5029,7 +5265,8 @@
           "default": "1.0",
           "enum": [
             "1.0",
-            "1.1"
+            "1.1",
+            "1.2"
           ],
           "title": "Schema Version",
           "type": "string"

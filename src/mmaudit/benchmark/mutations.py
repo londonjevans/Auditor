@@ -9,16 +9,36 @@ import re
 import stat
 import threading
 import weakref
+from bisect import bisect_right
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, ExitStack, contextmanager, suppress
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
-from typing import Any, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from pydantic import Field, field_validator, model_validator
 
-from mmaudit.models.schemas import ExecutionEvidenceKind, StrictModel
+from mmaudit.benchmark.mutation_discovery import (
+    PortfolioDiscoveryLimits,
+    PortfolioMutationDiscovery,
+    discover_portfolio_mutations,
+)
+from mmaudit.benchmark.mutation_portfolio import (
+    REQUIRED_SECURITY_MUTATION_CLASSES,
+    PortfolioSourceMutationSpec,
+    SecurityMutationClass,
+    mutate_portfolio_source,
+    restore_portfolio_source,
+)
+from mmaudit.models.schemas import (
+    ExecutionEvidenceKind,
+    FoundryInvariantHarnessSpec,
+    PropertyCorpus,
+    RepositorySuiteInventoryEvidence,
+    RepositorySuiteInventoryPhase,
+    StrictModel,
+)
 from mmaudit.repository.ignore import normalize_relative_path
 from mmaudit.repository.workspace import (
     DEFAULT_MAX_WORKSPACE_DEPTH,
@@ -35,6 +55,10 @@ from mmaudit.scanners.runtime_evidence import (
     _ProcessLocalRevocationLease,
     _RevocationLeaseUnavailable,
 )
+from mmaudit.solidity.properties import FoundryPropertyTestMapping, bind_compiled_property_tests
+
+if TYPE_CHECKING:
+    from mmaudit.scanners.foundry_inventory_runner import FoundryInventoryRunResult
 
 _MAX_MUTATION_FILES = 100_000
 _MAX_MUTATION_REMOVAL_DEPTH = DEFAULT_MAX_WORKSPACE_DEPTH + 2
@@ -157,6 +181,9 @@ class SourceMutationSpec(StrictModel):
         return self
 
 
+type MutationSpecification = SourceMutationSpec | PortfolioSourceMutationSpec
+
+
 class MutationApplicabilityBinding(StrictModel):
     """One independently declared property/mutation denominator member."""
 
@@ -178,7 +205,7 @@ class MutationApplicabilityBinding(StrictModel):
 
 
 class MutationNonApplicabilityReason(StrEnum):
-    """Typed reason that a declared candidate does not challenge one property."""
+    """Reason for a manual exclusion or an unresolved automatic property mapping."""
 
     PROPERTY_SCOPE_MISMATCH = "property_scope_mismatch"
     NO_EXECUTABLE_ASSERTION = "no_executable_assertion"
@@ -186,7 +213,7 @@ class MutationNonApplicabilityReason(StrEnum):
 
 
 class MutationNonApplicabilityRecord(StrictModel):
-    """Explicitly exclude one considered candidate/property pair from the denominator."""
+    """Record a manual exclusion or an automatic gap that stays in the score denominator."""
 
     property_id: str = Field(pattern=r"^prop-[0-9a-f]{24}$")
     mutation_id: str = Field(pattern=r"^mut-[a-z0-9][a-z0-9-]{0,75}$")
@@ -211,7 +238,7 @@ class MutationKindInventoryStatus(StrEnum):
 class MutationKindAccounting(StrictModel):
     """Exact candidate accounting for one implemented mutation kind."""
 
-    kind: MutationKind
+    kind: MutationKind | SecurityMutationClass
     status: MutationKindInventoryStatus
     candidate_count: int = Field(ge=0, le=100_000)
     candidate_ids: list[str] = Field(default_factory=list, max_length=100_000)
@@ -249,22 +276,33 @@ class MutationKindAccounting(StrictModel):
 class MutationApplicabilityPlan(StrictModel):
     """Hash-bound source mutations and property pairs that define the score denominator."""
 
-    schema_version: Literal["1.1"] = "1.1"
-    portfolio_scope: Literal["implemented_five_class_subset"] = "implemented_five_class_subset"
+    schema_version: Literal["1.1", "2.0"] = "1.1"
+    portfolio_scope: Literal["implemented_five_class_subset", "required_eleven_class"] = (
+        "implemented_five_class_subset"
+    )
     property_corpus_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
     source_repository_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     approved_executor_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     approved_isolation_policy_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     property_repositories: dict[str, str] = Field(min_length=1, max_length=10_000)
-    specifications: list[SourceMutationSpec] = Field(min_length=1, max_length=100_000)
-    bindings: list[MutationApplicabilityBinding] = Field(min_length=1, max_length=100_000)
+    specifications: list[MutationSpecification] = Field(min_length=1, max_length=100_000)
+    bindings: list[MutationApplicabilityBinding] = Field(max_length=100_000)
     non_applicability: list[MutationNonApplicabilityRecord] = Field(
         default_factory=list,
         max_length=100_000,
     )
     kind_accounting: list[MutationKindAccounting] = Field(
         min_length=len(IMPLEMENTED_MUTATION_KINDS),
-        max_length=len(IMPLEMENTED_MUTATION_KINDS),
+        max_length=len(REQUIRED_SECURITY_MUTATION_CLASSES),
+    )
+    discovery: PortfolioMutationDiscovery | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    compiler_inventory: RepositorySuiteInventoryEvidence | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    property_tests: FoundryPropertyTestMapping | None = Field(
+        default=None, exclude_if=lambda value: value is None
     )
     plan_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
@@ -285,6 +323,29 @@ class MutationApplicabilityPlan(StrictModel):
 
     @model_validator(mode="after")
     def denominator_is_complete_and_hash_bound(self) -> MutationApplicabilityPlan:
+        full_portfolio = self.schema_version == "2.0"
+        expected_scope = (
+            "required_eleven_class" if full_portfolio else "implemented_five_class_subset"
+        )
+        expected_specification_type = (
+            PortfolioSourceMutationSpec if full_portfolio else SourceMutationSpec
+        )
+        if self.portfolio_scope != expected_scope or any(
+            type(item) is not expected_specification_type for item in self.specifications
+        ):
+            raise ValueError(
+                "mutation plan version, portfolio scope and specification types differ"
+            )
+        if self.discovery is not None:
+            discovery = PortfolioMutationDiscovery.model_validate(
+                self.discovery.model_dump(mode="python")
+            )
+            if not full_portfolio or self.specifications != [
+                candidate.specification for candidate in discovery.candidates
+            ]:
+                raise ValueError("mutation plan must retain every exact discovered candidate")
+        if not self.bindings and self.property_tests is None:
+            raise ValueError("manual mutation plans require at least one applicability binding")
         property_ids = sorted(self.property_repositories)
         if list(self.property_repositories) != sorted(self.property_repositories):
             raise ValueError("mutation plan repository bindings must be sorted")
@@ -319,13 +380,20 @@ class MutationApplicabilityPlan(StrictModel):
             raise ValueError(
                 "every declared candidate/property pair requires explicit applicability"
             )
+        if self.compiler_inventory is not None:
+            _validate_plan_compiler_inventory(self)
+        if self.property_tests is not None:
+            _validate_plan_property_tests(self)
         accounting_kinds = [item.kind for item in self.kind_accounting]
-        expected_kinds = sorted(IMPLEMENTED_MUTATION_KINDS, key=lambda item: item.value)
+        selected_kinds: tuple[MutationKind, ...] | tuple[SecurityMutationClass, ...] = (
+            REQUIRED_SECURITY_MUTATION_CLASSES if full_portfolio else IMPLEMENTED_MUTATION_KINDS
+        )
+        expected_kinds = sorted(selected_kinds, key=lambda item: item.value)
         if accounting_kinds != expected_kinds:
-            raise ValueError("mutation kind accounting must cover the implemented subset exactly")
+            raise ValueError("mutation kind accounting must cover the selected portfolio exactly")
         specifications_by_kind = {
             kind: sorted(item.id for item in self.specifications if item.kind is kind)
-            for kind in IMPLEMENTED_MUTATION_KINDS
+            for kind in selected_kinds
         }
         for accounting in self.kind_accounting:
             if accounting.candidate_ids != specifications_by_kind[accounting.kind]:
@@ -334,6 +402,303 @@ class MutationApplicabilityPlan(StrictModel):
         if self.plan_sha256 != _canonical_sha256(payload):
             raise ValueError("mutation applicability plan hash does not match its contents")
         return self
+
+
+def _validate_plan_compiler_inventory(plan: MutationApplicabilityPlan) -> None:
+    from mmaudit.benchmark.foundry_mutation_executor import (
+        canonical_foundry_inventory_mutation_test_id,
+    )
+
+    if plan.discovery is None or plan.compiler_inventory is None:
+        raise ValueError("compiler inventory binding requires complete mutation discovery")
+    inventory = RepositorySuiteInventoryEvidence.model_validate(
+        plan.compiler_inventory.model_dump(mode="python")
+    )
+    discovery = plan.discovery
+    projects = [p for p in inventory.projects if p.project_root == discovery.project_root]
+    if (
+        inventory.phase is not RepositorySuiteInventoryPhase.PRE_EXECUTION
+        or inventory.repository_sha256 != plan.source_repository_sha256
+        or inventory.compiler_version != discovery.compiler_version
+        or inventory.compiler_sha256 != discovery.compiler_sha256
+        or len(projects) != 1
+        or tuple(sorted(a.normalized_sha256 for a in projects[0].build_info_artifacts))
+        != discovery.build_info_sha256s
+    ):
+        raise ValueError("mutation plan differs from selected pre-execution compiler inventory")
+    test_ids = {
+        canonical_foundry_inventory_mutation_test_id(
+            record, inventory_sha256=inventory.normalized_inventory_sha256
+        )
+        for record in projects[0].records
+    }
+    if any(not set(binding.test_ids) <= test_ids for binding in plan.bindings):
+        raise ValueError("mutation applicability names tests absent from its compiler inventory")
+
+
+def discover_inventory_portfolio_mutations(
+    *,
+    inventory_result: FoundryInventoryRunResult,
+    project_root: str,
+    target_paths: tuple[str, ...],
+    limits: PortfolioDiscoveryLimits | None = None,
+) -> tuple[PortfolioMutationDiscovery, RepositorySuiteInventoryEvidence]:
+    """Consume retained compiler inputs; return full discovery and checked inventory metadata."""
+
+    from mmaudit.scanners.foundry_inventory_runner import validated_foundry_compiler_input
+
+    snapshot, inventory = validated_foundry_compiler_input(
+        inventory_result, project_root=project_root
+    )
+    if inventory.phase is not RepositorySuiteInventoryPhase.PRE_EXECUTION:
+        raise ValueError("mutation discovery requires the pre-execution source inventory")
+    discovery = discover_portfolio_mutations(
+        build_info_jsons=snapshot.build_info_jsons,
+        sources=snapshot.sources,
+        target_paths=target_paths,
+        compiler_version=inventory.compiler_version,
+        compiler_sha256=inventory.compiler_sha256,
+        project_root=snapshot.project_root,
+        inventory_limits=snapshot.parser_limits,
+        limits=limits,
+    )
+    return discovery, inventory
+
+
+def build_inventory_mutation_plan(
+    *,
+    inventory_result: FoundryInventoryRunResult,
+    project_root: str,
+    target_paths: tuple[str, ...],
+    property_corpus_hash: str,
+    approved_executor_sha256: str,
+    approved_isolation_policy_sha256: str,
+    property_repositories: dict[str, str],
+    bindings: list[MutationApplicabilityBinding],
+    non_applicability: list[MutationNonApplicabilityRecord],
+    limits: PortfolioDiscoveryLimits | None = None,
+) -> MutationApplicabilityPlan:
+    """Derive candidates and repository/compiler bindings without manually copying raw inputs.
+
+    Property applicability must still be independently supplied. Every declared test
+    must exist in the selected compiler inventory; this does not prove its meaning.
+    """
+
+    discovery, inventory = discover_inventory_portfolio_mutations(
+        inventory_result=inventory_result,
+        project_root=project_root,
+        target_paths=target_paths,
+        limits=limits,
+    )
+    return build_discovered_mutation_plan(
+        discovery=discovery,
+        compiler_inventory=inventory,
+        source_repository_sha256=inventory.repository_sha256,
+        property_corpus_hash=property_corpus_hash,
+        approved_executor_sha256=approved_executor_sha256,
+        approved_isolation_policy_sha256=approved_isolation_policy_sha256,
+        property_repositories=property_repositories,
+        bindings=bindings,
+        non_applicability=non_applicability,
+    )
+
+
+def build_discovered_mutation_plan(
+    *,
+    discovery: PortfolioMutationDiscovery,
+    property_corpus_hash: str,
+    source_repository_sha256: str,
+    approved_executor_sha256: str,
+    approved_isolation_policy_sha256: str,
+    property_repositories: dict[str, str],
+    bindings: list[MutationApplicabilityBinding],
+    non_applicability: list[MutationNonApplicabilityRecord],
+    compiler_inventory: RepositorySuiteInventoryEvidence | None = None,
+    property_tests: FoundryPropertyTestMapping | None = None,
+) -> MutationApplicabilityPlan:
+    """Retain automatic candidates and gaps; require separate complete property bindings."""
+
+    if type(discovery) is not PortfolioMutationDiscovery:
+        raise ValueError("mutation planning requires the exact discovery type")
+    discovery = PortfolioMutationDiscovery.model_validate(discovery.model_dump(mode="python"))
+    specifications = [candidate.specification for candidate in discovery.candidates]
+    accounting = []
+    for kind in sorted(SecurityMutationClass, key=lambda kind: kind.value):
+        ids = [spec.id for spec in specifications if spec.kind is kind]
+        accounting.append(
+            MutationKindAccounting(
+                kind=kind,
+                status=(
+                    MutationKindInventoryStatus.CANDIDATES_DECLARED
+                    if ids
+                    else MutationKindInventoryStatus.NO_CANDIDATE_DECLARED
+                ),
+                candidate_count=len(ids),
+                candidate_ids=ids,
+                limitation=None if ids else "No supported compiler-bound candidate was discovered.",
+            )
+        )
+    return MutationApplicabilityPlan.sealed(
+        schema_version="2.0",
+        portfolio_scope="required_eleven_class",
+        property_corpus_hash=property_corpus_hash,
+        source_repository_sha256=source_repository_sha256,
+        approved_executor_sha256=approved_executor_sha256,
+        approved_isolation_policy_sha256=approved_isolation_policy_sha256,
+        property_repositories=property_repositories,
+        specifications=specifications,
+        bindings=bindings,
+        non_applicability=non_applicability,
+        kind_accounting=accounting,
+        discovery=discovery,
+        compiler_inventory=compiler_inventory,
+        property_tests=property_tests,
+    )
+
+
+def _direct_property_challenges(
+    discovery: PortfolioMutationDiscovery, mapping: FoundryPropertyTestMapping
+) -> tuple[list[MutationApplicabilityBinding], list[MutationNonApplicabilityRecord]]:
+    """Schedule source overlap and compiler-reference closure; never infer irrelevance."""
+
+    if len(mapping.corpus.properties) * len(discovery.candidates) > 100_000:
+        raise ValueError("automatic property/candidate population exceeds its bound")
+    tests = {test.property_id: test for test in mapping.tests}
+    reachable = (
+        mapping.compiler_reachability.reachable_spans()
+        if mapping.compiler_reachability is not None
+        else {}
+    )
+    bindings: list[MutationApplicabilityBinding] = []
+    unresolved: list[MutationNonApplicabilityRecord] = []
+    for prop in mapping.corpus.properties:
+        for candidate in discovery.candidates:
+            spec = candidate.specification
+            test = tests.get(prop.id)
+            covered = any(
+                evidence.location.path == spec.path
+                and evidence.location.start_line <= spec.line
+                and spec.line + len(spec.expected_lines) - 1 <= evidence.location.end_line
+                for evidence in prop.source_evidence
+            )
+            spans = reachable.get(prop.id, {}).get((candidate.build_info_sha256, spec.path))
+            if spans is not None:
+                starts, ends = spans
+                index = bisect_right(starts, candidate.start_byte) - 1
+                covered = covered or (index >= 0 and candidate.end_byte_exclusive <= ends[index])
+            if test is not None and covered:
+                bindings.append(
+                    MutationApplicabilityBinding(
+                        property_id=prop.id, mutation_id=spec.id, test_ids=[test.test_id]
+                    )
+                )
+            else:
+                unresolved.append(
+                    MutationNonApplicabilityRecord(
+                        property_id=prop.id,
+                        mutation_id=spec.id,
+                        reason=(
+                            MutationNonApplicabilityReason.NO_EXECUTABLE_ASSERTION
+                            if test is None
+                            else MutationNonApplicabilityReason.UNSUPPORTED_PROPERTY_MAPPING
+                        ),
+                        rationale=(
+                            "No exact compiler-bound generated assertion; retain as inconclusive."
+                            if test is None
+                            else "No supported compiler-reference source relationship; "
+                            "retain as an inconclusive score member, not non-applicability."
+                            if mapping.compiler_reachability is not None
+                            else "Direct source-evidence relationship is not established; "
+                            "this is not non-applicability and remains an inconclusive score member."
+                        ),
+                    )
+                )
+    return bindings, unresolved
+
+
+def _validate_plan_property_tests(plan: MutationApplicabilityPlan) -> None:
+    if (
+        plan.schema_version != "2.0"
+        or plan.property_tests is None
+        or plan.compiler_inventory is None
+        or plan.discovery is None
+    ):
+        raise ValueError("automatic property mapping requires complete compiler-bound discovery")
+    mapping = FoundryPropertyTestMapping.model_validate(
+        plan.property_tests.model_dump(mode="python")
+    )
+    inventory = plan.compiler_inventory
+    project = next(
+        (p for p in inventory.projects if p.project_root == plan.discovery.project_root), None
+    )
+    if (
+        mapping.corpus.corpus_hash != plan.property_corpus_hash
+        or [p.id for p in mapping.corpus.properties] != list(plan.property_repositories)
+        or mapping.project_root != plan.discovery.project_root
+        or mapping.inventory_sha256 != inventory.normalized_inventory_sha256
+        or project is None
+        or any(test.record not in project.records for test in mapping.tests)
+    ):
+        raise ValueError("property mapping differs from complete plan/corpus/compiler identity")
+    graph = mapping.compiler_reachability
+    if graph is not None and (
+        graph.build_info_sha256s != list(plan.discovery.build_info_sha256s)
+        or graph.sources != list(plan.discovery.sources)
+    ):
+        raise ValueError("compiler property references differ from selected discovery inputs")
+    expected = _direct_property_challenges(plan.discovery, mapping)
+    if (plan.bindings, plan.non_applicability) != expected:
+        raise ValueError("automatic plan must retain every derived challenge and unresolved pair")
+
+
+def build_property_bound_inventory_mutation_plan(
+    *,
+    inventory_result: FoundryInventoryRunResult,
+    project_root: str,
+    target_paths: tuple[str, ...],
+    corpus: PropertyCorpus,
+    harnesses: list[FoundryInvariantHarnessSpec],
+    repository_id: str,
+    approved_executor_sha256: str,
+    approved_isolation_policy_sha256: str,
+    expected_chain_id: int | None = None,
+    include_compiler_reachability: bool = True,
+    limits: PortfolioDiscoveryLimits | None = None,
+) -> MutationApplicabilityPlan:
+    """Automatically retain every property/candidate pair, including unresolved score members.
+
+    Exact generated assertions schedule source-overlap and compiler-reference challenges.
+    The selected target files never expand implicitly. This does not establish path
+    feasibility, semantic irrelevance elsewhere, or audit/runtime credit.
+    """
+
+    mapping = bind_compiled_property_tests(
+        inventory_result=inventory_result,
+        project_root=project_root,
+        corpus=corpus,
+        harnesses=harnesses,
+        expected_chain_id=expected_chain_id,
+        include_compiler_reachability=include_compiler_reachability,
+    )
+    discovery, inventory = discover_inventory_portfolio_mutations(
+        inventory_result=inventory_result,
+        project_root=project_root,
+        target_paths=target_paths,
+        limits=limits,
+    )
+    bindings, unresolved = _direct_property_challenges(discovery, mapping)
+    return build_discovered_mutation_plan(
+        discovery=discovery,
+        compiler_inventory=inventory,
+        property_tests=mapping,
+        source_repository_sha256=inventory.repository_sha256,
+        property_corpus_hash=mapping.corpus.corpus_hash,
+        approved_executor_sha256=approved_executor_sha256,
+        approved_isolation_policy_sha256=approved_isolation_policy_sha256,
+        property_repositories={p.id: repository_id for p in mapping.corpus.properties},
+        bindings=bindings,
+        non_applicability=unresolved,
+    )
 
 
 class MutationSuiteTestStatus(StrEnum):
@@ -483,7 +848,7 @@ class MutationCampaignExecutor(Protocol):
         *,
         baseline_workspace: Path,
         mutant_workspace: Path,
-        specification: SourceMutationSpec,
+        specification: MutationSpecification,
     ) -> MutationSuiteObservation:
         """Execute a fixed typed suite and return path-free normalized evidence."""
 
@@ -497,7 +862,7 @@ class _StagedMutationCampaignCleanup:
     campaign: MutationCampaignEvidence
     observation: MutationSuiteObservation | None
     plan: MutationApplicabilityPlan
-    specification: SourceMutationSpec
+    specification: MutationSpecification
     source_repository: Path
     private_root: Path
     private_root_device: int
@@ -525,7 +890,7 @@ class MutationPropertyOutcome(StrictModel):
     """Hash-linked outcome for one property/mutation pair."""
 
     mutation_id: str = Field(pattern=r"^mut-[a-z0-9][a-z0-9-]{0,75}$")
-    mutation_kind: MutationKind
+    mutation_kind: MutationKind | SecurityMutationClass
     property_id: str = Field(pattern=r"^prop-[0-9a-f]{24}$")
     outcome: MutationTestOutcome
     evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -562,10 +927,35 @@ class PropertyMutationScore(StrictModel):
         return self
 
 
+class MutationClassScore(StrictModel):
+    """Keep every required class and each of its property gates visible."""
+
+    mutation_class: SecurityMutationClass
+    property_scores: list[PropertyMutationScore] = Field(max_length=10_000)
+    gate_passed: bool
+
+    @model_validator(mode="after")
+    def missing_class_cannot_pass(self) -> MutationClassScore:
+        if self.gate_passed != (
+            bool(self.property_scores) and all(score.gate_passed for score in self.property_scores)
+        ):
+            raise ValueError("mutation class gate requires observed applicable property gates")
+        return self
+
+
 class MutationScorecard(StrictModel):
     """Per-property mutation quality evidence; aggregate scores cannot hide weak properties."""
 
-    schema_version: Literal["1.0", "1.1"] = "1.0"
+    schema_version: Literal["1.0", "1.1", "2.0"] = "1.0"
+    portfolio_scope: Literal["required_eleven_class"] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    class_scores: list[MutationClassScore] | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        min_length=len(REQUIRED_SECURITY_MUTATION_CLASSES),
+        max_length=len(REQUIRED_SECURITY_MUTATION_CLASSES),
+    )
     evidence_origin: MutationScorecardEvidenceOrigin = MutationScorecardEvidenceOrigin.DECLARATIVE
     projection_authority: Literal["comparison_only"] | None = Field(
         default=None,
@@ -610,7 +1000,7 @@ class MutationScorecard(StrictModel):
         expected_ids = set(self.expected_property_ids)
         if any(item.property_id not in expected_ids for item in self.outcomes):
             raise ValueError("mutation outcome references an unexpected property")
-        kinds_by_mutation: dict[str, MutationKind] = {}
+        kinds_by_mutation: dict[str, MutationKind | SecurityMutationClass] = {}
         for item in self.outcomes:
             previous = kinds_by_mutation.setdefault(item.mutation_id, item.mutation_kind)
             if previous is not item.mutation_kind:
@@ -630,8 +1020,28 @@ class MutationScorecard(StrictModel):
         )
         if self.overall_kill_score != expected_overall:
             raise ValueError("aggregate mutation kill score is inconsistent")
-        if self.gate_passed != all(score.gate_passed for score in expected_scores):
-            raise ValueError("mutation scorecard gate must require every property gate")
+        class_gates_passed = True
+        if self.schema_version == "2.0":
+            if (
+                self.portfolio_scope != "required_eleven_class"
+                or self.evidence_origin is MutationScorecardEvidenceOrigin.DECLARATIVE
+                or any(
+                    type(item.mutation_kind) is not SecurityMutationClass for item in self.outcomes
+                )
+            ):
+                raise ValueError("full mutation scorecard requires its planned eleven-class scope")
+            expected_classes = _class_mutation_scores(
+                self.outcomes, minimum_required=self.minimum_property_kill_score
+            )
+            if self.class_scores != expected_classes:
+                raise ValueError("mutation class scores must cover all eleven classes exactly")
+            class_gates_passed = all(score.gate_passed for score in expected_classes)
+        elif self.portfolio_scope is not None or self.class_scores is not None:
+            raise ValueError("legacy mutation scorecards cannot claim the full portfolio")
+        if self.gate_passed != (
+            all(score.gate_passed for score in expected_scores) and class_gates_passed
+        ):
+            raise ValueError("mutation scorecard gate must require every property and class gate")
         if (
             self.evidence_origin is MutationScorecardEvidenceOrigin.DECLARATIVE
             and self.applicability_plan_sha256 is not None
@@ -649,7 +1059,7 @@ class MutationScorecard(StrictModel):
             raise ValueError("unattested planned mutation evidence cannot award decisive credit")
         if self.evidence_origin is MutationScorecardEvidenceOrigin.PROCESS_LOCAL_COMPARISON:
             if (
-                self.schema_version != "1.1"
+                self.schema_version not in {"1.1", "2.0"}
                 or self.applicability_plan_sha256 is None
                 or self.projection_authority != "comparison_only"
             ):
@@ -657,7 +1067,7 @@ class MutationScorecard(StrictModel):
                     "process-local mutation comparison requires schema v1.1, its plan hash, "
                     "and comparison-only authority"
                 )
-        elif self.schema_version != "1.0" or self.projection_authority is not None:
+        elif self.schema_version not in {"1.0", "2.0"} or self.projection_authority is not None:
             raise ValueError("only process-local comparison evidence may use schema v1.1")
         return self
 
@@ -699,8 +1109,29 @@ def _score_mutation_outcomes(
     minimum_property_kill_score: float,
     evidence_origin: MutationScorecardEvidenceOrigin,
     applicability_plan_sha256: str | None,
+    applicability_plan: MutationApplicabilityPlan | None = None,
 ) -> MutationScorecard:
     """Build one scorecard while keeping evidence-origin selection private."""
+
+    if applicability_plan is not None and applicability_plan.property_tests is not None:
+        # These automatic-mapping gaps are unknown, never evidence-backed exclusions.
+        # Keep them in both planned and process-local comparison score denominators.
+        specifications = {spec.id: spec for spec in applicability_plan.specifications}
+        outcomes = [
+            *outcomes,
+            *(
+                MutationPropertyOutcome(
+                    property_id=gap.property_id,
+                    mutation_id=gap.mutation_id,
+                    mutation_kind=specifications[gap.mutation_id].kind,
+                    outcome=MutationTestOutcome.INCONCLUSIVE,
+                    evidence_sha256=_canonical_sha256(
+                        {"plan": applicability_plan.plan_sha256, "gap": gap.model_dump(mode="json")}
+                    ),
+                )
+                for gap in applicability_plan.non_applicability
+            ),
+        ]
 
     ordered_property_ids = sorted(set(expected_property_ids))
     if set(property_repositories) != set(ordered_property_ids):
@@ -717,12 +1148,22 @@ def _score_mutation_outcomes(
         ordered_outcomes,
         minimum_required=minimum_property_kill_score,
     )
+    full_portfolio = applicability_plan is not None and applicability_plan.schema_version == "2.0"
+    class_scores = (
+        _class_mutation_scores(ordered_outcomes, minimum_required=minimum_property_kill_score)
+        if full_portfolio
+        else None
+    )
     return MutationScorecard(
         schema_version=(
-            "1.1"
+            "2.0"
+            if full_portfolio
+            else "1.1"
             if evidence_origin is MutationScorecardEvidenceOrigin.PROCESS_LOCAL_COMPARISON
             else "1.0"
         ),
+        portfolio_scope="required_eleven_class" if full_portfolio else None,
+        class_scores=class_scores,
         evidence_origin=evidence_origin,
         projection_authority=(
             "comparison_only"
@@ -741,7 +1182,10 @@ def _score_mutation_outcomes(
             sum(item.outcome is MutationTestOutcome.KILLED for item in ordered_outcomes),
             len(ordered_outcomes),
         ),
-        gate_passed=all(score.gate_passed for score in property_scores),
+        gate_passed=(
+            all(score.gate_passed for score in property_scores)
+            and (class_scores is None or all(score.gate_passed for score in class_scores))
+        ),
     )
 
 
@@ -812,6 +1256,7 @@ def score_planned_mutation_campaigns(
         minimum_property_kill_score=minimum_property_kill_score,
         evidence_origin=MutationScorecardEvidenceOrigin.PLANNED_UNATTESTED,
         applicability_plan_sha256=plan.plan_sha256,
+        applicability_plan=plan,
     )
 
 
@@ -1302,6 +1747,7 @@ def _build_runtime_mutation_scorer(
             minimum_property_kill_score=minimum_property_kill_score,
             evidence_origin=MutationScorecardEvidenceOrigin.PROCESS_LOCAL_COMPARISON,
             applicability_plan_sha256=canonical_plan.plan_sha256,
+            applicability_plan=canonical_plan,
         )
         try:
             registered = register(
@@ -1351,7 +1797,7 @@ def load_mutation_scorecard(path: Path) -> MutationScorecard:
 class AppliedSourceMutation:
     """Integrity evidence for one mutation in a disposable copied workspace."""
 
-    specification: SourceMutationSpec
+    specification: MutationSpecification
     source_repository: Path
     workspace: Path
     source_repository_sha256: str
@@ -1362,13 +1808,16 @@ class AppliedSourceMutation:
     original_line_sha256: str
     mutated_line_sha256: str
     line_ending: str
+    original_span_sha256: str | None = None
+    mutated_span_sha256: str | None = None
+    span_line_endings: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)
 class RevertedSourceMutation:
     """Evidence that a disposable mutation workspace was restored exactly."""
 
-    specification: SourceMutationSpec
+    specification: MutationSpecification
     workspace: Path
     source_repository_sha256: str
     restored_workspace_sha256: str
@@ -1581,6 +2030,28 @@ class _OwnedMutationWorkspace:
             return
         self.closed = True
         os.close(self.descriptor)
+
+
+def _class_mutation_scores(
+    outcomes: list[MutationPropertyOutcome], *, minimum_required: float
+) -> list[MutationClassScore]:
+    scores = []
+    for kind in sorted(REQUIRED_SECURITY_MUTATION_CLASSES, key=lambda item: item.value):
+        selected = [item for item in outcomes if item.mutation_kind is kind]
+        property_scores = _property_mutation_scores(
+            sorted({item.property_id for item in selected}),
+            selected,
+            minimum_required=minimum_required,
+        )
+        scores.append(
+            MutationClassScore(
+                mutation_class=kind,
+                property_scores=property_scores,
+                gate_passed=bool(property_scores)
+                and all(item.gate_passed for item in property_scores),
+            )
+        )
+    return scores
 
 
 def _property_mutation_scores(
@@ -2289,7 +2760,7 @@ def _build_mutation_campaign_runtime_authority(
             campaign: MutationCampaignEvidence,
             observation: MutationSuiteObservation | None,
             plan: MutationApplicabilityPlan,
-            specification: SourceMutationSpec,
+            specification: MutationSpecification,
             source_repository: Path,
             private_root: Path,
             private_root_device: int,
@@ -2484,10 +2955,16 @@ def apply_source_mutation(
     *,
     source_repository: Path,
     workspace: Path,
-    specification: SourceMutationSpec,
+    specification: MutationSpecification,
 ) -> AppliedSourceMutation:
     """Copy a bounded repository and apply one hash-pinned defensive mutation."""
 
+    if isinstance(specification, PortfolioSourceMutationSpec):
+        if type(specification) is not PortfolioSourceMutationSpec:
+            raise ValueError("portfolio mutation requires the exact specification type")
+        specification = PortfolioSourceMutationSpec.model_validate(
+            specification.model_dump(mode="python")
+        )
     source = source_repository.resolve(strict=True)
     if scanner_workspace_file_sha256(source, specification.path) != (
         specification.expected_file_sha256
@@ -2514,10 +2991,20 @@ def apply_source_mutation(
     original_file_sha256 = _sha256(original_bytes)
     if original_file_sha256 != specification.expected_file_sha256:
         raise ValueError("copied mutation source hash does not match the planned source")
-    mutated_bytes, original_line, mutated_line, line_ending = _mutated_source(
-        original_bytes,
-        specification,
-    )
+    original_span_sha256 = mutated_span_sha256 = None
+    span_line_endings = None
+    if isinstance(specification, PortfolioSourceMutationSpec):
+        mutated_bytes, original_span, mutated_span, span_line_endings = mutate_portfolio_source(
+            original_bytes, specification
+        )
+        original_span_sha256, mutated_span_sha256 = _sha256(original_span), _sha256(mutated_span)
+        original_line = specification.expected_lines[0]
+        mutated_line, line_ending = _split_line_ending(_decode_lines(mutated_span)[0])
+    else:
+        mutated_bytes, original_line, mutated_line, line_ending = _mutated_source(
+            original_bytes,
+            specification,
+        )
     workspace_target.write_bytes(mutated_bytes)
     mutated_file_sha256 = _sha256(mutated_bytes)
     mutated_workspace_sha256 = mutation_repository_sha256(destination)
@@ -2537,6 +3024,9 @@ def apply_source_mutation(
         original_line_sha256=_sha256(original_line.encode()),
         mutated_line_sha256=_sha256(mutated_line.encode()),
         line_ending=line_ending,
+        original_span_sha256=original_span_sha256,
+        mutated_span_sha256=mutated_span_sha256,
+        span_line_endings=span_line_endings,
     )
 
 
@@ -2554,14 +3044,36 @@ def revert_source_mutation(application: AppliedSourceMutation) -> RevertedSource
         raise ValueError("mutated source file changed before restoration")
 
     current = target.read_bytes()
-    restored, _, _, _ = _replace_target_line(
-        current,
-        application.specification.line,
-        application.specification.expected_line,
-        expected_current_hash=application.mutated_line_sha256,
-        replacement=application.specification.expected_line,
-        replacement_line_ending=application.line_ending,
-    )
+    if isinstance(application.specification, PortfolioSourceMutationSpec):
+        if (
+            application.span_line_endings is None
+            or application.original_span_sha256 is None
+            or application.mutated_span_sha256 is None
+        ):
+            raise ValueError("portfolio restoration requires its applied span evidence")
+        original_span = "".join(
+            body + ending
+            for body, ending in zip(
+                application.specification.expected_lines, application.span_line_endings, strict=True
+            )
+        ).encode()
+        if _sha256(original_span) != application.original_span_sha256:
+            raise ValueError("portfolio restoration original span binding differs")
+        restored = restore_portfolio_source(
+            current,
+            application.specification,
+            line_endings=application.span_line_endings,
+            expected_mutated_span_sha256=application.mutated_span_sha256,
+        )
+    else:
+        restored, _, _, _ = _replace_target_line(
+            current,
+            application.specification.line,
+            application.specification.expected_line,
+            expected_current_hash=application.mutated_line_sha256,
+            replacement=application.specification.expected_line,
+            replacement_line_ending=application.line_ending,
+        )
     target.write_bytes(restored)
     restored_file_sha256 = _sha256(restored)
     restored_workspace_sha256 = mutation_repository_sha256(application.workspace)
@@ -2652,7 +3164,7 @@ def _split_line_ending(line: str) -> tuple[str, str]:
     return line, ""
 
 
-def _source_target(root: Path, specification: SourceMutationSpec) -> Path:
+def _source_target(root: Path, specification: MutationSpecification) -> Path:
     target = root.joinpath(*PurePosixPath(specification.path).parts)
     try:
         resolved = target.resolve(strict=True)

@@ -1,0 +1,11 @@
+{
+  "synthetic_only": true,
+  "description": "Independently assembled raw calendar wire data. No actual request, publication or chain authority. Fixed test nonce is not a production entropy source.",
+  "document_ascii": "mmaudit synthetic calendar fixture - no publication authority\n",
+  "file_sha256": "5fdfecdd8fd9413260dc9231d5ed000d264462df8dcf90e8dd067eeb1fffd9cd",
+  "nonce_hex": "73796e7468657469632d6e6f6e636521",
+  "submission_commitment_hex": "b1a881e9c13cd8e0e70473cadabb3e5fccd2bb683d730a44077edfba8ab1e250",
+  "claimed_height": 321,
+  "claimed_root_hex": "7d6e0a2ace6019b32c3b434f5e2aaa3639379ffec5830138a14795709ec3f0c3",
+  "raw_reply_hex": "ff0083dfe30d2ef90c8e191868747470733a2f2f63616c656e6461722e696e76616c6964f11063616c656e6461722d7369626c696e6708000588960d73d7190102c102"
+}

@@ -93,7 +93,7 @@ from mmaudit.solidity.coverage import (
 if TYPE_CHECKING:
     from mmaudit.orchestration.scheduler import SchedulerJournal
     from mmaudit.orchestration.truncation_recovery_evidence import (
-        VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverage,
+        PromotedRecursiveRecoveryCapability,
         VerifiedPromotedTruncationRecoverySurfaceCoverage,
     )
 
@@ -214,7 +214,7 @@ def _model_review_authorization_map(
 
 def _verified_recovery_raw_authorization_map(
     direct_capabilities: Sequence[VerifiedPromotedTruncationRecoverySurfaceCoverage],
-    recursive_capabilities: Sequence[VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverage],
+    recursive_capabilities: Sequence[PromotedRecursiveRecoveryCapability],
 ) -> dict[str, _VerifiedRecoveryRawAuthorization]:
     """Derive raw-child authority only from freshly verified durable promotions."""
 
@@ -329,7 +329,7 @@ def build_model_review_coverage(
         VerifiedPromotedTruncationRecoverySurfaceCoverage
     ] = (),
     promoted_recursive_recovery_surface_coverages: Sequence[
-        VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverage
+        PromotedRecursiveRecoveryCapability
     ] = (),
     ordinary_review_authorizations: Sequence[ModelReviewPreDispatchAuthorization] = (),
 ) -> ModelReviewCoverage:
@@ -1759,12 +1759,12 @@ def _promoted_recursive_recovery_evidence_references(
     usage_records: list[UsageRecord],
     review_artifacts: list[ModelSurfaceReviewArtifact],
     review_contexts_by_request: dict[str, list[ContextPackage]],
-    capabilities: Sequence[VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverage],
+    capabilities: Sequence[PromotedRecursiveRecoveryCapability],
     index: SoliditySymbolIndex | None,
     graphs: SolidityGraphSet | None,
     limitations: set[str],
 ) -> dict[str, list[ModelReviewEvidenceReference]]:
-    """Credit only root-parent records behind one live promoted recursive tree."""
+    """Credit exact root/bridge retained records only behind a live promoted tree."""
 
     from mmaudit.orchestration.scheduler import (
         require_verified_promoted_recursive_truncation_recovery_surface_coverage,
@@ -1823,12 +1823,15 @@ def _promoted_recursive_recovery_evidence_references(
         reasons: list[str] = []
         all_projected_usages = (
             projection.parent_usage_record,
-            projection.bridge_usage_record,
+            *projection.bridge_usage_records,
             *projection.leaf_usage_records,
         )
-        if len(projection.leaf_usage_records) != 3 or len(artifact.children) != 3:
+        if (
+            len(projection.leaf_usage_records) != len(artifact.children)
+            or not 3 <= len(artifact.children) <= 32
+        ):
             reasons.append("promoted recursive recovery leaf usage inventory was incomplete")
-        if len({usage.request_id for usage in all_projected_usages}) != 5:
+        if len({usage.request_id for usage in all_projected_usages}) != len(all_projected_usages):
             reasons.append("promoted recursive recovery repeated a live request identity")
 
         parent_usage_matches = usage_by_request.get(projection.parent_usage_record.request_id, [])
@@ -1844,26 +1847,33 @@ def _promoted_recursive_recovery_evidence_references(
         if artifact.parent.usage_record != projection.parent_usage_record:
             reasons.append("promoted recursive parent structural usage differed from live custody")
 
-        bridge_usage_matches = usage_by_request.get(projection.bridge_usage_record.request_id, [])
-        if (
-            len(bridge_usage_matches) != 1
-            or bridge_usage_matches[0] is not projection.bridge_usage_record
-            or artifact.bridge.usage_record != projection.bridge_usage_record
+        for bridge, bridge_usage in zip(
+            artifact.bridges, projection.bridge_usage_records, strict=True
         ):
-            reasons.append("promoted recursive bridge differed from its exact live runtime usage")
-        if not is_recovery_accountable_usage_record(
-            projection.bridge_usage_record,
-            request_limit_scope=artifact.bridge.request_limit_scope,
-            request_limit_count_before=artifact.bridge.request_limit_count_before,
-            require_real=True,
-        ):
-            reasons.append("promoted recursive bridge lacked REAL request-scoped accountability")
-        if config.profile is AuditProfile.MAXIMUM_ASSURANCE and (
-            projection.bridge_usage_record.routing.get("certification_request") is not True
-        ):
-            reasons.append("maximum-assurance recursive bridge lacked certification evidence")
-        if artifacts_by_request.get(projection.bridge_usage_record.request_id):
-            reasons.append("promoted recursive zero-retained bridge claimed a review artifact")
+            bridge_usage_matches = usage_by_request.get(bridge_usage.request_id, [])
+            if (
+                len(bridge_usage_matches) != 1
+                or bridge_usage_matches[0] is not bridge_usage
+                or bridge.usage_record != bridge_usage
+            ):
+                reasons.append(
+                    "promoted recursive bridge differed from its exact live runtime usage"
+                )
+            if not is_recovery_accountable_usage_record(
+                bridge_usage,
+                request_limit_scope=bridge.request_limit_scope,
+                request_limit_count_before=bridge.request_limit_count_before,
+                require_real=True,
+            ):
+                reasons.append(
+                    "promoted recursive bridge lacked REAL request-scoped accountability"
+                )
+            if config.profile is AuditProfile.MAXIMUM_ASSURANCE and (
+                bridge_usage.routing.get("certification_request") is not True
+            ):
+                reasons.append("maximum-assurance recursive bridge lacked certification evidence")
+            if artifacts_by_request.get(bridge_usage.request_id):
+                reasons.append("promoted recursive truncated bridge claimed a review artifact")
 
         if len(artifact.children) == len(projection.leaf_usage_records):
             for child, live_leaf_usage in zip(
@@ -1911,15 +1921,15 @@ def _promoted_recursive_recovery_evidence_references(
         elif context != projection.parent_context:
             reasons.append("promoted recursive parent context differed from live tree custody")
 
-        bridge_context_matches = review_contexts_by_request.get(
-            projection.bridge_usage_record.request_id,
-            [],
-        )
-        if (
-            len(bridge_context_matches) != 1
-            or bridge_context_matches[0] != projection.bridge_context
+        for bridge_usage, bridge_context in zip(
+            projection.bridge_usage_records, projection.bridge_contexts, strict=True
         ):
-            reasons.append("promoted recursive bridge context differed from live tree custody")
+            bridge_context_matches = review_contexts_by_request.get(
+                bridge_usage.request_id,
+                [],
+            )
+            if len(bridge_context_matches) != 1 or bridge_context_matches[0] != bridge_context:
+                reasons.append("promoted recursive bridge context differed from live tree custody")
         if len(projection.leaf_contexts) != len(projection.leaf_usage_records):
             reasons.append("promoted recursive leaf context inventory was incomplete")
         else:
@@ -2043,6 +2053,49 @@ def _promoted_recursive_recovery_evidence_references(
         elif lineage.root_lineage not in approved_lineages:
             reasons.append("promoted recursive parent model lineage lacked operator approval")
 
+        validated_bridge_contexts: dict[str, ContextPackage | None] = {}
+        for bridge_usage, bridge_context in zip(
+            projection.bridge_usage_records, projection.bridge_contexts, strict=True
+        ):
+            try:
+                validated_bridge_context: ContextPackage | None = revalidate_context_package(
+                    bridge_context
+                )
+            except (ContextBudgetError, ValueError):
+                validated_bridge_context = None
+                reasons.append("promoted recursive bridge context failed exact boundary validation")
+            if validated_bridge_context is not None:
+                bridge_requests = tuple(validated_bridge_context.requested_model_surfaces)
+                reasons.extend(
+                    model_surface_retained_context_custody_failures(
+                        context=validated_bridge_context,
+                        usage=bridge_usage,
+                        requests=bridge_requests,
+                        request_id=bridge_usage.request_id,
+                        review_role=artifact.invariant_binding.review_role,
+                        context_role=artifact.invariant_binding.context_role,
+                        rendered_context_sha256=model_review_context_sha256(
+                            validated_bridge_context
+                        ),
+                        requested_surface_manifest_sha256=(
+                            ModelSurfaceReviewArtifact.calculate_requested_surface_manifest_sha256(
+                                bridge_requests
+                            )
+                        ),
+                        index=index,
+                        graphs=graphs,
+                    )
+                )
+            reasons.extend(
+                model_surface_review_identity_lineage_custody_failures(
+                    config,
+                    usage=bridge_usage,
+                    review_role=artifact.invariant_binding.review_role,
+                )
+            )
+
+            validated_bridge_contexts[bridge_usage.request_id] = validated_bridge_context
+
         records_by_id = {record.surface_id: record for record in artifact.records}
         parent_origins = tuple(
             origin
@@ -2060,6 +2113,23 @@ def _promoted_recursive_recovery_evidence_references(
             record_reasons = [*reasons]
             if record is None or request is None:
                 continue
+            retained_owner = next(
+                (
+                    bridge
+                    for bridge in artifact.bridges
+                    if bridge.usage_record.request_id == origin.request_id
+                ),
+                artifact.parent,
+            )
+            retained_usage = next(
+                (
+                    usage
+                    for usage in projection.bridge_usage_records
+                    if usage.request_id == origin.request_id
+                ),
+                evidence_usage,
+            )
+            retained_context = validated_bridge_contexts.get(origin.request_id, validated_context)
             record_sha256 = hashlib.sha256(
                 json.dumps(
                     record.model_dump(mode="json"),
@@ -2070,25 +2140,33 @@ def _promoted_recursive_recovery_evidence_references(
                 ).encode("utf-8")
             ).hexdigest()
             if (
-                origin.request_id != evidence_usage.request_id
-                or origin.generation_id != evidence_usage.openrouter_generation_id
-                or origin.usage_record_sha256 != artifact.parent.usage_record_sha256
+                origin.request_id != retained_usage.request_id
+                or origin.generation_id != retained_usage.openrouter_generation_id
+                or origin.usage_record_sha256 != retained_owner.usage_record_sha256
+                or origin.projection_sha256 != retained_owner.projection.evidence_sha256
+                or record not in retained_owner.projection.surface_reviews
+                or not any(
+                    frame.record_id == record.surface_id
+                    and frame.sequence == origin.accepted_frame_sequence
+                    and frame.frame_sha256 == origin.accepted_frame_sha256
+                    for frame in retained_owner.projection.accepted_frames
+                )
                 or origin.record_sha256 != record_sha256
             ):
-                record_reasons.append("promoted recursive parent origin was inconsistent")
+                record_reasons.append("promoted recursive retained origin was inconsistent")
             record_reasons.extend(
                 _record_validation_failures(
                     request,
                     record,
-                    expected_role=evidence_usage.role,
+                    expected_role=retained_usage.role,
                     index=index,
                     graphs=graphs,
                 )
             )
-            if validated_context is not None:
+            if retained_context is not None:
                 record_reasons.extend(
                     model_surface_review_excerpt_validation_failures(
-                        context=validated_context,
+                        context=retained_context,
                         request=request,
                         record=record,
                     )
@@ -2101,17 +2179,22 @@ def _promoted_recursive_recovery_evidence_references(
             references.setdefault(record.surface_id, []).append(
                 ModelReviewEvidenceReference(
                     surface_id=record.surface_id,
-                    request_id=evidence_usage.request_id,
+                    request_id=retained_usage.request_id,
                     artifact_sha256=artifact.artifact_sha256,
-                    requested_model=evidence_usage.requested_model,
-                    model=evidence_usage.actual_model,
-                    review_role=evidence_usage.role,
+                    requested_model=retained_usage.requested_model,
+                    model=retained_usage.actual_model,
+                    review_role=retained_usage.role,
                     status=record.status,
                     root_lineage=root_lineage,
                     credited=credited,
                     reason=(
-                        "credited: promoted recursive parent-retained surface passed live tree "
-                        "replay"
+                        (
+                            "credited: promoted recursive bridge-retained surface passed live tree replay"
+                            if any(
+                                retained_usage is usage for usage in projection.bridge_usage_records
+                            )
+                            else "credited: promoted recursive parent-retained surface passed live tree replay"
+                        )
                         if credited
                         else _render_model_review_reference_failure_reason(record_reasons)
                     ),

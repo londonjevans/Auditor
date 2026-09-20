@@ -29,8 +29,12 @@ from mmaudit.models.generation_evidence import (
     _reconcile_generation_evidence_structural,
     _reconcile_noncrediting_smoke_generation_evidence_structural,
 )
-from mmaudit.models.openrouter import OpenRouterStructuredRequestCostPreview
+from mmaudit.models.openrouter import (
+    OpenRouterStructuredRequestCostPreview,
+    require_operator_cost_preview_usage,
+)
 from mmaudit.models.qualification import CandidateModel, LineageReviewStatus
+from mmaudit.models.route_cost_reservations import OperatorRouteCostAttemptEvidence
 from mmaudit.models.schemas import UsageRecord, _validate_model_retry_routing_evidence
 from mmaudit.models.token_planning import (
     RequestTokenPlan,
@@ -152,6 +156,7 @@ class AuthenticatedRunnerSmokeCostPlan(_StrictSmokeModel):
             ("1.1", "1.0"),
             ("1.2", "1.1"),
             ("1.2", "1.2"),
+            ("1.2", "1.4"),
         }:
             raise ValueError(
                 "authenticated runner smoke plan schema differs from its token accounting"
@@ -357,12 +362,12 @@ class AuthenticatedRunnerSmokeRunEvidence(_StrictSmokeModel):
             != self.candidate.exact_model_id
             or self.judge_cost_plan.request_preview.exact_model_id != self.judge.exact_model_id
             or (
-                self.candidate_cost_plan.request_preview.schema_version == "1.2"
+                self.candidate_cost_plan.request_preview.schema_version in {"1.2", "1.4"}
                 and self.candidate_cost_plan.request_preview.route_predicate_profile_sha256
                 != self.candidate.route_predicate_profile_sha256
             )
             or (
-                self.judge_cost_plan.request_preview.schema_version == "1.2"
+                self.judge_cost_plan.request_preview.schema_version in {"1.2", "1.4"}
                 and self.judge_cost_plan.request_preview.route_predicate_profile_sha256
                 != self.judge.route_predicate_profile_sha256
             )
@@ -619,7 +624,8 @@ class AuthenticatedRunnerSmokeEvidenceBundle(_StrictSmokeModel):
         entries = {item.request_id: item for item in self.closed_ledger_evidence.entries}
         expected_entry_ids: list[str] = []
         for plan, usage in zip(plans, usages, strict=True):
-            _require_usage_preview_join(usage, plan.request_preview)
+            operator_attempts = _require_usage_preview_join(usage, plan.request_preview)
+            _require_operator_cost_ledger_join(operator_attempts, self.closed_ledger_evidence)
             with localcontext() as context:
                 context.prec = 160
                 usage_entry_cost = Decimal(0)
@@ -690,7 +696,7 @@ def build_authenticated_runner_smoke_cost_plan(
     )
     values: dict[str, Any] = {
         "artifact_kind": "authenticated_runner_smoke_cost_plan",
-        "schema_version": "1.2" if preview.schema_version in {"1.1", "1.2"} else "1.1",
+        "schema_version": "1.2" if preview.schema_version in {"1.1", "1.2", "1.4"} else "1.1",
         "disposition": "NONCREDITING_SMOKE",
         "smoke_run_index": smoke_run_index,
         "run_kind": run_kind,
@@ -974,7 +980,7 @@ def _require_usage_preview_join(
     _token_plan_projection: Callable[
         [RequestTokenPlan], str
     ] = request_token_plan_projection_sha256,
-) -> None:
+) -> tuple[OperatorRouteCostAttemptEvidence, ...]:
     accounted = usage.accounted_cost_usd_exact
     raw_token_plan = usage.routing.get("request_token_plan")
     try:
@@ -998,7 +1004,7 @@ def _require_usage_preview_join(
     )
     current_token_accounting = (
         token_plan.schema_version == "3.0"
-        and preview.schema_version in {"1.1", "1.2"}
+        and preview.schema_version in {"1.1", "1.2", "1.4"}
         and token_detail is not None
         and token_plan.token_detail_accounting_method
         == preview.token_detail_accounting_method
@@ -1079,12 +1085,36 @@ def _require_usage_preview_join(
         or accounted is None
     ):
         raise ValueError("authenticated runner smoke usage differs from its exact cost preview")
+    operator_attempts = require_operator_cost_preview_usage(usage, preview)
     with localcontext() as context:
         context.prec = 160
         if Decimal(accounted) > Decimal(preview.maximum_cost_usd_per_attempt_exact) * Decimal(
             usage.attempts
         ):
             raise ValueError("authenticated runner smoke usage exceeds its exact cost preview")
+    return operator_attempts
+
+
+def _require_operator_cost_ledger_join(
+    attempts: tuple[OperatorRouteCostAttemptEvidence, ...],
+    interval: AuthenticatedCrossLineageLedgerIntervalEvidence,
+) -> None:
+    """Join each retained bill to the exact closed entry, never just the aggregate."""
+
+    for billed in attempts:
+        if billed.reservation.policy.ledger_ceiling_usd_exact != interval.cap_usd:
+            raise ValueError("operator reservation ceiling differs from the closed ledger")
+        entry = next(
+            (item for item in interval.entries if item.request_id == billed.attempt_request_id),
+            None,
+        )
+        if (
+            entry is None
+            or billed.ledger_entry_sha256 != entry.entry_sha256
+            or billed.reserved_cost_usd_exact != entry.reserved_usd
+            or billed.actual_billed_cost_usd_exact != entry.actual_cost_usd
+        ):
+            raise ValueError("operator cost attempt differs from exact closed ledger entry")
 
 
 def _false_plan_authority_payload() -> dict[str, bool]:

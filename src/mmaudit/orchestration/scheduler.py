@@ -33,10 +33,11 @@ from decimal import (
 from enum import StrEnum
 from itertools import islice
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING, Any, Never, SupportsIndex, cast
+from typing import TYPE_CHECKING, Any, Literal, Never, SupportsIndex, cast
 
 from pydantic import BaseModel
 
+from mmaudit.constants import SPECIALIST_INVESTIGATOR_ROLES
 from mmaudit.models.candidate_review_stamping import (
     CandidateReviewStampingError,
     stamp_candidate_review_findings,
@@ -94,7 +95,6 @@ from mmaudit.models.schemas import (
     Finding,
     ModelRequestValidationStatus,
     ModelSurfaceReviewArtifact,
-    ModelSurfaceReviewRecord,
     ModelSurfaceReviewRequest,
     ReportQualityReview,
     ReproductionResult,
@@ -110,6 +110,7 @@ from mmaudit.models.truncation import (
     CandidateReviewNormalizationEvidence,
     CandidateReviewTruncatedEnvelopeEvidence,
     CandidateReviewTruncationProjection,
+    candidate_review_protocol_implementation_is_pristine,
     candidate_review_schema_algorithm_version,
 )
 from mmaudit.models.truncation_recovery import (
@@ -137,13 +138,27 @@ from mmaudit.models.truncation_recovery_journal import (
     SchedulerTruncationRecoveryFamilyClosure,
     SchedulerTruncationRecoveryFamilyPromotion,
     SchedulerTruncationRecoveryFamilyRoot,
+    SchedulerTruncationRecoveryFullTreeBinding,
     SchedulerTruncationRecoveryParentKind,
     SchedulerTruncationRecoveryPromotionBinding,
     SchedulerTruncationRecoveryRequestedSurfaceManifest,
     SchedulerTruncationRecoveryRequestLimitBinding,
     SchedulerTruncationRecoveryResultOrigin,
     SchedulerTruncationRecoveryTerminalStatus,
+    _require_nested_recovery_terminal_outcome,
+    resolve_truncation_recovery_root_family,
     validate_truncation_recovery_entry_chain,
+)
+from mmaudit.models.truncation_tree import (
+    TruncationRecoveryTreeInventory,
+    _candidate_review_projection_algorithm,
+    _RecoveredCandidateReviewContent,
+    _require_candidate_review_normalization_algorithm,
+    rebuild_bounded_tree_candidate_content,
+    truncation_recovery_tree_inventory,
+)
+from mmaudit.models.truncation_tree import (
+    full_tree_promotion_binding as _full_tree_promotion_binding,
 )
 from mmaudit.models.usage import (
     _issue_trusted_usage_recovery_scope,
@@ -178,7 +193,10 @@ from mmaudit.orchestration.model_review_authority import (
     ModelReviewPreDispatchBinding as SchedulerModelReviewPreDispatchBinding,
 )
 from mmaudit.orchestration.truncation_recovery_evidence import (
+    PromotedRecursiveRecoveryCapability,
+    PromotedRecursiveRecoveryProjection,
     TruncationRecoveryEvidenceError,
+    VerifiedPromotedFullTreeTruncationRecoverySurfaceCoverage,
     VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverage,
     VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverageProjection,
     VerifiedPromotedTruncationRecoverySurfaceCoverage,
@@ -405,6 +423,19 @@ class _JournalCleanupClaim:
     token: object
 
 
+@dataclass(frozen=True, slots=True)
+class _RecoveryTreeJournalSnapshot:
+    """Detached comparison data read through the original live journal registry."""
+
+    manifest_sha256: str
+    recovery_prefix: tuple[SchedulerTruncationRecoveryEntry, ...]
+    main_usage_records: tuple[UsageRecord, ...]
+    parent_usage_record: UsageRecord
+    baseline_spent_usd_exact: str
+    campaign_cap_usd_exact: str
+    model_review_bindings: tuple[SchedulerModelReviewPreDispatchBinding, ...]
+
+
 type _AdmitJournalOpening = Callable[..., object]
 type _BindJournalCustody = Callable[..., None]
 type _ActivateJournalCustody = Callable[..., None]
@@ -458,6 +489,7 @@ type _JournalRecursivePromotionCapabilities = Callable[
     [object],
     tuple[VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverage, ...],
 ]
+type _ReadRecoveryTreeJournalSnapshot = Callable[..., _RecoveryTreeJournalSnapshot]
 
 
 _scheduler_journal_opener_token = object()
@@ -509,6 +541,7 @@ def _build_scheduler_journal_custody_registry(
     _RequireRecursivePromotionCapability,
     _JournalDirectPromotionCapabilities,
     _JournalRecursivePromotionCapabilities,
+    _ReadRecoveryTreeJournalSnapshot,
 ]:
     """Build process-private custody, close, and dispatch registries.
 
@@ -522,6 +555,9 @@ def _build_scheduler_journal_custody_registry(
     binding_type = SchedulerModelReviewPreDispatchBinding
     authorization_type = SchedulerModelReviewPreDispatchAuthorization
     recovery_entry_types = dict(SCHEDULER_TRUNCATION_RECOVERY_ENTRY_TYPES)
+    tree_inventory = truncation_recovery_tree_inventory
+    main_usage_records = _main_scheduler_usage_records
+    snapshot_type = _RecoveryTreeJournalSnapshot
 
     current_process_id = os.getpid
     current_thread_id = threading.get_ident
@@ -1927,7 +1963,20 @@ def _build_scheduler_journal_custody_registry(
 
         recursive = promotion.schema_version == "1.1"
         family_ids: tuple[str, ...]
-        if recursive:
+        if promotion.schema_version == "1.2":
+            full_tree = _full_recovery_tree_inventory(
+                family=family, closure=closure, indexes=indexes
+            )
+            family_ids = tuple(item.family_id for item in full_tree.families)
+            by_child = {
+                child.child_task_id: item
+                for item in full_tree.families
+                for child in item.recovery_plan.children
+            }
+            ordered_children = tuple(
+                (by_child[child.child_task_id], child) for child in full_tree.children
+            )
+        elif recursive:
             tree = _recursive_recovery_tree_inventory(
                 family=family,
                 closure=closure,
@@ -2027,6 +2076,107 @@ def _build_scheduler_journal_custody_registry(
             != (retained[-1].entry_sha256 if retained else None)
         ):
             raise ValueError("promoted recovery checkpoint prefix is no longer exact")
+
+    def read_recovery_tree_snapshot(
+        *, owner: object, root_family_id: str
+    ) -> _RecoveryTreeJournalSnapshot:
+        """Recheck durable ownership and every original dispatch before exposing data."""
+
+        require_process()
+        with lock:
+            record = live_owner(owner)
+            require_current_full_state(record, owner)
+            require_exact_recovery_custody(record, owner)
+            validate_current_recovery_checkpoint(record, owner)
+            journal = cast(SchedulerJournal, owner)
+            indexes = journal._truncation_recovery_indexes
+            closure = indexes.closures.get(root_family_id)
+            if type(closure) is not SchedulerTruncationRecoveryFamilyClosure:
+                raise ValueError("full recovery tree lacks its original root closure")
+            prefix = tuple(journal._truncation_recovery_entries[: closure.entry_index + 1])
+            tree = tree_inventory(prefix, root_family_id=root_family_id)
+            family = tree.families[0]
+            parent = family.recovery_plan.parent
+            root_task_id = parent.parent_task_id
+            scheduler = journal._indexes
+            task_and_plan = scheduler.tasks.get(root_task_id)
+            activation = scheduler.activations.get(root_task_id)
+            history = scheduler.event_histories.get(root_task_id, [])
+            attempt = scheduler.provider_attempts.get(root_task_id)
+            if task_and_plan is None or activation is None or attempt is None or len(history) < 3:
+                raise ValueError("full recovery tree lacks its original root request")
+            task, plan = task_and_plan
+            root_binding = require_authorization_for_task(
+                owner=owner, task_id=root_task_id, recovery=False
+            )
+            if (
+                root_binding
+                != build_model_review_binding(
+                    plan=plan, task=task, activation=activation, event=history[2]
+                )
+                or root_binding.request_id != parent.parent_logical_request_id
+                or root_binding.task_plan_sha256 != parent.parent_task_plan_sha256
+                or root_binding.activation_sha256 != parent.parent_activation_sha256
+                or root_binding.requested_surface_manifest_sha256
+                != family.requested_surface_manifest.requested_surface_manifest_sha256
+                or attempt.attempt_evidence_sha256 != parent.provider_attempt_evidence_sha256
+                or plan.manifest.manifest_sha256 != family.request_limit_binding.manifest_sha256
+            ):
+                raise ValueError("full recovery tree root dispatch custody differs")
+            by_child = {
+                child.child_task_id: item
+                for item in tree.families
+                for child in item.recovery_plan.children
+            }
+            bindings: list[SchedulerModelReviewPreDispatchBinding] = []
+            for child in tree.children:
+                child_activation = indexes.activations.get(child.child_task_id)
+                dispatch = indexes.dispatches.get(child.child_task_id)
+                if child_activation is None or dispatch is None:
+                    raise ValueError("full recovery tree child lacks original dispatch custody")
+                expected = build_recovery_model_review_binding(
+                    journal=journal,
+                    family=by_child[child.child_task_id],
+                    child=child,
+                    activation=child_activation,
+                    dispatch=dispatch,
+                )
+                if (
+                    require_authorization_for_task(
+                        owner=owner, task_id=child.child_task_id, recovery=True
+                    )
+                    != expected
+                ):
+                    raise ValueError("full recovery tree child dispatch custody differs")
+                bindings.append(expected)
+            registered = recovery_authorization_bindings(
+                owner=owner, family_ids=tuple(item.family_id for item in tree.families)
+            )
+            if len(registered) != len(bindings) or set(registered) != set(bindings):
+                raise ValueError("full recovery tree private dispatch inventory differs")
+            baseline = plan.manifest.cost_ledger_baseline
+            # Reconstruct comparison copies, never leak aliases to private journal objects.
+            return snapshot_type(
+                manifest_sha256=plan.manifest.manifest_sha256,
+                recovery_prefix=validate_truncation_recovery_entry_chain(
+                    type(entry).model_validate_json(stable_json(entry), strict=True)
+                    for entry in prefix
+                ),
+                main_usage_records=tuple(
+                    UsageRecord.model_validate(usage.model_dump(mode="python"), strict=True)
+                    for usage in main_usage_records(
+                        scheduler, maximum_pass_ordinal=SCHEDULER_PASS_ORDER.index(plan.pass_kind)
+                    )
+                ),
+                parent_usage_record=UsageRecord.model_validate(
+                    attempt.usage_record.model_dump(mode="python"), strict=True
+                ),
+                baseline_spent_usd_exact=baseline.spent_usd_exact if baseline else "0",
+                campaign_cap_usd_exact=_canonical_recovery_usd_sum(
+                    (baseline.cap_usd_exact if baseline else TRUNCATION_RECOVERY_MAX_USD_EXACT,)
+                ),
+                model_review_bindings=(replace(root_binding), *(replace(b) for b in bindings)),
+            )
 
     def current_promotion_material(
         record: _JournalCustodyRecord,
@@ -2398,6 +2548,7 @@ def _build_scheduler_journal_custody_registry(
         require_recursive_promotion_capability,
         direct_promotion_capabilities,
         recursive_promotion_capabilities,
+        read_recovery_tree_snapshot,
     )
 
 
@@ -2559,6 +2710,29 @@ class _SchedulerTruncationRecoveryIndexes:
     promotion_by_parent_task: dict[str, str]
     recovery_requests_consumed: int
     request_limit_attempts_reserved: dict[str, int]
+
+
+type _SchedulerJournalArtifacts = tuple[
+    tuple[SchedulerPassPlan, ...],
+    tuple[SchedulerTaskActivation, ...],
+    tuple[SchedulerTaskEvent, ...],
+    tuple[SchedulerTaskOutput, ...],
+    tuple[tuple[str, SchedulerRetrievalBinding], ...],
+    tuple[SchedulerProviderAttemptEvidence, ...],
+    tuple[SchedulerTaskResult, ...],
+    tuple[SchedulerPassResult, ...],
+    tuple[SchedulerTruncationRecoveryEntry, ...],
+    SchedulerTerminalReportAuthority | None,
+]
+
+
+@dataclass(frozen=True)
+class _LoadedSchedulerJournalState:
+    """Fresh file-derived state and indexes, never cached across validation calls."""
+
+    artifacts: _SchedulerJournalArtifacts
+    indexes: _SchedulerJournalIndexes
+    recovery_indexes: _SchedulerTruncationRecoveryIndexes
 
 
 @dataclass(frozen=True)
@@ -2834,85 +3008,19 @@ def _validate_nested_recovery_parent(
     scheduler: _SchedulerJournalIndexes,
 ) -> None:
     parent = family.recovery_plan.parent
-    child_match = indexes.children.get(parent.parent_task_id)
-    activation = indexes.activations.get(parent.parent_task_id)
-    result = indexes.results.get(parent.parent_task_id)
-    if child_match is None or activation is None or result is None:
-        raise ValueError("nested scheduler recovery root lacks exact durable parent evidence")
-    child, parent_family_id = child_match
-    parent_family = indexes.families[parent_family_id]
-    sibling_children = tuple(
-        candidate
-        for candidate in parent_family.recovery_plan.children
-        if candidate.child_task_id != child.child_task_id
-    )
-    sibling_result = (
-        indexes.results.get(sibling_children[0].child_task_id)
-        if len(sibling_children) == 1
-        else None
-    )
-    sibling_activation = (
-        indexes.activations.get(sibling_children[0].child_task_id)
-        if len(sibling_children) == 1
-        else None
-    )
-    if (
-        not isinstance(result, SchedulerTruncationRecoveryChildResult)
-        or result.schema_version != "1.1"
-        or result.result_origin is not SchedulerTruncationRecoveryResultOrigin.RUNTIME
-        or result.runtime_usage_record is None
-        or result.runtime_activation != activation
-        or result.runtime_specialist_accepted_outcome is not None
-        or result.runtime_specialist_accepted_outcome_sha256 is not None
-        or family.parent_family_id != parent_family_id
-        or parent_family.parent_kind is not SchedulerTruncationRecoveryParentKind.SCHEDULER_TASK
-        or parent_family.parent_family_id is not None
-        or parent_family.recovery_plan.parent.current_depth != 0
-        or parent_family_id in indexes.closures
-        or not isinstance(sibling_result, SchedulerTruncationRecoveryChildResult)
-        or sibling_result.schema_version != "1.1"
-        or sibling_result.result_origin is not SchedulerTruncationRecoveryResultOrigin.RUNTIME
-        or sibling_result.terminal_status is not SchedulerTruncationRecoveryTerminalStatus.SUCCEEDED
-        or sibling_result.runtime_usage_record is None
-        or sibling_result.runtime_activation != sibling_activation
-        or sibling_result.runtime_specialist_accepted_outcome is not None
-        or sibling_result.runtime_specialist_accepted_outcome_sha256 is not None
-        or sibling_result.completed_surface_ids != sibling_children[0].surface_ids
-        or sibling_activation is None
-        or sibling_activation.request_role != activation.request_role
-        or child.parent_depth != 0
-        or child.depth != 1
-        or parent.parent_logical_request_id != child.child_logical_request_id
-        or parent.parent_task_plan_sha256 != child.child_plan_sha256
-        or parent.parent_activation_sha256 != activation.entry_sha256
-        or parent.provider_attempt_evidence_sha256 != result.provider_attempt_evidence_sha256
-        or parent.pass_plan_id != child.pass_plan_id
-        or parent.requested_surface_manifest_sha256 != child.requested_surface_manifest_sha256
-        or parent.requested_surface_ids != child.surface_ids
-        or parent.current_depth != child.depth
-        or parent.current_depth != 1
-        or parent.parent_path != child.path
-        or any(
-            grandchild.parent_depth != 1 or grandchild.depth != 2
-            for grandchild in (family.recovery_plan.children)
-        )
-        or result.terminal_status is not SchedulerTruncationRecoveryTerminalStatus.TRUNCATED
-        or result.truncation_projection != family.truncation_projection
-        or family.truncation_projection.findings_state is not CandidateReviewChannelState.COMPLETE
-        or family.truncation_projection.surface_reviews
-        or result.retained_surface_ids
-        or family.parent_terminal_result_sha256 != result.entry_sha256
-        or family.request_limit_binding != parent_family.request_limit_binding
-        or family.requested_surface_manifest != parent_family.requested_surface_manifest
-        or activation.request_role is None
-        or activation.request_role.startswith("specialist:")
-        or parent.parent_task_id in indexes.nested_family_by_parent_child
-        or any(
-            candidate.parent_family_id == parent_family_id
-            for candidate in indexes.families.values()
-        )
-    ):
+    if parent.parent_task_id in indexes.nested_family_by_parent_child:
         raise ValueError("nested scheduler recovery root differs from its truncated child")
+    try:
+        resolve_truncation_recovery_root_family(
+            family=family,
+            families=indexes.families,
+            activations=indexes.activations,
+            results=indexes.results,
+            closures=indexes.closures,
+        )
+    except ValueError as exc:
+        raise ValueError("nested scheduler recovery root differs from its truncated child") from exc
+    result = indexes.results[parent.parent_task_id]
     assert isinstance(result, SchedulerTruncationRecoveryChildResult)
     _require_exact_recovery_resources(
         family=family,
@@ -2971,14 +3079,14 @@ def _expected_recovery_family_closure(
     tuple[str, ...],
     tuple[str, ...],
     tuple[str, ...],
+    Literal["1.0", "1.1", "1.2", "1.3"],
 ]:
     result_hashes: list[str] = []
     nested_hashes: list[str] = []
     covered: set[str] = set()
     uncertain = False
     all_branches_have_typed_coverage = True
-    direct_typed_successes: list[SchedulerTruncationRecoveryChildResult] = []
-    nested_typed_coverage_count = 0
+    generalized_tree = family.parent_kind is SchedulerTruncationRecoveryParentKind.RECOVERY_CHILD
     for child in family.recovery_plan.children:
         result = indexes.results.get(child.child_task_id)
         if result is None:
@@ -2999,7 +3107,6 @@ def _expected_recovery_family_closure(
                 activation=activation,
                 family=family,
             )
-            direct_typed_successes.append(result)
             covered.update(result.completed_surface_ids)
             continue
         if result.terminal_status is SchedulerTruncationRecoveryTerminalStatus.SUCCEEDED:
@@ -3015,9 +3122,6 @@ def _expected_recovery_family_closure(
                 raise ValueError(
                     "v1 recovery closure lacks exact typed runtime child completion custody"
                 )
-            if family.parent_kind is SchedulerTruncationRecoveryParentKind.RECOVERY_CHILD:
-                all_branches_have_typed_coverage = False
-                continue
             nested_family_id = indexes.nested_family_by_parent_child.get(child.child_task_id)
             if nested_family_id is None:
                 all_branches_have_typed_coverage = False
@@ -3031,20 +3135,36 @@ def _expected_recovery_family_closure(
                 is not SchedulerTruncationRecoveryParentKind.RECOVERY_CHILD
                 or nested_family.parent_family_id != family.family_id
                 or nested_family.recovery_plan.parent.parent_task_id != child.child_task_id
-                or nested_family.recovery_plan.parent.current_depth != 1
+                or nested_family.recovery_plan.parent.current_depth != child.depth
                 or nested_family.recovery_plan.parent.parent_path != child.path
                 or nested_closure.family_id != nested_family.family_id
             ):
                 raise ValueError("scheduler recovery nested closure differs from its ancestor")
             nested_hashes.append(nested_closure.entry_sha256)
+            generalized_tree = generalized_tree or nested_closure.schema_version != "1.1"
             if (
-                nested_closure.schema_version == "1.1"
+                nested_closure.schema_version in {"1.1", "1.2", "1.3"}
                 and nested_closure.closure_status
-                is SchedulerTruncationRecoveryClosureStatus.COVERAGE_CLOSED
-                and nested_closure.covered_unfinished_surface_ids == child.surface_ids
+                in {
+                    SchedulerTruncationRecoveryClosureStatus.COVERAGE_CLOSED,
+                    SchedulerTruncationRecoveryClosureStatus.RECURSIVE_STRUCTURALLY_CLOSED_NONAUTHORIZING,
+                }
+                and nested_family.recovery_plan.parent.retained_surface_ids
+                == result.retained_surface_ids
+                and nested_closure.covered_unfinished_surface_ids
+                == nested_family.recovery_plan.parent.unfinished_surface_ids
+                and tuple(
+                    sorted(
+                        (
+                            *result.retained_surface_ids,
+                            *nested_closure.covered_unfinished_surface_ids,
+                        )
+                    )
+                )
+                == child.surface_ids
             ):
+                covered.update(result.retained_surface_ids)
                 covered.update(nested_closure.covered_unfinished_surface_ids)
-                nested_typed_coverage_count += 1
                 continue
             all_branches_have_typed_coverage = False
             if nested_closure.closure_status is SchedulerTruncationRecoveryClosureStatus.UNCERTAIN:
@@ -3058,14 +3178,6 @@ def _expected_recovery_family_closure(
     expected_surfaces = set(family.recovery_plan.parent.unfinished_surface_ids)
     if not covered <= expected_surfaces:
         raise ValueError("scheduler recovery closure covers surfaces outside its frozen parent")
-    if nested_hashes and (
-        family.parent_kind is not SchedulerTruncationRecoveryParentKind.SCHEDULER_TASK
-        or len(nested_hashes) != 1
-        or nested_typed_coverage_count != 1
-        or len(direct_typed_successes) != 1
-        or direct_typed_successes[0].schema_version != "1.1"
-    ):
-        all_branches_have_typed_coverage = False
     exact_typed_coverage = all_branches_have_typed_coverage and covered == expected_surfaces
     status = (
         SchedulerTruncationRecoveryClosureStatus.UNCERTAIN
@@ -3078,46 +3190,21 @@ def _expected_recovery_family_closure(
         if exact_typed_coverage
         else SchedulerTruncationRecoveryClosureStatus.INCOMPLETE
     )
+    schema_version: Literal["1.0", "1.1", "1.2", "1.3"] = (
+        ("1.3" if generalized_tree or len(nested_hashes) != 1 else "1.2")
+        if status
+        is SchedulerTruncationRecoveryClosureStatus.RECURSIVE_STRUCTURALLY_CLOSED_NONAUTHORIZING
+        else "1.1"
+        if status is SchedulerTruncationRecoveryClosureStatus.COVERAGE_CLOSED
+        else "1.0"
+    )
     return (
         status,
         tuple(result_hashes),
         tuple(nested_hashes),
         tuple(sorted(covered)),
+        schema_version,
     )
-
-
-@dataclass(frozen=True, slots=True)
-class _RecoveredCandidateReviewContent:
-    findings: tuple[CandidateFinding, ...]
-    surface_reviews: tuple[ModelSurfaceReviewRecord, ...]
-    origins: tuple[SchedulerRecoveredCandidateOrigin, ...]
-    child_results: tuple[SchedulerTruncationRecoveryChildResult, ...]
-
-
-def _candidate_review_projection_algorithm(
-    projection: CandidateReviewTruncationProjection,
-) -> str:
-    """Resolve the immutable scheduler algorithm bound by one truncation projection."""
-
-    return candidate_review_schema_algorithm_version(
-        wire_schema_sha256=projection.wire_schema_sha256,
-        normalized_batch_schema_sha256=projection.normalized_batch_schema_sha256,
-    )
-
-
-def _require_candidate_review_normalization_algorithm(
-    normalization: CandidateReviewNormalizationEvidence,
-    *,
-    algorithm_version: str,
-) -> None:
-    """Reject a recovery leaf whose normalized schema pair crosses scheduler versions."""
-
-    observed = candidate_review_schema_algorithm_version(
-        wire_schema_sha256=normalization.wire_schema_sha256,
-        normalized_batch_schema_sha256=normalization.normalized_batch_schema_sha256,
-    )
-    if observed != algorithm_version:
-        raise ValueError("scheduler recovery candidate-review schema custody mixes algorithms")
 
 
 @dataclass(frozen=True, slots=True)
@@ -3194,8 +3281,14 @@ def _recursive_recovery_tree_inventory(
     closure: SchedulerTruncationRecoveryFamilyClosure,
     indexes: _SchedulerTruncationRecoveryIndexes,
 ) -> _RecursiveRecoveryTreeInventory:
-    """Reconstruct the one-level zero-retained tree from durable journal indexes."""
+    """Reconstruct the bounded one-level tree from durable journal indexes."""
 
+    request_role = family.request_limit_binding.parent_request_limit_reservation.role
+    if (
+        request_role.startswith("specialist:")
+        and request_role.removeprefix("specialist:") not in SPECIALIST_INVESTIGATOR_ROLES
+    ):
+        raise ValueError("scheduler recursive promotion requires a known specialist role")
     if (
         family.parent_kind is not SchedulerTruncationRecoveryParentKind.SCHEDULER_TASK
         or family.parent_family_id is not None
@@ -3214,7 +3307,7 @@ def _recursive_recovery_tree_inventory(
         result = indexes.results.get(child.child_task_id)
         if (
             not isinstance(result, SchedulerTruncationRecoveryChildResult)
-            or result.schema_version != "1.1"
+            or result.schema_version not in {"1.1", "1.2"}
             or result.result_origin is not SchedulerTruncationRecoveryResultOrigin.RUNTIME
             or result.family_id != family.family_id
             or result.family_root_sha256 != family.entry_sha256
@@ -3222,8 +3315,6 @@ def _recursive_recovery_tree_inventory(
             or result.child_logical_request_id != child.child_logical_request_id
             or result.child_plan_sha256 != child.child_plan_sha256
             or result.child_surface_ids != child.surface_ids
-            or result.runtime_specialist_accepted_outcome is not None
-            or result.runtime_specialist_accepted_outcome_sha256 is not None
         ):
             raise ValueError("scheduler recursive promotion root child custody is not exact")
         root_results.append((child, result))
@@ -3237,8 +3328,8 @@ def _recursive_recovery_tree_inventory(
         if result.terminal_status is SchedulerTruncationRecoveryTerminalStatus.TRUNCATED
         and result.truncation_projection is not None
         and result.truncation_projection.findings_state is CandidateReviewChannelState.COMPLETE
-        and not result.retained_surface_ids
-        and not result.truncation_projection.surface_reviews
+        and result.retained_surface_ids
+        == tuple(record.surface_id for record in result.truncation_projection.surface_reviews)
     )
     direct_leaves = tuple(
         (child, result)
@@ -3265,6 +3356,20 @@ def _recursive_recovery_tree_inventory(
         or nested_family.parent_family_id != family.family_id
         or nested_family.recovery_plan.parent.parent_task_id != bridge_child.child_task_id
         or nested_family.parent_terminal_result_sha256 != bridge_result.entry_sha256
+        or nested_family.truncation_projection != bridge_result.truncation_projection
+        or nested_family.recovery_plan.parent.retained_surface_ids
+        != bridge_result.retained_surface_ids
+        or nested_closure.covered_unfinished_surface_ids
+        != nested_family.recovery_plan.parent.unfinished_surface_ids
+        or tuple(
+            sorted(
+                (
+                    *bridge_result.retained_surface_ids,
+                    *nested_closure.covered_unfinished_surface_ids,
+                )
+            )
+        )
+        != bridge_child.surface_ids
         or nested_family.recovery_plan.parent.current_depth != 1
         or nested_family.recovery_plan.parent.parent_path != bridge_child.path
         or nested_closure.schema_version != "1.1"
@@ -3279,7 +3384,7 @@ def _recursive_recovery_tree_inventory(
         result = indexes.results.get(child.child_task_id)
         if (
             not isinstance(result, SchedulerTruncationRecoveryChildResult)
-            or result.schema_version != "1.1"
+            or result.schema_version not in {"1.1", "1.2"}
             or result.result_origin is not SchedulerTruncationRecoveryResultOrigin.RUNTIME
             or result.terminal_status is not SchedulerTruncationRecoveryTerminalStatus.SUCCEEDED
             or result.family_id != nested_family.family_id
@@ -3292,8 +3397,6 @@ def _recursive_recovery_tree_inventory(
             or result.runtime_usage_record is None
             or result.runtime_normalized_batch is None
             or result.runtime_output_artifact is None
-            or result.runtime_specialist_accepted_outcome is not None
-            or result.runtime_specialist_accepted_outcome_sha256 is not None
         ):
             raise ValueError("scheduler recursive promotion nested leaf custody is not exact")
         nested_results_list.append(result)
@@ -3321,6 +3424,15 @@ def _recursive_recovery_tree_inventory(
     activations = tuple(
         indexes.activations[result.child_task_id] for result in inventory.tree_results
     )
+    for result, activation in zip(inventory.tree_results, activations, strict=True):
+        if (
+            result.runtime_activation != activation
+            or activation.request_role != request_role
+            or result.runtime_usage_record is None
+            or result.runtime_usage_record.role != request_role
+        ):
+            raise ValueError("scheduler recursive promotion child role differs from its root")
+        _require_nested_recovery_terminal_outcome(result, activation)
     expected_ordinals = tuple(
         range(family.request_count_before_family + 1, nested_family.request_count_after_family + 1)
     )
@@ -3527,233 +3639,123 @@ def _rebuild_recursive_recovered_candidate_review_content(
         closure=closure,
         indexes=indexes,
     )
-    parent_task_id = family.recovery_plan.parent.parent_task_id
-    parent_attempt = scheduler.provider_attempts.get(parent_task_id)
-    if (
-        parent_attempt is None
-        or parent_attempt.schema_version != "1.1"
-        or parent_attempt.truncation_projection != family.truncation_projection
-    ):
-        raise ValueError("scheduler recursive promotion lacks a typed root parent attempt")
-    bridge_projection = tree.bridge_result.truncation_projection
-    if bridge_projection is None:
-        raise ValueError("scheduler recursive promotion bridge lacks typed truncation custody")
-    algorithm_version = _candidate_review_projection_algorithm(family.truncation_projection)
-    bridge_algorithm_version = _candidate_review_projection_algorithm(bridge_projection)
-    nested_algorithm_version = _candidate_review_projection_algorithm(
-        tree.nested_family.truncation_projection
-    )
-    if {bridge_algorithm_version, nested_algorithm_version} != {algorithm_version}:
-        raise ValueError("scheduler recursive recovery schema custody mixes algorithms")
-
-    expected_surface_records = list(family.truncation_projection.surface_reviews)
-    raw_candidates: dict[tuple[str, str], tuple[CandidateFinding, dict[str, Any]]] = {}
-    usage_by_request: dict[str, UsageRecord] = {}
-    parent_usage = parent_attempt.usage_record
-    usage_by_request[parent_usage.request_id] = parent_usage
-    for finding in family.truncation_projection.findings:
-        finding_sha256 = scheduler_candidate_payload_sha256(
-            finding,
-            algorithm_version=algorithm_version,
-        )
-        frames = tuple(
-            frame
-            for frame in family.truncation_projection.accepted_frames
-            if frame.phase is CandidateReviewFramePhase.FINDING
-            and frame.record_id == finding.candidate_id
-            and frame.normalized_value_sha256 == finding_sha256
-        )
-        if len(frames) != 1:
-            raise ValueError("scheduler recursive root finding lacks one accepted frame")
-        frame = frames[0]
-        raw_candidates[(parent_usage.request_id, finding.candidate_id)] = (
-            finding,
-            {
-                "origin_kind": SchedulerRecoveredCandidateOriginKind.PARENT_FRAME,
-                "usage_record_sha256": parent_attempt.usage_record_sha256,
-                "context_request_evidence_sha256": (parent_attempt.context_request_evidence_sha256),
-                "parent_projection_sha256": family.truncation_projection.evidence_sha256,
-                "accepted_frame_sequence": frame.sequence,
-                "accepted_frame_sha256": frame.frame_sha256,
-            },
-        )
-
-    bridge = tree.bridge_result
-    bridge_usage = bridge.runtime_usage_record
-    if bridge_usage is None:
-        raise ValueError("scheduler recursive promotion bridge lacks typed runtime custody")
-    bridge_context_sha256 = bridge_usage.routing.get("context_request_evidence_sha256")
-    if not isinstance(bridge_context_sha256, str):
-        raise ValueError("scheduler recursive promotion bridge lacks context-request custody")
-    usage_by_request[bridge_usage.request_id] = bridge_usage
-    for finding in bridge_projection.findings:
-        finding_sha256 = scheduler_candidate_payload_sha256(
-            finding,
-            algorithm_version=algorithm_version,
-        )
-        frames = tuple(
-            frame
-            for frame in bridge_projection.accepted_frames
-            if frame.phase is CandidateReviewFramePhase.FINDING
-            and frame.record_id == finding.candidate_id
-            and frame.normalized_value_sha256 == finding_sha256
-        )
-        if len(frames) != 1:
-            raise ValueError("scheduler recursive bridge finding lacks one accepted frame")
-        frame = frames[0]
-        key = (bridge_usage.request_id, finding.candidate_id)
-        if key in raw_candidates:
-            raise ValueError("scheduler recursive raw bridge candidate is duplicated")
-        raw_candidates[key] = (
-            finding,
-            {
-                "origin_kind": SchedulerRecoveredCandidateOriginKind.TRUNCATED_CHILD_FRAME,
-                "usage_record_sha256": bridge.runtime_usage_record_sha256,
-                "context_request_evidence_sha256": bridge_context_sha256,
-                "child_task_id": bridge.child_task_id,
-                "child_result_sha256": bridge.entry_sha256,
-                "truncation_projection_sha256": bridge_projection.evidence_sha256,
-                "accepted_frame_sequence": frame.sequence,
-                "accepted_frame_sha256": frame.frame_sha256,
-            },
-        )
-
-    for result in tree.promoted_leaf_results:
-        usage = result.runtime_usage_record
-        normalized_batch = result.runtime_normalized_batch
-        output_artifact = result.runtime_output_artifact
-        normalization = result.runtime_normalization_evidence
-        child_match = indexes.children.get(result.child_task_id)
-        if (
-            usage is None
-            or normalized_batch is None
-            or output_artifact is None
-            or normalization is None
-            or child_match is None
-        ):
-            raise ValueError("scheduler recursive promotion leaf lacks typed runtime custody")
-        _require_candidate_review_normalization_algorithm(
-            normalization,
-            algorithm_version=algorithm_version,
-        )
-        child, _family_id = child_match
-        if usage.request_id in usage_by_request:
-            raise ValueError("scheduler recursive promotion reused a request identity")
-        usage_by_request[usage.request_id] = usage
-        expected_surface_records.extend(output_artifact.records)
-        context_sha256 = usage.routing.get("context_request_evidence_sha256")
-        if not isinstance(context_sha256, str):
-            raise ValueError("scheduler recursive promotion leaf lacks context-request custody")
-        for finding in normalized_batch.findings:
-            key = (usage.request_id, finding.candidate_id)
-            if key in raw_candidates:
-                raise ValueError("scheduler recursive raw leaf candidate is duplicated")
-            raw_candidates[key] = (
-                finding,
-                {
-                    "origin_kind": SchedulerRecoveredCandidateOriginKind.CHILD_BATCH,
-                    "usage_record_sha256": result.runtime_usage_record_sha256,
-                    "context_request_evidence_sha256": context_sha256,
-                    "child_task_id": child.child_task_id,
-                    "child_result_sha256": result.entry_sha256,
-                    "normalization_evidence_sha256": normalization.evidence_sha256,
-                    "surface_artifact_sha256": output_artifact.artifact_sha256,
-                },
-            )
-
-    scanner_projection = dict(scanner_fingerprints_by_request)
-    if (
-        len(usage_by_request) != 5
-        or len(scanner_projection) != len(scanner_fingerprints_by_request)
-        or set(scanner_projection) != set(usage_by_request)
-    ):
-        raise ValueError("scheduler recursive promotion lacks exact five-request scanner custody")
-    raw_by_request: dict[str, list[tuple[CandidateFinding, dict[str, Any]]]] = {
-        request_id: [] for request_id in usage_by_request
-    }
-    for (request_id, _raw_candidate_id), raw in raw_candidates.items():
-        raw_by_request[request_id].append(raw)
-
-    expected_findings: list[CandidateFinding] = []
-    expected_origins: list[SchedulerRecoveredCandidateOrigin] = []
-    for request_id in sorted(usage_by_request):
-        usage = usage_by_request[request_id]
-        entries = tuple(sorted(raw_by_request[request_id], key=lambda item: item[0].candidate_id))
-        raw_findings = tuple(item[0] for item in entries)
-        try:
-            stamped = stamp_candidate_review_findings(
-                request_role=usage.role,
-                usage_record=usage,
-                trusted_scanner_fingerprints=scanner_projection[request_id],
-                raw_findings=raw_findings,
-            )
-        except CandidateReviewStampingError as exc:
-            raise ValueError("scheduler recursive candidate stamping failed exact replay") from exc
-        for (raw_finding, expected), accepted in zip(entries, stamped, strict=True):
-            origin_kind = cast(SchedulerRecoveredCandidateOriginKind, expected["origin_kind"])
-            common: dict[str, Any] = {
-                "origin_kind": origin_kind,
-                "accepted_candidate_id": accepted.candidate_id,
-                "accepted_candidate_sha256": scheduler_candidate_payload_sha256(
-                    accepted,
-                    algorithm_version=algorithm_version,
-                ),
-                "raw_candidate_id": raw_finding.candidate_id,
-                "raw_candidate_sha256": scheduler_candidate_payload_sha256(
-                    raw_finding,
-                    algorithm_version=algorithm_version,
-                ),
-                "request_id": request_id,
-                "request_role": usage.role,
-                "usage_record_sha256": cast(str, expected["usage_record_sha256"]),
-                "context_request_evidence_sha256": cast(
-                    str,
-                    expected["context_request_evidence_sha256"],
-                ),
-            }
-            if origin_kind is SchedulerRecoveredCandidateOriginKind.PARENT_FRAME:
-                origin = SchedulerRecoveredCandidateOrigin.build(
-                    **common,
-                    parent_projection_sha256=cast(str, expected["parent_projection_sha256"]),
-                    accepted_frame_sequence=cast(int, expected["accepted_frame_sequence"]),
-                    accepted_frame_sha256=cast(str, expected["accepted_frame_sha256"]),
-                )
-            elif origin_kind is SchedulerRecoveredCandidateOriginKind.TRUNCATED_CHILD_FRAME:
-                origin = SchedulerRecoveredCandidateOrigin.build(
-                    **common,
-                    child_task_id=cast(str, expected["child_task_id"]),
-                    child_result_sha256=cast(str, expected["child_result_sha256"]),
-                    truncation_projection_sha256=cast(
-                        str,
-                        expected["truncation_projection_sha256"],
-                    ),
-                    accepted_frame_sequence=cast(int, expected["accepted_frame_sequence"]),
-                    accepted_frame_sha256=cast(str, expected["accepted_frame_sha256"]),
-                )
-            else:
-                origin = SchedulerRecoveredCandidateOrigin.build(
-                    **common,
-                    child_task_id=cast(str, expected["child_task_id"]),
-                    child_result_sha256=cast(str, expected["child_result_sha256"]),
-                    normalization_evidence_sha256=cast(
-                        str,
-                        expected["normalization_evidence_sha256"],
-                    ),
-                    surface_artifact_sha256=cast(str, expected["surface_artifact_sha256"]),
-                )
-            expected_findings.append(accepted)
-            expected_origins.append(origin)
-
     return (
-        _RecoveredCandidateReviewContent(
-            findings=tuple(sorted(expected_findings, key=lambda item: item.candidate_id)),
-            surface_reviews=tuple(
-                sorted(expected_surface_records, key=lambda item: item.surface_id)
-            ),
-            origins=tuple(sorted(expected_origins, key=lambda item: item.accepted_candidate_id)),
-            child_results=tree.tree_results,
+        _rebuild_bounded_tree_recovered_candidate_content(
+            family=family,
+            indexes=indexes,
+            scheduler=scheduler,
+            scanner_fingerprints_by_request=scanner_fingerprints_by_request,
+            bridges=(tree.bridge_result,),
+            leaves=tree.promoted_leaf_results,
+            results=tree.tree_results,
         ),
         tree,
+    )
+
+
+def _rebuild_bounded_tree_recovered_candidate_content(
+    *,
+    family: SchedulerTruncationRecoveryFamilyRoot,
+    indexes: _SchedulerTruncationRecoveryIndexes,
+    scheduler: _SchedulerJournalIndexes,
+    scanner_fingerprints_by_request: tuple[tuple[str, tuple[str, ...]], ...],
+    bridges: tuple[SchedulerTruncationRecoveryChildResult, ...],
+    leaves: tuple[SchedulerTruncationRecoveryChildResult, ...],
+    results: tuple[SchedulerTruncationRecoveryChildResult, ...],
+) -> _RecoveredCandidateReviewContent:
+    return rebuild_bounded_tree_candidate_content(
+        family=family,
+        parent_attempt=scheduler.provider_attempts.get(family.recovery_plan.parent.parent_task_id),
+        nested_families={
+            child_id: indexes.families[family_id]
+            for child_id, family_id in indexes.nested_family_by_parent_child.items()
+        },
+        child_plans={key: value[0] for key, value in indexes.children.items()},
+        scanner_fingerprints_by_request=scanner_fingerprints_by_request,
+        bridges=bridges,
+        leaves=leaves,
+        results=results,
+    )
+
+
+def _full_recovery_tree_inventory(
+    *,
+    family: SchedulerTruncationRecoveryFamilyRoot,
+    closure: SchedulerTruncationRecoveryFamilyClosure,
+    indexes: _SchedulerTruncationRecoveryIndexes,
+) -> TruncationRecoveryTreeInventory:
+    """Reconstruct the complete original prefix, including unrelated earlier liabilities."""
+
+    if closure.schema_version != "1.3":
+        raise ValueError("full-tree journal promotion requires the explicit larger-tree closure")
+    entries: tuple[SchedulerTruncationRecoveryEntry, ...] = (
+        *indexes.families.values(),
+        *indexes.activations.values(),
+        *indexes.dispatches.values(),
+        *indexes.results.values(),
+        *indexes.closures.values(),
+        *indexes.promotions.values(),
+    )
+    prefix = tuple(
+        sorted(
+            (entry for entry in entries if entry.entry_index <= closure.entry_index),
+            key=lambda entry: entry.entry_index,
+        )
+    )
+    tree = truncation_recovery_tree_inventory(prefix, root_family_id=family.family_id)
+    if tree.families[0] != family or closure not in tree.closures:
+        raise ValueError("full-tree journal promotion changed its root inventory")
+    return tree
+
+
+def _rebuild_full_tree_recovered_candidate_content(
+    *,
+    family: SchedulerTruncationRecoveryFamilyRoot,
+    closure: SchedulerTruncationRecoveryFamilyClosure,
+    indexes: _SchedulerTruncationRecoveryIndexes,
+    scheduler: _SchedulerJournalIndexes,
+    scanner_fingerprints_by_request: tuple[tuple[str, tuple[str, ...]], ...],
+) -> tuple[_RecoveredCandidateReviewContent, TruncationRecoveryTreeInventory]:
+    tree = _full_recovery_tree_inventory(family=family, closure=closure, indexes=indexes)
+    content = _rebuild_bounded_tree_recovered_candidate_content(
+        family=family,
+        indexes=indexes,
+        scheduler=scheduler,
+        scanner_fingerprints_by_request=scanner_fingerprints_by_request,
+        bridges=tuple(
+            item
+            for item in tree.results
+            if item.terminal_status is SchedulerTruncationRecoveryTerminalStatus.TRUNCATED
+        ),
+        leaves=tuple(
+            item
+            for item in tree.results
+            if item.terminal_status is SchedulerTruncationRecoveryTerminalStatus.SUCCEEDED
+        ),
+        results=tree.results,
+    )
+    return content, tree
+
+
+def _full_tree_promotion_capability_binding(
+    *,
+    family: SchedulerTruncationRecoveryFamilyRoot,
+    closure: SchedulerTruncationRecoveryFamilyClosure,
+    output: SchedulerRecoveredCandidateReviewOutput,
+    binding: SchedulerTruncationRecoveryFullTreeBinding,
+) -> str:
+    return scheduler_canonical_sha256(
+        {
+            "domain": "mmaudit.scheduler.full-tree-recovery-promotion-capability.v1",
+            "family_id": family.family_id,
+            "family_root_sha256": family.entry_sha256,
+            "family_closure_id": closure.closure_id,
+            "family_closure_sha256": closure.entry_sha256,
+            "structural_surface_artifact_sha256": output.structural_surface_artifact_sha256,
+            "scanner_fingerprints_by_request": output.scanner_fingerprints_by_request,
+            "recovered_output_sha256": output.output_artifact_sha256,
+            "full_tree_binding": binding,
+        }
     )
 
 
@@ -3797,8 +3799,19 @@ def _validate_durable_recovery_promotion(
         raise ValueError("scheduler recovery promotion lacks exact typed parent closure")
 
     recursive = promotion.schema_version == "1.1"
+    full_tree = promotion.schema_version == "1.2"
     tree: _RecursiveRecoveryTreeInventory | None = None
-    if recursive:
+    full_inventory: TruncationRecoveryTreeInventory | None = None
+    if full_tree:
+        full_inventory = _full_recovery_tree_inventory(
+            family=family, closure=closure, indexes=indexes
+        )
+        if (
+            promotion.full_tree_binding != _full_tree_promotion_binding(full_inventory)
+            or promotion.direct_child_result_sha256s != closure.child_result_sha256s
+        ):
+            raise ValueError("scheduler full-tree promotion differs from every original branch")
+    elif recursive:
         tree = _recursive_recovery_tree_inventory(
             family=family,
             closure=closure,
@@ -3846,11 +3859,21 @@ def _validate_durable_recovery_promotion(
         or output.parent_provider_attempt_sha256 != parent_attempt.attempt_evidence_sha256
         or output.delivered_source_descriptor_sha256s
         != parent_activation.delivered_source_descriptor_sha256s
-        or output.schema_version != promotion.schema_version
+        or output.schema_version != ("1.1" if full_tree else promotion.schema_version)
     ):
         raise ValueError("scheduler recovery promotion output differs from its parent task")
 
-    if recursive:
+    if full_tree:
+        content, rebuilt_full_tree = _rebuild_full_tree_recovered_candidate_content(
+            family=family,
+            closure=closure,
+            indexes=indexes,
+            scheduler=scheduler,
+            scanner_fingerprints_by_request=output.scanner_fingerprints_by_request,
+        )
+        if rebuilt_full_tree != full_inventory:
+            raise ValueError("scheduler full-tree promotion changed during replay")
+    elif recursive:
         content, rebuilt_tree = _rebuild_recursive_recovered_candidate_review_content(
             family=family,
             closure=closure,
@@ -3880,6 +3903,16 @@ def _validate_durable_recovery_promotion(
         or output.candidate_origins != content.origins
     ):
         raise ValueError("scheduler recovery promotion changed a host-stamped finding")
+    if full_tree:
+        assert promotion.full_tree_binding is not None
+        if promotion.capability_binding_sha256 != _full_tree_promotion_capability_binding(
+            family=family,
+            closure=closure,
+            output=output,
+            binding=promotion.full_tree_binding,
+        ):
+            raise ValueError("scheduler full-tree promotion capability binding is inconsistent")
+        return
     capability_payload: dict[str, Any] = {
         "domain": (
             "mmaudit.scheduler.recursive-truncation-recovery-promotion-capability.v1"
@@ -3922,6 +3955,14 @@ def _promotion_authority_lineage_entries(
 ) -> tuple[SchedulerTruncationRecoveryEntry, ...]:
     """Return the exact durable entry lineage a promoted capability must retain."""
 
+    if promotion.schema_version == "1.2":
+        full_tree = _full_recovery_tree_inventory(family=family, closure=closure, indexes=indexes)
+        return tuple(
+            sorted(
+                (*full_tree.families, *full_tree.results, *full_tree.closures, promotion),
+                key=lambda entry: entry.entry_index,
+            )
+        )
     if promotion.schema_version == "1.1":
         tree = _recursive_recovery_tree_inventory(
             family=family,
@@ -4049,6 +4090,7 @@ def _derive_truncation_recovery_indexes(
                 entry.child_result_sha256s,
                 entry.nested_family_closure_sha256s,
                 entry.covered_unfinished_surface_ids,
+                entry.schema_version,
             )
             if observed != expected:
                 raise ValueError("scheduler recovery closure differs from exact child evidence")
@@ -5061,24 +5103,18 @@ def _recovery_model_review_pre_dispatch_binding(
         or child not in family.recovery_plan.children
     ):
         raise ValueError("recovery model-review authorization lacks exact child topology")
-    root_family: SchedulerTruncationRecoveryFamilyRoot | None = family
-    if family.parent_kind is SchedulerTruncationRecoveryParentKind.RECOVERY_CHILD:
-        parent_family_id = family.parent_family_id
-        root_family = indexes.families.get(parent_family_id) if parent_family_id else None
-        if (
-            type(root_family) is not SchedulerTruncationRecoveryFamilyRoot
-            or root_family.parent_kind is not SchedulerTruncationRecoveryParentKind.SCHEDULER_TASK
-            or root_family.parent_family_id is not None
-            or indexes.nested_family_by_parent_child.get(family.recovery_plan.parent.parent_task_id)
-            != family.family_id
-        ):
-            raise ValueError("recovery model-review authorization lacks its exact root family")
-    if (
-        type(root_family) is not SchedulerTruncationRecoveryFamilyRoot
-        or root_family.parent_kind is not SchedulerTruncationRecoveryParentKind.SCHEDULER_TASK
-        or root_family.parent_family_id is not None
-    ):
-        raise ValueError("recovery model-review authorization lacks an ordinary root")
+    if indexes.families.get(family.family_id) != family:
+        raise ValueError("recovery model-review authorization lacks its exact family")
+    try:
+        root_family = resolve_truncation_recovery_root_family(
+            family=family,
+            families=indexes.families,
+            activations=indexes.activations,
+            results=indexes.results,
+            closures=indexes.closures,
+        )
+    except ValueError as exc:
+        raise ValueError("recovery model-review authorization lacks its exact root family") from exc
     root_task_id = root_family.recovery_plan.parent.parent_task_id
     task_and_plan = journal._indexes.tasks.get(root_task_id)
     root_activation = journal._indexes.activations.get(root_task_id)
@@ -5417,6 +5453,17 @@ class SchedulerJournal:
         promotion = self._truncation_recovery_indexes.promotions.get(family_id)
         if promotion is None or promotion.parent_task_id != task_id:
             raise ValueError("scheduler recovery promotion index is inconsistent")
+        family = self._truncation_recovery_indexes.families.get(family_id)
+        closure = self._truncation_recovery_indexes.closures.get(family_id)
+        if family is None or closure is None:
+            raise ValueError("scheduler recovered output lacks its original family and closure")
+        _validate_durable_recovery_promotion(
+            promotion=promotion,
+            family=family,
+            closure=closure,
+            indexes=self._truncation_recovery_indexes,
+            scheduler=self._indexes,
+        )
         return SchedulerRecoveredCandidateReviewOutput.model_validate_json(
             promotion.recovered_output.model_dump_json(),
             strict=True,
@@ -5475,6 +5522,39 @@ class SchedulerJournal:
         requested_surface_manifest: SchedulerTruncationRecoveryRequestedSurfaceManifest,
     ) -> SchedulerTruncationRecoveryFamilyRoot:
         """Persist one typed root after its truncated parent is already durable."""
+
+        return self._open_truncation_recovery_family(
+            recovery_plan=recovery_plan,
+            truncation_projection=truncation_projection,
+            requested_surface_manifest=requested_surface_manifest,
+            schema_version="1.0",
+        )
+
+    def open_nested_coverage_recovery_family(
+        self,
+        *,
+        recovery_plan: TruncationRecoveryPlan,
+        truncation_projection: CandidateReviewTruncationProjection,
+        requested_surface_manifest: SchedulerTruncationRecoveryRequestedSurfaceManifest,
+    ) -> SchedulerTruncationRecoveryFamilyRoot:
+        """Retain unresolved findings while recovering only exact nested coverage, without credit."""
+
+        return self._open_truncation_recovery_family(
+            recovery_plan=recovery_plan,
+            truncation_projection=truncation_projection,
+            requested_surface_manifest=requested_surface_manifest,
+            schema_version="1.1",
+        )
+
+    def _open_truncation_recovery_family(
+        self,
+        *,
+        recovery_plan: TruncationRecoveryPlan,
+        truncation_projection: CandidateReviewTruncationProjection,
+        requested_surface_manifest: SchedulerTruncationRecoveryRequestedSurfaceManifest,
+        schema_version: Literal["1.0", "1.1"],
+    ) -> SchedulerTruncationRecoveryFamilyRoot:
+        """Share original writable custody, terminal ancestry and resource accounting across versions."""
 
         self._assert_writable_custody()
         plan = TruncationRecoveryPlan.model_validate(
@@ -5577,6 +5657,7 @@ class SchedulerJournal:
         ):
             raise ValueError("scheduler recovery plan exceeds its parent request limit")
         entry = SchedulerTruncationRecoveryFamilyRoot.build(
+            schema_version=schema_version,
             request_limit_binding=binding,
             family_index=len(self._truncation_recovery_indexes.family_order),
             parent_kind=parent_kind,
@@ -5858,9 +5939,11 @@ class SchedulerJournal:
         family = self._truncation_recovery_indexes.families.get(family_id)
         if family is None or family_id in self._truncation_recovery_indexes.closures:
             raise ValueError("scheduler recovery family is absent or already closed")
-        status, result_hashes, nested_hashes, covered = _expected_recovery_family_closure(
-            family=family,
-            indexes=self._truncation_recovery_indexes,
+        status, result_hashes, nested_hashes, covered, schema_version = (
+            _expected_recovery_family_closure(
+                family=family,
+                indexes=self._truncation_recovery_indexes,
+            )
         )
         entry = SchedulerTruncationRecoveryFamilyClosure.build(
             family=family,
@@ -5870,6 +5953,7 @@ class SchedulerJournal:
             covered_unfinished_surface_ids=covered,
             entry_index=len(self._truncation_recovery_entries),
             previous_entry_sha256=self._truncation_recovery_chain_head,
+            recursive_schema_version="1.3" if schema_version == "1.3" else "1.2",
         )
         self._append_truncation_recovery_entry(entry)
         return entry
@@ -6187,7 +6271,20 @@ class SchedulerJournal:
 
         recursive = promotion.schema_version == "1.1"
         family_ids: tuple[str, ...]
-        if recursive:
+        if promotion.schema_version == "1.2":
+            full_tree = _full_recovery_tree_inventory(
+                family=family, closure=closure, indexes=self._truncation_recovery_indexes
+            )
+            family_ids = tuple(item.family_id for item in full_tree.families)
+            by_child = {
+                child.child_task_id: item
+                for item in full_tree.families
+                for child in item.recovery_plan.children
+            }
+            ordered_children = tuple(
+                (by_child[child.child_task_id], child) for child in full_tree.children
+            )
+        elif recursive:
             tree = _recursive_recovery_tree_inventory(
                 family=family,
                 closure=closure,
@@ -6275,11 +6372,18 @@ class SchedulerJournal:
     @property
     def promoted_recursive_truncation_recovery_surface_coverages(
         self,
-    ) -> tuple[VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverage, ...]:
+    ) -> tuple[PromotedRecursiveRecoveryCapability, ...]:
         """Return recursive promotion capabilities issued by this live journal only."""
 
+        from mmaudit.orchestration.truncation_tree_promotion import (
+            live_promoted_full_tree_surface_coverages,
+        )
+
         self._assert_live_custody()
-        return _live_recursive_promotion_capabilities(self)
+        return (
+            *_live_recursive_promotion_capabilities(self),
+            *live_promoted_full_tree_surface_coverages(self),
+        )
 
     @property
     def _truncation_recovery_chain_head(self) -> str | None:
@@ -7801,12 +7905,7 @@ class SchedulerJournal:
         promoted_result_sha256s = tuple(
             result_sha256
             for promotion in self._truncation_recovery_indexes.promotions.values()
-            for result_sha256 in (
-                promotion.promoted_leaf_result_sha256s
-                if promotion.schema_version == "1.1"
-                and promotion.promoted_leaf_result_sha256s is not None
-                else promotion.direct_child_result_sha256s
-            )
+            for result_sha256 in promotion.successful_result_sha256s
         )
         if len(promoted_result_sha256s) != len(set(promoted_result_sha256s)):
             raise ValueError("scheduler recovery promotions repeat a child result")
@@ -8830,6 +8929,20 @@ class SchedulerJournal:
             normalization_evidence=normalization_evidence,
             retrieval_binding=retained_retrieval_binding,
         )
+        completion = output.model_completion_evidence
+        if completion is not None and usage_record is not None:
+            # Keep an existing live attestation only at this owner-held intake. Schema
+            # construction and file decoding remain comparison-only and cannot create one.
+            retained_usage = _validated_usage_copy_preserving_owned_attestation(usage_record)
+            if retained_usage != completion.usage_record:
+                raise ValueError("scheduler completion differs from its live usage input")
+            output = output.model_copy(
+                update={
+                    "model_completion_evidence": completion.model_copy(
+                        update={"usage_record": retained_usage}
+                    )
+                }
+            )
         _write_model(
             self._root_descriptor,
             self._directory_descriptors,
@@ -9802,7 +9915,7 @@ class SchedulerJournal:
             }
             & set(os.listdir(self._root_descriptor))
         )
-        durable_state = _load_state(
+        reconstructed = _load_state(
             self._root_descriptor,
             self._directory_descriptors,
             persisted_manifest,
@@ -9812,6 +9925,7 @@ class SchedulerJournal:
             allowed_immutable_write_temps=self._allowed_immutable_write_temps,
             allowed_published_immutable_targets=(self._allowed_published_immutable_targets),
         )
+        durable_state = reconstructed.artifacts
         retained_state = (
             self.plans,
             self.activations,
@@ -9829,24 +9943,17 @@ class SchedulerJournal:
         after_reconstruction = self._observe_retained_durable_artifacts()
         if before_reconstruction != after_reconstruction:
             raise ValueError("scheduler durable evidence changed during full reconstruction")
-        expected_indexes = _derive_scheduler_journal_indexes(
-            plans=durable_state[0],
-            activations=durable_state[1],
-            outputs=durable_state[3],
-            retrieval_bindings=durable_state[4],
-            provider_attempts=durable_state[5],
-            result_observations=durable_state[6],
-            events=durable_state[2],
-        )
-        if self._indexes != expected_indexes:
+        # The full loader already derived these indexes from independently read
+        # artifacts. Compare them here, after the same retained-value and durable
+        # observations, rather than repeating that derivation or trusting a cache.
+        if self._indexes != reconstructed.indexes:
             raise ValueError("scheduler in-memory indexes differ from full reconstruction")
-        expected_recovery_indexes = _derive_truncation_recovery_indexes(
-            entries=durable_state[8],
-            scheduler=expected_indexes,
-            manifest=persisted_manifest,
-        )
-        if self._truncation_recovery_indexes != expected_recovery_indexes:
+        if self._truncation_recovery_indexes != reconstructed.recovery_indexes:
             raise ValueError("scheduler recovery indexes differ from full reconstruction")
+        if durable_state[8] and not candidate_review_protocol_implementation_is_pristine():
+            # The removed second recovery derivation also checked mutable schema
+            # inputs here. Keep that late fresh check without replaying every entry.
+            raise ValueError("scheduler recovery protocol changed during full reconstruction")
         if self._terminal_report_authority is not None:
             self._build_journal_evidence(
                 summary=self.summary,
@@ -10523,7 +10630,7 @@ def _resume_scheduler_journal_impl(
             allow_pending_checkpoint=checkpoint_recovery_present,
             allowed_immutable_write_temps=allowed_immutable_write_temps,
             allowed_published_immutable_targets=allowed_published_immutable_targets,
-        )
+        ).artifacts
         journal_head_checkpoint = _read_model(
             root_descriptor,
             directory_descriptors,
@@ -10912,7 +11019,7 @@ def _open_scheduler_journal_for_verification_impl(
             root_descriptor,
             directory_descriptors,
             manifest,
-        )
+        ).artifacts
         journal_head_checkpoint = _read_model(
             root_descriptor,
             directory_descriptors,
@@ -11604,18 +11711,7 @@ def _load_state(
         _EvidenceFileIdentity,
     ]
     | None = None,
-) -> tuple[
-    tuple[SchedulerPassPlan, ...],
-    tuple[SchedulerTaskActivation, ...],
-    tuple[SchedulerTaskEvent, ...],
-    tuple[SchedulerTaskOutput, ...],
-    tuple[tuple[str, SchedulerRetrievalBinding], ...],
-    tuple[SchedulerProviderAttemptEvidence, ...],
-    tuple[SchedulerTaskResult, ...],
-    tuple[SchedulerPassResult, ...],
-    tuple[SchedulerTruncationRecoveryEntry, ...],
-    SchedulerTerminalReportAuthority | None,
-]:
+) -> _LoadedSchedulerJournalState:
     terminal_report_authority = (
         _read_model(
             root_descriptor,
@@ -11763,7 +11859,7 @@ def _load_state(
         truncation_recovery_entries,
         terminal_report_authority,
     )
-    _validate_loaded_state(
+    indexes, recovery_indexes = _validate_loaded_state(
         manifest=manifest,
         plans=loaded[0],
         activations=loaded[1],
@@ -11797,7 +11893,11 @@ def _load_state(
         allowed_immutable_write_temps=allowed_immutable_write_temps,
         allowed_published_immutable_targets=allowed_published_immutable_targets,
     )
-    return loaded
+    return _LoadedSchedulerJournalState(
+        artifacts=loaded,
+        indexes=indexes,
+        recovery_indexes=recovery_indexes,
+    )
 
 
 def _load_truncation_recovery_entries(
@@ -11991,7 +12091,7 @@ def _validate_loaded_state(
     pass_results: tuple[SchedulerPassResult, ...],
     truncation_recovery_entries: tuple[SchedulerTruncationRecoveryEntry, ...],
     terminal_report_authority: SchedulerTerminalReportAuthority | None,
-) -> None:
+) -> tuple[_SchedulerJournalIndexes, _SchedulerTruncationRecoveryIndexes]:
     if len(pass_results) > len(plans) or len(pass_results) < max(0, len(plans) - 1):
         raise ValueError("scheduler pass plan/result prefixes are inconsistent")
     task_lookup: dict[str, tuple[SchedulerTaskPlan, SchedulerPassPlan]] = {}
@@ -12532,6 +12632,7 @@ def _validate_loaded_state(
             raise ValueError("scheduler pass result is not derived from its exact task results")
 
     SchedulerCampaignSummary.build(manifest=manifest, pass_results=pass_results)
+    return scheduler_indexes, recovery_indexes
 
 
 def _validate_artifact_inventory(
@@ -13956,9 +14057,10 @@ def _stat_entry(parent_descriptor: int, leaf: str) -> os.stat_result:
     _issue_live_direct_promotion_capability,
     _issue_live_recursive_promotion_capability,
     require_verified_promoted_truncation_recovery_surface_coverage,
-    require_verified_promoted_recursive_truncation_recovery_surface_coverage,
+    _require_verified_legacy_promoted_recursive_surface_coverage,
     _live_direct_promotion_capabilities,
     _live_recursive_promotion_capabilities,
+    _read_live_recovery_tree_journal_snapshot,
 ) = _build_scheduler_journal_custody_registry(
     _scheduler_journal_opener_token,
     SchedulerJournal,
@@ -14053,3 +14155,17 @@ del _scheduler_journal_opener_token
 del _admit_scheduler_journal_opening
 del _bind_scheduler_journal_opening_owner
 del _activate_scheduler_journal_opening
+
+
+def require_verified_promoted_recursive_truncation_recovery_surface_coverage(
+    capability: PromotedRecursiveRecoveryCapability,
+) -> PromotedRecursiveRecoveryProjection:
+    if type(capability) is VerifiedPromotedFullTreeTruncationRecoverySurfaceCoverage:
+        from mmaudit.orchestration.truncation_tree_promotion import (
+            require_promoted_full_tree_surface_coverage,
+        )
+
+        return require_promoted_full_tree_surface_coverage(capability)
+    return _require_verified_legacy_promoted_recursive_surface_coverage(
+        cast(VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverage, capability)
+    )

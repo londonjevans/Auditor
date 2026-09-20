@@ -172,8 +172,16 @@ def _fake_execution(monkeypatch, material, *, during_probe=None, after_run=None,
             after_run()
         return Process()
 
+    def cleanup(process, *, diagnostic):
+        # This fixture never starts a real process; retain its inert boundary
+        # when the formal runner now attests process-group absence on exit.
+        assert isinstance(process, Process)
+        assert diagnostic
+        return None
+
     monkeypatch.setattr(formal, "_isolated_tool_version", probe)
     monkeypatch.setattr(subprocess, "Popen", launch)
+    monkeypatch.setattr(formal, "_cleanup_lingering_process_group", cleanup)
     return probes, launches
 
 

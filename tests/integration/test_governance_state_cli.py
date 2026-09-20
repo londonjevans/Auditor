@@ -22,6 +22,7 @@ from scripts.validate_governance_state import (
     OPERATOR_RESULTS_PATH,
     QUEUE_PATHS,
     WORKLOG_PATHS,
+    project_current_requirements,
     validate_governance_state,
 )
 from tests.governance_state_support import (
@@ -55,9 +56,30 @@ def test_governance_validation_is_read_only_without_network_or_subprocesses(
     state = validate_governance_state(ROOT)
     assert state.provider_call_authorized is False
     assert state.operator.completed_real_audits == 0
+    projection = project_current_requirements(ROOT)
+    assert projection.status == "NONAUTHORIZING_COORDINATION"
+    assert projection.historical_requirement_statuses["V"] == "QUEUED"
     assert before == {
         name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() for name in paths
     }
+
+
+def test_current_requirement_cli_projects_without_changing_historical_evidence() -> None:
+    before = {path: (ROOT / path).read_bytes() for path in HISTORICAL_PAYLOAD_SHA256S}
+    result = subprocess.run(
+        [sys.executable, str(SCRIPT), "--repository-root", str(ROOT), "--current-requirements"],
+        cwd=ROOT,
+        env={"PATH": os.defpath, "PYTHONPATH": str(ROOT / "src"), "PYTHONDONTWRITEBYTECODE": "1"},
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0 and not result.stderr
+    payload = json.loads(result.stdout)
+    assert payload == project_current_requirements(ROOT).model_dump(mode="json")
+    assert payload["status"] == "NONAUTHORIZING_COORDINATION"
+    assert payload["historical_requirement_statuses"]["V"] == "QUEUED"
+    assert before == {path: (ROOT / path).read_bytes() for path in HISTORICAL_PAYLOAD_SHA256S}
 
 
 @pytest.mark.parametrize("case", ("valid", "duplicate_json", "linked_document", "missing_document"))
@@ -90,9 +112,19 @@ def test_governance_cli_reports_validity_without_authority(tmp_path: Path, case:
 
 
 @pytest.mark.parametrize(
-    "case", ("reconciled", "stale_binding", "altered_history", "invented_summary", "authority")
+    "case",
+    (
+        "reconciled",
+        "stale_binding",
+        "altered_history",
+        "invented_summary",
+        "invented_label",
+        "authority",
+    ),
 )
-@pytest.mark.parametrize("entry_name", ("operator_new_entry.md", "operator_wrapped_entry.md"))
+@pytest.mark.parametrize(
+    "entry_name", ("operator_new_entry.md", "operator_wrapped_entry.md", "operator_named_entry.md")
+)
 def test_real_governance_cli_reconciles_only_exact_nonauthorizing_new_reports(
     tmp_path: Path, case: str, entry_name: str
 ) -> None:
@@ -132,8 +164,12 @@ def test_real_governance_cli_reconciles_only_exact_nonauthorizing_new_reports(
         observation = synthetic_operator_observation(appended, timestamp=timestamp).model_dump(
             mode="json"
         )
+        if entry_name == "operator_named_entry.md":
+            observation["reported_ledger_label"] = "Ledger-6"
         if case == "invented_summary":
             observation["reported_ledger_entries"] = 99
+        if case == "invented_label":
+            observation["reported_ledger_label"] = "Ledger-7"
         for name in HISTORICAL_PAYLOAD_SHA256S:
             path = tmp_path / name
             document = json.loads(path.read_bytes())

@@ -57,6 +57,7 @@ from mmaudit.reporting.json_report import stable_json
 
 ROOT = Path(__file__).parents[2]
 ACTIVE_PLAN_PATH = ROOT / "config" / "models.selection-plan.json"
+UNAVAILABLE_PLAN_PATH = ROOT / "tests/fixtures/model_selection/unavailable-plan-v1.7.json"
 ANCESTOR_PLAN_PATH = (
     ROOT / "tests" / "fixtures" / "model_selection" / "revoked-active-plan-v1.4.json"
 )
@@ -88,7 +89,7 @@ def _copy_exact_plan_pair(root: Path) -> tuple[str, str]:
     selected_path.parent.mkdir(parents=True)
     unavailable_path.parent.mkdir(parents=True)
     selected_path.write_bytes(ANCESTOR_PLAN_PATH.read_bytes())
-    unavailable_path.write_bytes(ACTIVE_PLAN_PATH.read_bytes())
+    unavailable_path.write_bytes(UNAVAILABLE_PLAN_PATH.read_bytes())
     return selected_relative, unavailable_relative
 
 
@@ -162,7 +163,7 @@ def test_reactivation_is_deterministic_immediate_predecessor_bound_and_nonauthor
     assert NO_ACTIVE_CANDIDATE_REQUIREMENT not in first.unresolved_requirements
     selection = first.authenticated_runner_selection
     transition = first.ancestry_transition_binding
-    active = load_candidate_selection_plan(ACTIVE_PLAN_PATH)
+    active = load_candidate_selection_plan(UNAVAILABLE_PLAN_PATH)
     unavailable = active.authenticated_runner_unavailability
     assert selection is not None
     assert transition is not None
@@ -443,7 +444,7 @@ def test_ancestry_runtime_rejects_successor_validator_replacement(
     monkeypatch.setattr(
         candidate_selection_module,
         "validate_candidate_selection_plan_successor",
-        lambda **_kwargs: load_candidate_selection_plan(ACTIVE_PLAN_PATH),
+        lambda **_kwargs: load_candidate_selection_plan(UNAVAILABLE_PLAN_PATH),
     )
 
     with pytest.raises(CandidateSelectionPlanAncestryError, match="runtime boundary changed"):
@@ -525,7 +526,7 @@ def test_compiled_ancestry_raw_hashes_match_repository_bytes() -> None:
     assert hashlib.sha256(ANCESTOR_PLAN_PATH.read_bytes()).hexdigest() == (
         SELECTED_ANCESTOR_RAW_SHA256
     )
-    assert hashlib.sha256(ACTIVE_PLAN_PATH.read_bytes()).hexdigest() == (
+    assert hashlib.sha256(UNAVAILABLE_PLAN_PATH.read_bytes()).hexdigest() == (
         UNAVAILABLE_PREDECESSOR_RAW_SHA256
     )
 
@@ -890,7 +891,7 @@ def test_reactivation_narrows_only_the_existing_selected_roster_entry(
     endpoint: str,
 ) -> None:
     before = ACTIVE_PLAN_PATH.read_bytes()
-    predecessor = load_candidate_selection_plan(ACTIVE_PLAN_PATH)
+    predecessor = load_candidate_selection_plan(UNAVAILABLE_PLAN_PATH)
     original = {entry.exact_model_id: entry for entry in predecessor.entries}
     assert len(original[model_id].allowed_provider_endpoints) > 1
     capability = resolve_verified_candidate_selection_plan_ancestry()

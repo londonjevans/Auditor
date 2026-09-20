@@ -22,6 +22,11 @@ from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from mmaudit.models.schemas import StrictModel
 from mmaudit.repository.ignore import normalize_relative_path
+from mmaudit.solidity.compiler_source import (
+    MAX_COMPILER_SOURCE_CRLF_PAIRS,
+    CompilerSourceBuildBinding,
+    CompilerSourceMap,
+)
 
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 _SOLIDITY_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -102,12 +107,13 @@ class FoundrySourceInput:
 
 @dataclass(frozen=True, slots=True)
 class FoundryCompilerSource:
-    """Exact source bytes and compiler source ID for one normalized build unit."""
+    """Original source bytes, compiler source ID and any exact compiler-byte map."""
 
     source_id: int
     path: str
     content: bytes
     source_sha256: str
+    source_mapping: CompilerSourceMap | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,6 +133,8 @@ class FoundryCompilerEntity:
     end_byte_exclusive: int
     start_line: int
     end_line_exclusive: int
+    compiler_start_byte: int | None = None
+    compiler_end_byte_exclusive: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,6 +153,8 @@ class FoundryCompilerStatement:
     end_byte_exclusive: int
     start_line: int
     end_line_exclusive: int
+    compiler_start_byte: int | None = None
+    compiler_end_byte_exclusive: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,16 +182,85 @@ class FoundryCompilerStatementCatalog:
 
 
 class FoundryInventorySourceBinding(StrictModel):
-    """Hash-only binding for one compiler input source."""
+    """Original-source identity and explicit per-build nonidentity compiler mappings."""
 
     path: str = Field(min_length=1, max_length=4_096)
     source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     size_bytes: int = Field(ge=0)
+    compiler_source_bindings: tuple[CompilerSourceBuildBinding, ...] = Field(
+        default=(), max_length=1_000, exclude_if=lambda value: not value
+    )
 
     @field_validator("path")
     @classmethod
     def path_is_canonical(cls, value: str) -> str:
         return _normalized_source_path(value)
+
+    @model_validator(mode="after")
+    def compiler_bindings_match_original(self) -> Self:
+        builds = [b.build_info_sha256 for b in self.compiler_source_bindings]
+        if builds != sorted(set(builds)) or any(
+            b.transformation.original_sha256 != self.source_sha256
+            or b.transformation.original_size_bytes != self.size_bytes
+            for b in self.compiler_source_bindings
+        ):
+            raise ValueError("compiler source bindings differ from original source identity")
+        return self
+
+    def validate_builds(self, build_hashes: Sequence[str]) -> None:
+        if any(b.build_info_sha256 not in build_hashes for b in self.compiler_source_bindings):
+            raise ValueError("compiler source mapping is outside the selected build population")
+
+
+def _source_bindings(
+    sources: Mapping[str, FoundrySourceInput],
+    transformed: Sequence[tuple[str, CompilerSourceBuildBinding]],
+) -> tuple[FoundryInventorySourceBinding, ...]:
+    by_path: dict[str, list[CompilerSourceBuildBinding]] = {}
+    for path, binding in transformed:
+        if path not in sources:
+            raise FoundryInventoryError("compiler source mapping is outside supplied scope")
+        by_path.setdefault(path, []).append(binding)
+    return tuple(
+        FoundryInventorySourceBinding(
+            path=path,
+            source_sha256=source.source_sha256,
+            size_bytes=len(source.content),
+            compiler_source_bindings=tuple(
+                sorted(by_path.get(path, []), key=lambda b: b.build_info_sha256)
+            ),
+        )
+        for path, source in sorted(sources.items())
+    )
+
+
+def compiler_catalog_source_bindings(
+    catalog: FoundryCompilerStatementCatalog,
+) -> tuple[FoundryInventorySourceBinding, ...]:
+    """Retain complete original identities and transformed compiler-source populations."""
+    sources: dict[str, FoundrySourceInput] = {}
+    transformed = []
+    for unit in catalog.units:
+        for source in unit.sources:
+            original = FoundrySourceInput(source.path, source.content, source.source_sha256)
+            if source.path in sources and sources[source.path] != original:
+                raise FoundryInventoryError("compiler catalog original sources conflict")
+            sources[source.path] = original
+            mapping = source.source_mapping
+            if mapping is not None:
+                if mapping.original != source.content or mapping.transformation is None:
+                    raise FoundryInventoryError("compiler catalog source mapping differs")
+                transformed.append(
+                    (
+                        source.path,
+                        CompilerSourceBuildBinding(
+                            build_info_sha256=unit.normalized_build_info_sha256,
+                            source_id=source.source_id,
+                            transformation=mapping.transformation,
+                        ),
+                    )
+                )
+    return _source_bindings(sources, transformed)
 
 
 class FoundryTestDeclaration(StrictModel):
@@ -325,6 +404,8 @@ class FoundryTestInventory(StrictModel):
         source_paths = tuple(source.path for source in self.sources)
         if source_paths != tuple(sorted(set(source_paths))):
             raise ValueError("inventory sources must be unique and canonically ordered")
+        for source in self.sources:
+            source.validate_builds(self.build_info_sha256s)
         keys = tuple(test.canonical_key for test in self.tests)
         if keys != tuple(sorted(set(keys))):
             raise ValueError("inventory tests must be unique and canonically ordered")
@@ -371,6 +452,7 @@ class _BuildUnit:
     build_info_sha256: str
     contracts_by_id: Mapping[int, _Contract]
     contracts_by_path_name: Mapping[tuple[str, str], _Contract]
+    compiler_source_bindings: tuple[tuple[str, CompilerSourceBuildBinding], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -422,13 +504,8 @@ def parse_foundry_test_inventory(
         normalized_project_root,
         bounds,
     )
-    bindings = tuple(
-        FoundryInventorySourceBinding(
-            path=path,
-            source_sha256=source.source_sha256,
-            size_bytes=len(source.content),
-        )
-        for path, source in sorted(source_map.items())
+    bindings = _source_bindings(
+        source_map, [binding for unit in units for binding in unit.compiler_source_bindings]
     )
     build_hashes = tuple(sorted(unit.build_info_sha256 for unit in units))
     return FoundryTestInventory.sealed(
@@ -478,6 +555,7 @@ def parse_foundry_compiler_statement_catalog(
     total_nodes = 0
     total_contracts = 0
     total_functions = 0
+    transformed_newlines = 0
     for index, raw in enumerate(build_info_jsons):
         build_hash = hashlib.sha256(raw).hexdigest()
         if build_hash in build_hashes:
@@ -493,6 +571,13 @@ def parse_foundry_compiler_statement_catalog(
             source_map,
             compiler_version,
         )
+        transformed_newlines += sum(
+            m.transformation.removed_crlf_count
+            for m in input_sources.values()
+            if m.transformation is not None
+        )
+        if transformed_newlines > MAX_COMPILER_SOURCE_CRLF_PAIRS:
+            raise FoundryInventoryError("compiler source mappings exceed their newline bound")
         observed_source_paths.update(input_sources)
         unit, node_count, contract_count, function_count = _parse_statement_build_unit(
             project_root=normalized_project_root,
@@ -501,6 +586,7 @@ def parse_foundry_compiler_statement_catalog(
             compiler_sha256=compiler_sha256,
             raw_sources=output_sources,
             sources=source_map,
+            source_maps=input_sources,
             limits=bounds,
         )
         total_nodes += node_count
@@ -534,7 +620,7 @@ def _validated_statement_build_envelope(
     payload: Mapping[str, Any],
     sources: Mapping[str, FoundrySourceInput],
     compiler_version: str,
-) -> tuple[dict[str, Mapping[str, Any]], dict[str, Any]]:
+) -> tuple[dict[str, CompilerSourceMap], dict[str, Any]]:
     if payload.get("_format") != "ethers-rs-sol-build-info-1":
         raise FoundryInventoryError("build-info format is not the pinned Foundry envelope")
     if payload.get("language") != "Solidity":
@@ -585,6 +671,7 @@ def _parse_statement_build_unit(
     compiler_sha256: str,
     raw_sources: Mapping[str, Any],
     sources: Mapping[str, FoundrySourceInput],
+    source_maps: Mapping[str, CompilerSourceMap],
     limits: FoundryInventoryLimits,
 ) -> tuple[FoundryCompilerBuildUnit, int, int, int]:
     source_ids: dict[int, str] = {}
@@ -607,9 +694,16 @@ def _parse_statement_build_unit(
                 path=path,
                 content=source.content,
                 source_sha256=source.source_sha256,
+                source_mapping=source_maps[path]
+                if source_maps[path].transformation is not None
+                else None,
             )
         )
 
+    compiled_sources = {
+        path: FoundrySourceInput(path, m.compiled, hashlib.sha256(m.compiled).hexdigest())
+        for path, m in source_maps.items()
+    }
     ast_ids: set[int] = set()
     entities: list[FoundryCompilerEntity] = []
     statements: list[FoundryCompilerStatement] = []
@@ -659,7 +753,7 @@ def _parse_statement_build_unit(
             source_id, start, end = _validated_utf8_node_span(
                 node.get("src"),
                 source_ids,
-                sources,
+                compiled_sources,
                 f"compiler AST node {node_type}",
             )
             path = source_ids[source_id]
@@ -669,11 +763,19 @@ def _parse_statement_build_unit(
                 native_source_id, native_start, native_end = _validated_utf8_node_span(
                     node.get("nativeSrc"),
                     source_ids,
-                    sources,
+                    compiled_sources,
                     f"compiler Yul AST node {node_type} native range",
                 )
                 if (native_source_id, native_start, native_end) != (source_id, start, end):
                     raise FoundryInventoryError("compiler Yul src/nativeSrc ranges differ")
+
+            mapping = source_maps[path]
+            compiler_span: dict[str, Any] = (
+                {"compiler_start_byte": start, "compiler_end_byte_exclusive": end}
+                if mapping.transformation is not None
+                else {}
+            )
+            start, end = mapping.original_span(start, end)
 
             child_contract_ast_id = enclosing_contract_ast_id
             child_contract_name = enclosing_contract_name
@@ -703,6 +805,7 @@ def _parse_statement_build_unit(
                         end_byte_exclusive=end,
                         start_line=0,
                         end_line_exclusive=0,
+                        **compiler_span,
                     )
                 )
                 contract_count += 1
@@ -753,6 +856,7 @@ def _parse_statement_build_unit(
                         end_byte_exclusive=end,
                         start_line=0,
                         end_line_exclusive=0,
+                        **compiler_span,
                     )
                 )
                 function_count += 1
@@ -792,6 +896,7 @@ def _parse_statement_build_unit(
                         end_byte_exclusive=end,
                         start_line=0,
                         end_line_exclusive=0,
+                        **compiler_span,
                     )
                 )
 
@@ -1188,6 +1293,7 @@ def _parse_build_units(
     total_nodes = 0
     total_contracts = 0
     total_functions = 0
+    transformed_newlines = 0
     for index, raw in enumerate(raw_build_infos):
         build_hash = hashlib.sha256(raw).hexdigest()
         if build_hash in hashes:
@@ -1228,6 +1334,13 @@ def _parse_build_units(
             "build-info output contracts",
         )
         normalized_input = _validate_build_input_sources(input_sources, sources)
+        transformed_newlines += sum(
+            m.transformation.removed_crlf_count
+            for m in normalized_input.values()
+            if m.transformation is not None
+        )
+        if transformed_newlines > MAX_COMPILER_SOURCE_CRLF_PAIRS:
+            raise FoundryInventoryError("compiler source mappings exceed their newline bound")
         normalized_output = {
             _normalized_source_path(_expect_string(path, "compiler output source path")): value
             for path, value in output_sources.items()
@@ -1248,6 +1361,7 @@ def _parse_build_units(
             normalized_contract_payloads,
             sources,
             limits,
+            normalized_input,
         )
         total_nodes += node_count
         total_contracts += contract_count
@@ -1265,8 +1379,9 @@ def _parse_build_units(
 def _validate_build_input_sources(
     raw_sources: Mapping[str, Any],
     sources: Mapping[str, FoundrySourceInput],
-) -> dict[str, Mapping[str, Any]]:
-    result: dict[str, Mapping[str, Any]] = {}
+) -> dict[str, CompilerSourceMap]:
+    result: dict[str, CompilerSourceMap] = {}
+    transformed_newlines = 0
     for raw_path, raw_item in raw_sources.items():
         path = _normalized_source_path(_expect_string(raw_path, "compiler input source path"))
         if path in result:
@@ -1286,10 +1401,15 @@ def _validate_build_input_sources(
                 f"compiler input source is not valid UTF-8: {path}"
             ) from exc
         if encoded != supplied.content:
+            transformed_newlines += supplied.content.count(b"\r\n")
+            if transformed_newlines > MAX_COMPILER_SOURCE_CRLF_PAIRS:
+                raise FoundryInventoryError("compiler source mappings exceed their newline bound")
+        try:
+            result[path] = CompilerSourceMap(supplied.content, encoded)
+        except ValueError as exc:
             raise FoundryInventoryError(
                 f"compiler input content differs from caller source: {path}"
-            )
-        result[path] = item
+            ) from exc
     if not result:
         raise FoundryInventoryError("build-info compiler input contains no sources")
     return result
@@ -1343,6 +1463,7 @@ def _parse_build_unit(
     raw_contract_outputs: Mapping[str, Any],
     sources: Mapping[str, FoundrySourceInput],
     limits: FoundryInventoryLimits,
+    source_maps: Mapping[str, CompilerSourceMap],
 ) -> tuple[_BuildUnit, int, int, int]:
     source_ids: dict[int, str] = {}
     contract_nodes: list[tuple[str, Mapping[str, Any]]] = []
@@ -1359,7 +1480,7 @@ def _parse_build_unit(
             raise FoundryInventoryError(f"compiler source AST is not a SourceUnit: {path}")
         source_unit_ast_id = _expect_nonnegative_int(ast.get("id"), f"SourceUnit AST ID for {path}")
         _record_ast_id(source_unit_ast_id, ast_ids)
-        _validated_span(ast.get("src"), source_id, sources[path].content, f"SourceUnit {path}")
+        _validated_span(ast.get("src"), source_id, source_maps[path].compiled, f"SourceUnit {path}")
         raw_nodes = ast.get("nodes")
         if not isinstance(raw_nodes, list):
             raise FoundryInventoryError(f"SourceUnit nodes are malformed: {path}")
@@ -1383,6 +1504,7 @@ def _parse_build_unit(
             sources,
             ast_ids,
             limits,
+            source_maps,
         )
         if contract.ast_id in contracts_by_id:
             raise FoundryInventoryError("compiler contract AST IDs are duplicated")
@@ -1414,6 +1536,18 @@ def _parse_build_unit(
             build_info_sha256=build_hash,
             contracts_by_id=contracts_by_id,
             contracts_by_path_name=contracts_by_path_name,
+            compiler_source_bindings=tuple(
+                (
+                    path,
+                    CompilerSourceBuildBinding(
+                        build_info_sha256=build_hash,
+                        source_id=source_id,
+                        transformation=mapping.transformation,
+                    ),
+                )
+                for source_id, path in sorted(source_ids.items())
+                if (mapping := source_maps[path]).transformation is not None
+            ),
         ),
         node_count + function_count,
         len(contracts_by_id),
@@ -1428,6 +1562,7 @@ def _parse_contract(
     sources: Mapping[str, FoundrySourceInput],
     ast_ids: set[int],
     limits: FoundryInventoryLimits,
+    source_maps: Mapping[str, CompilerSourceMap],
 ) -> tuple[_Contract, int]:
     ast_id = _expect_nonnegative_int(node.get("id"), f"contract AST ID in {path}")
     _record_ast_id(ast_id, ast_ids)
@@ -1443,6 +1578,7 @@ def _parse_contract(
         source_ids,
         sources,
         f"contract {path}:{name}",
+        source_maps,
     )
     del source_id
     contract_start_line, contract_end_line = _span_lines(
@@ -1481,6 +1617,7 @@ def _parse_contract(
             ast_ids,
             contract_start,
             contract_end,
+            source_maps,
         )
         if function is None:
             continue
@@ -1518,6 +1655,7 @@ def _parse_function(
     ast_ids: set[int],
     contract_start: int,
     contract_end: int,
+    source_maps: Mapping[str, CompilerSourceMap],
 ) -> _Function | None:
     ast_id = _expect_nonnegative_int(
         node.get("id"),
@@ -1551,6 +1689,7 @@ def _parse_function(
         source_ids,
         sources,
         f"function {path}:{contract_name}:{name}",
+        source_maps,
     )
     if start < contract_start or end > contract_end:
         raise FoundryInventoryError(
@@ -1872,10 +2011,15 @@ def _validated_span_for_path(
     source_ids: Mapping[int, str],
     sources: Mapping[str, FoundrySourceInput],
     label: str,
+    source_maps: Mapping[str, CompilerSourceMap],
 ) -> tuple[int, int, int]:
     source_id, start, end = _parse_span(raw, label)
     if source_ids.get(source_id) != expected_path:
         raise FoundryInventoryError(f"{label} source-unit mapping is inconsistent")
+    try:
+        start, end = source_maps[expected_path].original_span(start, end)
+    except ValueError as exc:
+        raise FoundryInventoryError(f"{label} compiler/original source span differs") from exc
     _check_span_bounds(start, end, sources[expected_path].content, label)
     return source_id, start, end
 
