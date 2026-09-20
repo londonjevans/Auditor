@@ -14,12 +14,21 @@ replay assertions also fail with the production compiler/startup fixes: Echidna
 property-to-sequence join. The final-source full repository suite is still
 unverified. Scoped passes do not waive any of these requirements.
 
-Apply the owner's AGENTS.md stopping/rotation rule: next is V3-INGEST-001
-(QUEUED, tier 1). This rotates engineering work, not checkpoint acceptance.
-The relay's proposal to commit with catalog capacity unresolved has NOT been
-accepted; the direct owner decision remains pending. No commit/push or provider
-command is issued, no test is excluded, and no limit or authority gate changes.
-Native integrations remain INCONCLUSIVE. There are 45 unfinished tickets.
+The owner directly authorized the non-green checkpoint, now committed as
+e85e115e45f05e298e4d00f1f27675a16ca8396e on agent/v3-wip-checkpoint.
+Local Git confirms 648 changed files and parent68ebf039; no baseline acceptance
+criterion was waived. The September20 direct request authorizes publication of
+this checkpoint and its coordination receipt before new implementation.
+This is checkpoint publication only, not a release or a provider command.
+V3-INGEST-001 remains QUEUED/next (tier1), with45 unfinished tickets.
+
+Latest relay b7d76f8ab98e81bb72b0e5af74a637dfcf4f5533c9dbdc3949523245e8b62804 /
+501385 bytes /8068 lines, labelled2026-09-20T05:12Z, records the operator commit
+and no push. Its label is retained as reported, not independently verified time.
+Ledger-6 remains operator-reported376 entries/USD80.60224894; zero real audits.
+The active selection plan, cost/privacy/lineage gates and nine false authorities
+are unchanged. Native replay and final-source full-suite acceptance remain
+INCONCLUSIVE; no provider/private-ledger action or deployment is selected.
 
 The following chronology records prior baseline steps, not the current selection.
 

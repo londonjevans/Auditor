@@ -3,6 +3,20 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-09-20T05:12Z — **Owner-authorized non-green checkpoint committed: `e85e115e45f05e298e4d00f1f27675a16ca8396e` on `agent/v3-wip-checkpoint`, 648 files, +383,051 / −16,746. Working tree clean. Not pushed.**
+
+Timestamp read from the clock at 05:12Z. Ran the emitted command exactly, read-only first and then with `--commit`:
+
+```
+cd /Users/generalcuster/Documents/dev/Auditor &&
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src:. \
+  .venv/bin/python /private/tmp/mmaudit-resume-baseline.xug3Ys/operator_checkpoint_blocked_20260919.py --commit
+```
+
+Read-only pass: `Verified exact non-green checkpoint; V3-BASELINE-001 is BLOCKED_TECHNICAL.` / `READ-ONLY CHECK: no index or commit writes performed.` Commit pass, exit 0: the same verification line, then `CHECKPOINT_COMMIT=e85e115e45f05e298e4d00f1f27675a16ca8396e`, then `## agent/v3-wip-checkpoint...origin/agent/v3-wip-checkpoint [ahead 29]` with an empty short status. `git show --stat` reports 648 files changed. Full stdout/stderr: `/private/tmp/mmaudit-resume-baseline.xug3Ys/operator_checkpoint_commit.log`. The script's guards all held (HEAD `68ebf03`, branch, empty index, candidate snapshot, index digest, governance-state digest, `diff --check`); no protected path was in the candidate set. No push, no provider call, no secret or private-ledger access. The commit message is the script's own; the branch is 29 commits ahead of origin and the push decision is the owner's.
+
+Ledger-6 unchanged at 376 entries / `80.60224894` USD. `completed_real_audits` remains `0`. Nonauthorizing for any provider call, lineage, qualification or release result.
+
 ## 2026-09-19T15:40Z — **Operator observation on V3-BASELINE-001: the 256-primary / 768-stage catalog acceptance has never passed on this host; three distinct measured hypotheses today reached 161, 198 and 234 stages inside the unchanged 1,800 s bound. Every other class of failure in the 21,044-test selection is repaired or attributed. Raised to the owner by name.**
 
 Timestamp read from the clock at 15:40Z. Operator-side reading of today's worklog, offered as evidence for a decision the owner makes in Codex's session, not here:

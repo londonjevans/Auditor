@@ -19,19 +19,54 @@ snapshot, including the `2026-09-04T01:48:46Z` PRICECAPCACHE terminal partial cl
 older entries applies only at that recorded boundary and is not present authority or current
 action.
 
-AUTORUN_STATUS: OWNER_RESUMED_BASELINE_BLOCKED_TIER1_NEXT_PROVIDER_FREE_NONAUTHORIZING_NO_PROVIDER_COMMAND
+AUTORUN_STATUS: OWNER_AUTHORIZED_CHECKPOINT_PUBLICATION_PROVIDER_FREE_NONAUTHORIZING_NO_PROVIDER_COMMAND
 GOVERNANCE_STATE_SOURCE: docs/remediation/v3/runtime_status.json#current_engineering_state
-CURRENT_ENGINEERING_STATE_SHA256: e25ce60c8db4e6233d3fe69cc009b8e1e1c2457590a439c491faf6cd292d28bd
+CURRENT_ENGINEERING_STATE_SHA256: 40299ca226a6c92164824619d1e734c3a3d9ba4cb32309286486f51eeb7db8e1
 CURRENT_TICKET: UNSELECTED
 CURRENT_TICKET_IMPLEMENTATION_STARTED: false
-CURRENT_LOCAL_SLICE_STATUS: BASELINE_BLOCKED_TECHNICAL_NATIVE_REPLAY_DIAGNOSED
+CURRENT_LOCAL_SLICE_STATUS: CHECKPOINT_PUBLICATION_RECORDS_VERIFIED
 LAST_COMPLETED_TICKET: V3-CONTEXTSRC-001
 LAST_PARTIAL_TICKET: V3-AUTOPARTITION-001
-NEXT_ACTION: Select V3-INGEST-001 (QUEUED, tier1): reproduce dependency-tree starvation in discovery/scan on a bounded synthetic shape, then implement first-party retention without weakening scope/privacy limits. Baseline remains BLOCKED_TECHNICAL; no green checkpoint or commit waiver. Owner nongreen-checkpoint choice remains pending.
-LAST_RECONCILED_OPERATOR_RESULTS: `fa01dc4796dd88482474335be690d42e79d75a497ad01f6403dfb08318f076e0` / 499777 bytes / 8054 lines; labelled 2026-09-19T15:40Z, reports the three catalog timeouts and proposes deferring capacity to tier2, preparing a checkpoint with known limitations and moving to ingestion. This is explicitly raised for owner decision, not authorized; a direct nonblocking decision question is pending. Codex independently observed234 mock responses/checkpointed stages before the original1800s deadline, but final-source full-suite acceptance remains outstanding and native engine failures are retained. Reported attribution and unavailability are not test passes. Ledger-6 remains operator-reported, NONAUTHORIZING and not independently authenticated: 376 entries / USD 80.60224894, zero completed real audits. Private ledgers remain unread; no billing, authority or commit decision is changed. Engineering work selection now rotates under the standing AGENTS rule; this is not acceptance of the proposed checkpoint waiver.
+NEXT_ACTION: Verify and publish the directly requested checkpoint/coordination receipt on agent/v3-wip-checkpoint without force; then select V3-INGEST-001 (QUEUED, tier1) for the measured source-discovery repair. V3-BASELINE-001 remains BLOCKED_TECHNICAL; no green-baseline or audit-completion claim.
+LAST_RECONCILED_OPERATOR_RESULTS: `b7d76f8ab98e81bb72b0e5af74a637dfcf4f5533c9dbdc3949523245e8b62804` / 501385 bytes / 8068 lines; labelled 2026-09-20T05:12Z. Operator reports guarded checkpoint e85e115e45f05e298e4d00f1f27675a16ca8396e and no push; local Git independently confirms the commit, parent and 648-file scope. The report timestamp is retained as a label, not verified time. Ledger-6 remains operator-reported376 entries/USD80.60224894, zero completed real audits, NONAUTHORIZING and private ledgers unread. The owner's direct September20 request selects commit/push publication; the relay itself grants no authority. No provider, qualification or release action.
 CURRENT_AUTONOMY_INVENTORY: Version-only startup changes exactly two existing fingerprints: solidity.formal and its coupled dynamic Certora environment selector; no Certora behavior change. No added/removed IDs, reclassifications, membership or gate-definition changes. Counts6160sources/6163occurrences/6108gated,35logical/29unsatisfied/15manual. Rawf3b0d3e4f78f3a408b3bcea7b6d82c31e51bd77607a97ac115d756775cdf2690,self642320f1aae7f15666c41902ad58d9ee0b05fc2ea5ca1d3d891c1c6aedd25651,universe66b107edc53fa7fab42fd564b8ccb61a5ddf530c7f502a6262d3c4b9c60bd89b. Historical JSON envelopes and nine false authorities unchanged.
 CURRENT_ASSURANCE_BOUNDARY: Coverage is source-bound primary response completion for the explicit selected record set only. Context presence, cumulative/later response success, self-hashes and all-green mock checks are not validated audit coverage, earliest-ever trial evidence, independence, qualification, sealing or release. Actual-root custody and every cost/unknown-billing/route gate remain.
-REMAINING_ACTIONABLE_TICKETS: The combined queues contain 45 unfinished tickets. V3-BASELINE-001 is BLOCKED_TECHNICAL; V3-INGEST-001 is QUEUED/next under the standing rotation rule. V3-AUTOPARTITION-001 and V3-CANDROUTE-001 remain PARTIAL; no candidate or lineage adoption. PROVIDER_FREE, NONAUTHORIZING, nine false authorities, zero real audits; no provider or commit command.
+REMAINING_ACTIONABLE_TICKETS: The combined queues contain 45 unfinished tickets. V3-BASELINE-001 is BLOCKED_TECHNICAL; V3-INGEST-001 is QUEUED/next. V3-AUTOPARTITION-001 and V3-CANDROUTE-001 remain PARTIAL. PROVIDER_FREE, NONAUTHORIZING, nine false authorities, zero real audits; only the directly requested checkpoint publication is selected, with no provider command.
+
+## 2026-09-20T04:23:34Z — Checkpoint publication requested; source unchanged
+
+- Verified operator checkpoint e85e115e45f05e298e4d00f1f27675a16ca8396e,
+  parent68ebf03918d375e1132db11ab60194285cf6706a,648 files. The only new
+  starting-tree change is the operator's14-line relay entry; nothing staged.
+- The owner's direct September20 request asks Codex to commit/push before
+  continuing. Treat this as a one-off publication instruction, not an edit to
+  AGENTS' standing operator-only rule. Only agent/v3-wip-checkpoint is selected;
+  no force, main-branch update, provider call, private ledger or deployment.
+  Live origin resolves a1836be62fa08df2a3f2fcec592b8cb0616130fd, matching the
+  local tracking ref and an ancestor of e85e115. The checkpoint is29 commits ahead.
+- Governance precheck exits1 on the appended relay's stale binding. Reconcile
+  only current coordination, retaining every historical JSON field, active plan,
+  inventory, cost/privacy/lineage gate, nine false authorities and45 statuses.
+  No production source, tests, fixtures, schemas or workflows change.
+- V3-BASELINE-001 stays BLOCKED_TECHNICAL. Catalog234/768 timeout, native replay
+  failures and final-source full-suite acceptance are not waived by publication.
+  Full pytest/Forge are not rerun for this documentation-only step; no new pass
+  is claimed for those. Focused records230passed/33.40s; Ruff/check-format1248,
+  fresh strict mypy src/scripts353, read-only schema generation and governance
+  pass. The first schema invocation used an unsupported --check argument and
+  exited2; the script's actual read-only default exited0. No assertion changed.
+  Exact commands/output are retained under
+  /private/tmp/mmaudit-publication-20260920.8YiaMb.
+- Pre-checkpoint read-only ingestion evidence is retained in
+  /private/tmp/mmaudit-resume-baseline.xug3Ys/ingestion-precheckpoint-verification.json:
+  current ForestRoadVault ec86b7b3 discovery retains0/81 first-party sources;
+  temporary ordering-only experiment81/81 under unchanged bounds, still1900
+  dependency files. Source manifest e6488487cadd08fcf49a9d20a24d0690fd40bd063f55fd7315c6fbfbed1806c5;
+  seven files exceed48000 bytes. Existing repository tests54passed/0.69s.
+  This is not production behavior, CLI report acceptance, required15d2318-pin
+  acceptance or vulnerability precision/recall. No real-source dynamic execution.
+- Exact next action: verify and publish this record-only receipt, confirm remote
+  SHA, then select V3-INGEST-001; no new implementation before publication.
 
 
 
