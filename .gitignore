@@ -84,3 +84,7 @@ Desktop.ini
 *.log
 *.pid
 *.pid.lock
+
+# Audit reports and audit material: never commit. This repository is PUBLIC; the reports stay on the
+# owner's machine and in the private backup (owner direction, 3 November 2026).
+/audit-reports/
